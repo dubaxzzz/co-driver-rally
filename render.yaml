@@ -1,0 +1,14 @@
+# Render (render.com) settings – used if you deploy with "New > Blueprint".
+services:
+  - type: web
+    name: co-driver-rally
+    runtime: node
+    plan: free
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: CLIENT_ORIGIN
+        value: "*"

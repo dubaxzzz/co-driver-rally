@@ -1,0 +1,37 @@
+{
+  "name": "co-driver-rally",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Co-Driver Rally \u2013 a cooperative 3D rally game: one player drives, one navigates from a second device.",
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c red,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "build": "npm run build -w client",
+    "build:play": "npm run build:play -w client",
+    "dev:play": "npm run dev:play -w client",
+    "start": "npm run start -w server",
+    "typecheck": "tsc -p shared --noEmit && tsc -p server --noEmit && tsc -p client --noEmit",
+    "test": "npm run test:server && npm run test:track",
+    "test:server": "tsx tests/server.test.ts",
+    "test:track": "tsx tests/track.test.ts",
+    "test:physics": "tsx tests/physics.test.ts",
+    "test:e2e": "python3 tests/e2e_two_browsers.py",
+    "render-build": "npm install --include=dev && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "socket.io-client": "^4.8.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

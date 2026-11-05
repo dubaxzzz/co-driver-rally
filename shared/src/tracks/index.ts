@@ -1,0 +1,22 @@
+import { buildStage } from './builder';
+import { FOREST_STAGE } from './stages/forest';
+import type { BuiltStage, StageDef } from './types';
+
+export * from './types';
+export * from './builder';
+
+/** Register new stages here – both client and server pick them up. */
+export const STAGE_DEFS: StageDef[] = [FOREST_STAGE];
+export const DEFAULT_STAGE_ID = FOREST_STAGE.id;
+
+const cache = new Map<string, BuiltStage>();
+
+export function getStage(id: string): BuiltStage | null {
+  const cached = cache.get(id);
+  if (cached) return cached;
+  const def = STAGE_DEFS.find((s) => s.id === id);
+  if (!def) return null;
+  const built = buildStage(def);
+  cache.set(id, built);
+  return built;
+}

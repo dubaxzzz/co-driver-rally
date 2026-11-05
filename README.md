@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/34453569/README.md)
 # Co-Driver Rally
 
 A cooperative 3D rally game for two devices. **One player drives** the car in a
