@@ -1,4 +1,5 @@
 import type { BuiltStage } from '@cdr/shared';
+import type { DamageZones } from '../game/vehicle/Vehicle';
 import { formatDistance, formatSpeed, formatTime, settings } from '../settings';
 import { h } from './dom';
 
@@ -75,6 +76,23 @@ export class Hud {
     );
   }
 
+  private lastDamageKey = '';
+  /** Damage per zone (green → amber → red) plus the surface you're on. */
+  setDamage(d: DamageZones, surface: string) {
+    const zones: Array<[string, number]> = [['FRONT', d.front], ['L', d.left], ['R', d.right], ['REAR', d.rear], ['GLASS', d.windscreen], ['ENGINE', d.engine]];
+    const key = surface + zones.map(([, v]) => Math.round(v * 10)).join();
+    if (key === this.lastDamageKey) return;
+    this.lastDamageKey = key;
+    this.dmgEl.innerHTML = '';
+    this.dmgEl.append(surface.toUpperCase());
+    const row = h('div', { class: 'zones' });
+    for (const [label, v] of zones) {
+      if (v < 0.05) continue;
+      row.append(h('i', { class: v > 0.6 ? 'b' : 'w' }, `${label} ${Math.round(v * 100)}%`));
+    }
+    this.dmgEl.append(row);
+  }
+
   setRoom(code: string) {
     this.codeEl.textContent = code;
   }
@@ -92,7 +110,7 @@ export class Hud {
     this.gearEl.textContent = gear === -1 ? 'R' : gear === 0 ? 'N' : String(gear);
     const lit = Math.round((rpm / maxRpm) * this.rpmBars.length);
     this.rpmBars.forEach((b, i) => b.classList.toggle('on', i < lit));
-    this.dmgEl.textContent = `DAMAGE ${Math.round(damage * 100)}%`;
+    void damage;
   }
 
   updateRace(timeMs: number, distance: number, remaining: number, progress01: number, cpPassed: number) {

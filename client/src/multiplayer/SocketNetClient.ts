@@ -7,6 +7,7 @@ import {
   type NavCall,
   type NavCallRequest,
   type RaceState,
+  type RallyConfig,
   type ServerToClientEvents,
   type TelemetryPacket,
 } from '@cdr/shared';
@@ -146,8 +147,8 @@ export class SocketNetClient extends NetBase {
     });
   }
 
-  async createRoom(name: string): Promise<JoinResult> {
-    const res = await this.request<JoinResult>((ack) => this.socket.emit('room:create', { name }, ack));
+  async createRoom(name: string, config?: Partial<RallyConfig>): Promise<JoinResult> {
+    const res = await this.request<JoinResult>((ack) => this.socket.emit('room:create', { name, config }, ack));
     this.storeSession(res);
     return res;
   }
@@ -185,6 +186,9 @@ export class SocketNetClient extends NetBase {
     this.clearSession();
   }
 
+  configure(config: Partial<RallyConfig>) {
+    return this.request<RaceState>((ack) => this.socket.emit('room:configure', config, ack));
+  }
   startRace() {
     return this.request<RaceState>((ack) => this.socket.emit('race:start', ack));
   }

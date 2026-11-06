@@ -4,7 +4,35 @@ import {
   PLAYER_NAME_MAX_LENGTH,
   ROOM_CODE_REGEX,
 } from './constants';
-import type { NavCallRequest, TelemetryPacket } from './types';
+import { getStage } from './tracks';
+import type { AiSkill, NavCallRequest, RallyConfig, TelemetryPacket } from './types';
+import { WEATHER_IDS, type WeatherId } from './weather';
+
+const AI_SKILLS: AiSkill[] = ['easy', 'medium', 'hard'];
+export const MAX_AI = 3;
+
+/** Validates a (partial) lobby configuration. Returns null if anything is invalid. */
+export function validateConfig(p: unknown): Partial<RallyConfig> | null {
+  if (!isObj(p)) return null;
+  const out: Partial<RallyConfig> = {};
+  if (p.stageId !== undefined) {
+    if (typeof p.stageId !== 'string' || !getStage(p.stageId)) return null;
+    out.stageId = p.stageId;
+  }
+  if (p.weather !== undefined) {
+    if (!WEATHER_IDS.includes(p.weather as WeatherId)) return null;
+    out.weather = p.weather as WeatherId;
+  }
+  if (p.aiCount !== undefined) {
+    if (!isNum(p.aiCount, 0, MAX_AI) || !Number.isInteger(p.aiCount)) return null;
+    out.aiCount = p.aiCount;
+  }
+  if (p.aiSkill !== undefined) {
+    if (!AI_SKILLS.includes(p.aiSkill as AiSkill)) return null;
+    out.aiSkill = p.aiSkill as AiSkill;
+  }
+  return out;
+}
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isNum = (v: unknown, min = -1e7, max = 1e7): v is number =>
@@ -63,6 +91,17 @@ export function validateTelemetry(p: unknown): TelemetryPacket | null {
   }
   if (typeof p.handbrake !== 'boolean') return null;
   out.handbrake = p.handbrake;
+  if (p.ai !== undefined) {
+    const ai = p.ai;
+    if (!Array.isArray(ai) || ai.length > MAX_AI * 6 || ai.length % 6 !== 0) return null;
+    if (!ai.every((n) => isNum(n, -1e6, 1e8))) return null;
+    out.ai = ai;
+  }
+  if (p.dz !== undefined) {
+    const dz = p.dz;
+    if (!Array.isArray(dz) || dz.length !== 6 || !dz.every((n) => isNum(n, 0, 1))) return null;
+    out.dz = dz;
+  }
   return out as unknown as TelemetryPacket;
 }
 

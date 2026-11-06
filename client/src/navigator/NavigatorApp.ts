@@ -1,6 +1,9 @@
 import {
   DEFAULT_STAGE_ID,
+  SURFACES,
+  WEATHER,
   getStage,
+  surfaceAt,
   type BuiltStage,
   type RaceState,
   type RelayedTelemetry,
@@ -9,7 +12,8 @@ import { audio } from '../audio/AudioEngine';
 import { net } from '../multiplayer/NetClient';
 import { formatDistance, formatSpeed, formatTime } from '../settings';
 import { h, toast } from '../ui/dom';
-import { resultsOverlay } from '../ui/results';
+import { resultsOverlay, type Standing } from '../ui/results';
+import { AI_CREWS } from '../game/ai/AIDriver';
 import type { CockpitView } from './CockpitView';
 import { Interpolator } from './Interpolator';
 import { MapView } from './MapView';
@@ -40,8 +44,15 @@ export class NavigatorApp {
   private lastFrame = performance.now();
   private disposed = false;
 
-  constructor(private readonly onExit: () => void) {
-    this.stage = getStage(net.room?.race.stageId ?? DEFAULT_STAGE_ID)!;
+  private readonly weatherId: string;
+
+  constructor(
+    private readonly onExit: () => void,
+    /** Called when the driver picks a different stage or weather in the lobby. */
+    private readonly onReload: () => void,
+  ) {
+    this.stage = getStage(net.room?.race.stageId ?? DEFAULT_STAGE_ID) ?? getStage(DEFAULT_STAGE_ID)!;
+    this.weatherId = net.room?.race.weather ?? 'storm';
     this.map = new MapView(this.stage);
     const v = (key: string, init = '—') => (this.els[key] = h('div', { class: 'v' }, init));
 
@@ -67,7 +78,12 @@ export class NavigatorApp {
     );
 
     // ---- map ----
-    this.waitingEl = h('div', { class: 'nav-waiting' }, 'Waiting for the driver to start the stage…');
+    const w = WEATHER[this.weatherId as keyof typeof WEATHER];
+    this.waitingEl = h(
+      'div',
+      { class: 'nav-waiting', 'data-testid': 'nav-waiting' },
+      h('div', {}, `${this.stage.def.name} · ${w?.name ?? ''}`, h('br'), h('small', { style: 'font-size:13px;color:var(--muted);letter-spacing:.06em' }, 'Waiting for the driver to start the stage…')),
+    );
     this.els.mapStatus = h('div', { class: 'map-status' }, 'No telemetry yet');
     const followBtn = h('button', { class: 'sel' }, 'FOLLOW');
     const fullBtn = h('button', {}, 'FULL STAGE');
@@ -94,6 +110,8 @@ export class NavigatorApp {
       h('div', {}, h('div', { class: 'k' }, 'STAGE PROGRESS'), v('pct', '0%')),
       h('div', {}, h('div', { class: 'k' }, 'REMAINING'), v('remain', formatDistance(this.stage.finishDistance - this.stage.startDistance))),
       h('div', {}, h('div', { class: 'k' }, 'CHECKPOINTS'), v('cps', `0/${this.stage.checkpoints.length}`)),
+      h('div', {}, h('div', { class: 'k' }, 'SURFACE'), v('surface', SURFACES[this.stage.def.surface].name)),
+      h('div', {}, h('div', { class: 'k' }, 'CAR DAMAGE'), v('damage', 'OK')),
       h('div', { class: 'nav-progress' }, this.els.progress),
     );
 
@@ -121,7 +139,7 @@ export class NavigatorApp {
       import('./CockpitView')
         .then(({ CockpitView }) => {
           if (this.disposed) return;
-          this.view = new CockpitView(view3d, this.stage);
+          this.view = new CockpitView(view3d, this.stage, this.weatherId as keyof typeof WEATHER);
           this.view.setLookDown(this.lookingDown);
           view3d.querySelector('.nav-3d-loading')?.remove();
         })
@@ -153,6 +171,7 @@ export class NavigatorApp {
         this.pushTelemetry(p);
       }),
       net.on('race', (s) => {
+        if (s.stageId !== this.stage.def.id || s.weather !== this.weatherId) return this.onReload();
         const newRun = !this.race || this.race.runId !== s.runId;
         this.race = s;
         if (newRun) {
@@ -162,6 +181,7 @@ export class NavigatorApp {
         this.applyRace();
       }),
       net.on('room', (r) => {
+        if (r.race.stageId !== this.stage.def.id || r.race.weather !== this.weatherId) return this.onReload();
         this.race = r.race;
         this.els.code.textContent = r.code;
         this.updateConnection();
@@ -226,10 +246,20 @@ export class NavigatorApp {
           { label: 'Restart stage', primary: true, onClick: () => void net.restartRace().catch((e) => toast(e.message, 'bad')) },
           { label: 'Back to lobby', onClick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) },
           { label: 'Close', onClick: () => this.closeOverlay() },
-        ]),
+        ], () => this.standings(s.result!.timeMs)),
       );
     }
     if (s.phase !== 'finished') this.closeOverlay();
+  }
+
+  private standings(playerMs: number): Standing[] {
+    const ai = this.interp.latest?.ai ?? [];
+    const list: Standing[] = [{ name: net.room?.driver?.name ?? 'Driver', timeMs: playerMs, you: true }];
+    for (let i = 0; i < ai.length / 6; i++) {
+      const ms = ai[i * 6 + 5];
+      list.push({ name: AI_CREWS[i % AI_CREWS.length].name, timeMs: ms >= 0 ? ms : null, you: false });
+    }
+    return list;
   }
 
   private showOverlay(el: HTMLElement) {
@@ -275,6 +305,10 @@ export class NavigatorApp {
     this.els.pct.textContent = `${pct.toFixed(0)}%`;
     this.els.progress.style.width = `${pct}%`;
     this.els.remain.textContent = formatDistance(t.remain);
+    this.els.surface.textContent = SURFACES[surfaceAt(this.stage, t.dist)].name;
+    const worst = t.dz ? Math.max(...t.dz) : t.dmg;
+    this.els.damage.textContent = worst < 0.05 ? 'OK' : `${Math.round(worst * 100)}%`;
+    this.els.damage.style.color = worst > 0.6 ? 'var(--bad)' : worst > 0.2 ? 'var(--warn)' : '';
   };
 
   private async leave() {

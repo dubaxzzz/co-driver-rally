@@ -1,4 +1,16 @@
 /** Shared data model for rooms, race state, telemetry and navigator calls. */
+import type { WeatherId } from '../weather';
+
+export type AiSkill = 'easy' | 'medium' | 'hard';
+
+/** What the driver picks in the lobby. */
+export interface RallyConfig {
+  stageId: string;
+  weather: WeatherId;
+  /** Number of AI opponents (0–3). */
+  aiCount: number;
+  aiSkill: AiSkill;
+}
 
 export type Role = 'driver' | 'navigator';
 
@@ -27,9 +39,8 @@ export interface RaceResult {
   finishedAt: number;
 }
 
-export interface RaceState {
+export interface RaceState extends RallyConfig {
   phase: RacePhase;
-  stageId: string;
   /** Increments on every (re)start so stale packets/events can be ignored. */
   runId: number;
   /** Server timestamp at which the countdown ends and the timer starts. */
@@ -94,6 +105,13 @@ export interface TelemetryPacket {
   dmg: number;
   /** Total vehicle resets – lets the server accept a reset reposition. */
   resets: number;
+  /**
+   * AI opponents, 6 numbers each: x, y, z, heading, distance, finish time (ms, -1 = running).
+   * Simulated on the driver's device and shown to the navigator.
+   */
+  ai?: number[];
+  /** Damage zones 0..1: front, left, right, rear, windscreen, engine. */
+  dz?: number[];
 }
 
 /** Telemetry as relayed by the server (server timestamp added). */

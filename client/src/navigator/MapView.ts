@@ -86,6 +86,33 @@ export class MapView {
     g.lineWidth = Math.max(3, st.def.roadWidth * scale);
     g.stroke();
 
+    // rivers + bridges
+    g.strokeStyle = '#2f6f8f';
+    for (const r of st.rivers) {
+      g.lineWidth = Math.max(3, r.halfWidth * 2 * scale);
+      g.beginPath();
+      r.points.forEach((p, i) => {
+        const [px, py] = toScreen(p.x, p.z);
+        if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+      });
+      g.stroke();
+    }
+    // redraw the road over the river so the crossing reads as a bridge
+    if (st.rivers.length) {
+      path();
+      g.strokeStyle = '#8a7a62';
+      g.lineWidth = Math.max(3, st.def.roadWidth * scale);
+      g.stroke();
+      for (const b of st.bridges) {
+        const [px, py] = toScreen(b.x, b.z);
+        g.fillStyle = '#c08a4a';
+        g.fillRect(px - 5, py - 5, 10, 10);
+        g.fillStyle = '#fff';
+        g.font = '800 10px sans-serif';
+        g.fillText('BRIDGE', px + 30, py);
+      }
+    }
+
     // driven trail
     if (t) {
       const last = this.trail[this.trail.length - 1];
@@ -119,6 +146,21 @@ export class MapView {
     for (const cp of st.checkpoints) flag(cp.x, cp.z, cp.index < checkpointsPassed ? '#2fd27a' : '#ff8a00', `CP${cp.index + 1}`);
     const fin = s[Math.round(st.finishDistance)];
     flag(fin.x, fin.z, '#ffffff', 'FINISH');
+
+    // AI opponents
+    if (t?.ai) {
+      const colors = ['#1e5bc6', '#1f8a4c', '#f0b400'];
+      for (let i = 0; i < t.ai.length / 6; i++) {
+        const [px, py] = toScreen(t.ai[i * 6], t.ai[i * 6 + 2]);
+        g.fillStyle = colors[i % colors.length];
+        g.strokeStyle = '#fff';
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.arc(px, py, 6, 0, Math.PI * 2);
+        g.fill();
+        g.stroke();
+      }
+    }
 
     // car marker
     if (t) {

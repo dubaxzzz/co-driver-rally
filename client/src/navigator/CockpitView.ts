@@ -1,5 +1,8 @@
 import * as THREE from 'three';
-import { sampleAt, type BuiltStage, type RelayedTelemetry } from '@cdr/shared';
+import { WEATHER, WHEELS, sampleAt, type BuiltStage, type RelayedTelemetry, type WeatherDef, type WeatherId } from '@cdr/shared';
+import { AI_CREWS } from '../game/ai/AIDriver';
+import { DustSystem } from '../game/environment/Atmosphere';
+import { DAMAGE_KEYS, noDamage, type DamageZones } from '../game/vehicle/Vehicle';
 import { fogMultiplier, garageStore, settings } from '../settings';
 import { FirstPersonCamera } from '../game/camera/FirstPersonCamera';
 import { createCarModel, type CarModel } from '../game/vehicle/CarModel';
@@ -31,8 +34,13 @@ export class CockpitView {
   private frameSkip = 0;
   private drag: { x: number; y: number; yaw: number; pitch: number } | null = null;
   private unsub: () => void;
+  private weather: WeatherDef;
+  private damage: DamageZones = noDamage();
+  private aiCars: CarModel[] = [];
+  private smoke = new DustSystem(200, 'rgba(70,70,74,', -0.8, 2.6);
 
-  constructor(private container: HTMLElement, private stage: BuiltStage) {
+  constructor(private container: HTMLElement, private stage: BuiltStage, weatherId: WeatherId) {
+    this.weather = WEATHER[weatherId] ?? WEATHER.storm;
     const quality = settings.get().quality;
     this.renderer = new THREE.WebGLRenderer({ antialias: quality === 'high', powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
@@ -40,12 +48,13 @@ export class CockpitView {
     this.canvas = this.renderer.domElement;
     container.append(this.canvas);
 
-    this.world = buildStageWorld(this.scene, stage, { quality: 'low', physics: null, fogMultiplier: fogMultiplier() });
+    this.world = buildStageWorld(this.scene, stage, { quality: 'low', physics: null, fogMultiplier: fogMultiplier(), weather: this.weather.id });
+    this.scene.add(this.smoke.points);
     this.unsub = settings.subscribe(() => this.world.atmosphere.setFogMultiplier(fogMultiplier()));
     const sel = garageStore.resolve();
     this.car = createCarModel(sel.paint, sel.wheel);
     this.car.setExteriorVisible(false);
-    this.car.enableHeadlights();
+    if (this.weather.headlights) this.car.enableHeadlights();
     this.cockpit = new Cockpit(sel.paint, 'navigator');
     this.car.root.add(this.cockpit.group);
     this.scene.add(this.car.root);
@@ -109,7 +118,16 @@ export class CockpitView {
         this.lastVel.copy(this.vel);
       }
       this.lastPos = root.position.clone();
+      // same damage as the real car
+      if (t.dz) DAMAGE_KEYS.forEach((k, i) => (this.damage[k] = t.dz![i] ?? 0));
+      this.car.setHeadlightDamage(this.damage.front);
+      this.updateAiCars(t.ai ?? []);
     }
+    if (this.damage.engine > 0.35 && Math.random() < this.damage.engine * dt * 30) {
+      const sp = new THREE.Vector3((Math.random() - 0.5) * 0.6, 0.45, 1.7).applyQuaternion(root.quaternion).add(root.position);
+      this.smoke.emit(sp.x, sp.y, sp.z, this.vel.x * 2, this.vel.z * 2, 1.6);
+    }
+    this.smoke.update(dt);
     const st = settings.get();
     this.cockpit.update(dt, {
       steer: t?.steer ?? 0,
@@ -120,20 +138,43 @@ export class CockpitView {
       handbrake: t?.handbrake ?? false,
       brake: t?.brake ?? 0,
       wipers: st.wipers,
-      rain: this.stage.def.environment.rain,
+      rain: this.weather.rain,
+      snow: this.weather.snow,
       speedUnit: st.units,
+      damage: this.damage,
     });
     this.car.setBrakeLights((t?.brake ?? 0) > 0.1);
     this.fp.update(dt, root, this.accel, Math.min(1, Math.abs(this.accel.y) * 0.04));
-    this.world.rain?.update(dt, this.fp.camera.position, this.vel);
-    this.world.atmosphere.follow(root.position);
+    this.world.update(dt, this.fp.camera.position, this.vel);
 
     // While the tablet covers the screen, render at half rate to save battery
     if (this.lookingDown && Math.abs(this.fp.pitch - LOOK_DOWN_PITCH) < 0.02 && this.frameSkip++ % 2) return;
     this.renderer.render(this.scene, this.fp.camera);
   }
 
+  /** AI opponents shown where the driver's device says they are. */
+  private updateAiCars(ai: number[]) {
+    const n = Math.floor(ai.length / 6);
+    while (this.aiCars.length < n) {
+      const crew = AI_CREWS[this.aiCars.length % AI_CREWS.length];
+      const m = createCarModel(crew.paint, WHEELS[0]);
+      this.scene.add(m.root);
+      this.aiCars.push(m);
+    }
+    for (let i = 0; i < this.aiCars.length; i++) {
+      const m = this.aiCars[i];
+      m.root.visible = i < n;
+      if (i >= n) continue;
+      const o = i * 6;
+      m.root.position.set(ai[o], ai[o + 1], ai[o + 2]);
+      m.root.rotation.set(0, ai[o + 3], 0);
+      // hidden while it overlaps our car (AI cars pass through, they never collide)
+      if (m.root.position.distanceTo(this.car.root.position) < 4.2) m.root.visible = false;
+    }
+  }
+
   dispose() {
+    this.aiCars.forEach((m) => m.dispose());
     this.unsub();
     this.cockpit.dispose();
     this.car.dispose();

@@ -1,4 +1,15 @@
-import { DEFAULT_STAGE_ID, ROOM_CODE_LENGTH, getStage, type RoomSnapshot } from '@cdr/shared';
+import {
+  DEFAULT_STAGE_ID,
+  MAX_AI,
+  ROOM_CODE_LENGTH,
+  STAGE_DEFS,
+  SURFACES,
+  WEATHER,
+  WEATHER_IDS,
+  getStage,
+  type RallyConfig,
+  type RoomSnapshot,
+} from '@cdr/shared';
 import { net, type NetError } from '../multiplayer/NetClient';
 import { MapView } from '../navigator/MapView';
 import { settings, type Settings } from '../settings';
@@ -37,7 +48,7 @@ function playerName(fallback: string) {
 // ------------------------------------------------------------------ menu
 export function menuScreen(nav: Nav): Screen {
   const status = serverStatusLine();
-  const stage = getStage(DEFAULT_STAGE_ID)!;
+  const stage = getStage(settings.get().rally.stageId) ?? getStage(DEFAULT_STAGE_ID)!;
   const preview = new MapView(stage);
   preview.mode = 'full';
   let raf = 0;
@@ -49,7 +60,7 @@ export function menuScreen(nav: Nav): Screen {
   const quickPlay = async (btn: HTMLButtonElement) => {
     btn.disabled = true;
     try {
-      await net.createRoom(playerName('Driver'));
+      await net.createRoom(playerName('Driver'), settings.get().rally);
       await net.startRace();
       nav.go('drive');
     } catch (e) {
@@ -77,7 +88,7 @@ export function menuScreen(nav: Nav): Screen {
         { class: 'menu-left' },
         h('div', { class: 'brand' }, h('span', { class: 'co' }, 'CO-'), 'DRIVER', h('br'), 'RALLY'),
         h('div', { class: 'tagline' }, 'One drives · One navigates'),
-        btn('Play', 'Quick stage – navigator can join any time', (b) => void quickPlay(b), true, 0),
+        btn('Play', `${stage.def.name} · ${WEATHER[settings.get().rally.weather].name} – navigator can join any time`, (b) => void quickPlay(b), true, 0),
         btn('Create Rally', 'Host a room & wait for your navigator', () => nav.go('create'), false, 60),
         btn('Join Rally', 'Navigator · enter a 4-character code', () => nav.go('join'), false, 120),
         btn('Garage', 'Car, paint & wheels', () => nav.go('garage'), false, 180),
@@ -91,9 +102,9 @@ export function menuScreen(nav: Nav): Screen {
         h(
           'div',
           { class: 'menu-stage-card' },
-          h('div', { class: 'label' }, 'STAGE 1'),
+          h('div', { class: 'label' }, `${STAGE_DEFS.length} STAGES · ${WEATHER[settings.get().rally.weather].name.toUpperCase()}`),
           h('h3', {}, stage.def.name),
-          h('div', { class: 'meta' }, `${stage.def.location} · ${stage.def.surface} · ${((stage.finishDistance - stage.startDistance) / 1000).toFixed(2)} km`, h('br'), `Night · rain · fog · ${stage.checkpoints.length} checkpoints`),
+          h('div', { class: 'meta' }, `${stage.def.location} · ${stage.def.surface} · ${((stage.finishDistance - stage.startDistance) / 1000).toFixed(2)} km`, h('br'), `${stage.def.description}`),
           preview.canvas,
         ),
       ),
@@ -114,6 +125,79 @@ export function lobbyScreen(nav: Nav): Screen {
   const startBtn = h('button', { class: 'btn primary big', disabled: true, 'data-testid': 'start-stage' }, 'Start stage') as HTMLButtonElement;
   const leaveBtn = h('button', { class: 'btn danger' }, 'Close rally');
   const unsubs: Array<() => void> = [status.dispose];
+  let current: RallyConfig = { ...settings.get().rally };
+
+  // ---- rally setup pickers ----
+  const stageGrid = h('div', { class: 'stage-grid' });
+  const stageCards = new Map<string, HTMLElement>();
+  const previews: MapView[] = [];
+  for (const def of STAGE_DEFS) {
+    const stage = getStage(def.id)!;
+    const mv = new MapView(stage);
+    mv.mode = 'full';
+    previews.push(mv);
+    const surfaces = [...new Set(stage.surfaceSpans.map((x) => SURFACES[x.surface].name))].join(' · ');
+    const card = h(
+      'button',
+      { class: 'stage-card', 'data-testid': `stage-${def.id}` },
+      mv.canvas,
+      h('div', { class: 'stage-name' }, def.name),
+      h('div', { class: 'stage-meta' }, `${def.location} · ${((stage.finishDistance - stage.startDistance) / 1000).toFixed(1)} km`),
+      h('div', { class: 'stage-meta' }, `${surfaces}${stage.bridges.length ? ` · ${stage.bridges.length} bridge${stage.bridges.length > 1 ? 's' : ''}` : ''}`),
+    );
+    card.title = def.description;
+    card.onclick = () => choose({ stageId: def.id, weather: def.defaultWeather });
+    stageCards.set(def.id, card);
+    stageGrid.append(card);
+  }
+  const weatherRow = h('div', { class: 'chip-row' });
+  const weatherBtns = new Map<string, HTMLElement>();
+  for (const id of WEATHER_IDS) {
+    const w = WEATHER[id];
+    const b = h('button', { class: 'chip-btn', title: w.description, 'data-testid': `weather-${id}` }, w.name);
+    b.onclick = () => choose({ weather: id });
+    weatherBtns.set(id, b);
+    weatherRow.append(b);
+  }
+  const weatherDesc = h('div', { class: 'setup-desc' }, '');
+  const aiRow = h('div', { class: 'chip-row' });
+  const aiBtns: HTMLElement[] = [];
+  for (let n = 0; n <= MAX_AI; n++) {
+    const b = h('button', { class: 'chip-btn', 'data-testid': `ai-${n}` }, n === 0 ? 'None' : `${n} AI`);
+    b.onclick = () => choose({ aiCount: n });
+    aiBtns.push(b);
+    aiRow.append(b);
+  }
+  const skillRow = h('div', { class: 'chip-row' });
+  const skillBtns = new Map<string, HTMLElement>();
+  for (const sk of ['easy', 'medium', 'hard'] as const) {
+    const b = h('button', { class: 'chip-btn' }, sk[0].toUpperCase() + sk.slice(1));
+    b.onclick = () => choose({ aiSkill: sk });
+    skillBtns.set(sk, b);
+    skillRow.append(b);
+  }
+
+  const showConfig = (c: RallyConfig) => {
+    current = { stageId: c.stageId, weather: c.weather, aiCount: c.aiCount, aiSkill: c.aiSkill };
+    stageCards.forEach((el, id) => el.classList.toggle('sel', id === c.stageId));
+    weatherBtns.forEach((el, id) => el.classList.toggle('sel', id === c.weather));
+    aiBtns.forEach((el, n) => el.classList.toggle('sel', n === c.aiCount));
+    skillBtns.forEach((el, id) => el.classList.toggle('sel', id === c.aiSkill));
+    skillRow.style.opacity = c.aiCount ? '1' : '0.35';
+    weatherDesc.textContent = WEATHER[c.weather].description;
+  };
+  const choose = async (patch: Partial<RallyConfig>) => {
+    const next = { ...current, ...patch };
+    showConfig(next);
+    settings.update({ rally: next });
+    if (!net.room) return;
+    try {
+      await net.configure(patch);
+    } catch (e) {
+      toast((e as NetError).message, 'bad');
+    }
+  };
+  showConfig(current);
 
   const render = (room: RoomSnapshot) => {
     codeEl.textContent = room.code;
@@ -127,12 +211,7 @@ export function lobbyScreen(nav: Nav): Screen {
       ' and enter the code above.',
     );
     if (net.mode === 'p2p' && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
-      hint.append(
-        h('br'),
-        h('br'),
-        'This page is only on this computer. To test, open a second browser window here. ',
-        'For a real tablet, upload the play folder to a free host such as Netlify Drop (see README) and open that link on both devices.',
-      );
+      hint.append(h('br'), h('br'), 'This page is only on this computer. Open a second browser window here to test, or put the game online (see README).');
     }
     players.innerHTML = '';
     const row = (role: string, name: string, state: string, cls: string) =>
@@ -145,6 +224,7 @@ export function lobbyScreen(nav: Nav): Screen {
         ? row('NAVIGATOR', n.name, n.connected ? 'Connected' : 'Reconnecting…', n.connected ? 'ok' : 'warn')
         : row('NAVIGATOR', 'Waiting for navigator…', 'Not connected', ''),
     );
+    showConfig(room.race);
     startBtn.disabled = false;
     startBtn.textContent = n?.connected ? 'Start stage' : 'Start without navigator';
     if (room.race.phase === 'countdown' || room.race.phase === 'racing') nav.go('drive');
@@ -166,14 +246,17 @@ export function lobbyScreen(nav: Nav): Screen {
 
   unsubs.push(
     net.on('room', render),
-    net.on('race', (s) => { if (s.phase === 'countdown' || s.phase === 'racing') nav.go('drive'); }),
+    net.on('race', (s) => {
+      showConfig(s);
+      if (s.phase === 'countdown' || s.phase === 'racing') nav.go('drive');
+    }),
     net.on('closed', (p) => { toast(p.reason, 'bad'); nav.go('menu'); }),
   );
 
   (async () => {
     try {
       if (net.session?.role === 'driver' && net.room) render(net.room);
-      else render((await net.createRoom(playerName('Driver'))).room);
+      else render((await net.createRoom(playerName('Driver'), current)).room);
     } catch (e) {
       hint.textContent = (e as NetError).message;
       toast((e as NetError).message, 'bad');
@@ -186,7 +269,7 @@ export function lobbyScreen(nav: Nav): Screen {
     h('div', { class: 'screen-header' }, h('button', { class: 'back-btn', onclick: () => leaveBtn.click() }, '← Menu'), h('h2', {}, 'Rally lobby'), h('div', { style: 'margin-left:auto;color:var(--muted);font-size:13px' }, status.el)),
     h(
       'div',
-      { class: 'center-wrap' },
+      { class: 'lobby-wrap' },
       h(
         'div',
         { class: 'lobby' },
@@ -199,8 +282,20 @@ export function lobbyScreen(nav: Nav): Screen {
           h('div', { style: 'display:flex;gap:10px;margin-top:18px;flex-wrap:wrap' }, startBtn, leaveBtn),
         ),
       ),
+      h(
+        'div',
+        { class: 'panel setup' },
+        h('div', { class: 'panel-title' }, 'Stage'),
+        stageGrid,
+        h('div', { class: 'setup-cols' },
+          h('div', {}, h('div', { class: 'panel-title' }, 'Weather'), weatherRow, weatherDesc),
+          h('div', {}, h('div', { class: 'panel-title' }, 'AI opponents'), aiRow, h('div', { style: 'height:8px' }), skillRow),
+        ),
+      ),
     ),
   );
+  // draw the stage previews once they are in the document
+  requestAnimationFrame(() => requestAnimationFrame(() => previews.forEach((p) => p.draw(null, 0))));
   return { el, dispose: () => unsubs.forEach((u) => u()) };
 }
 

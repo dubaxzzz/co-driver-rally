@@ -5,3 +5,5 @@ export * from './tracks';
 export * from './validation';
 export * from './vehicles';
 export * from './race/RaceController';
+export * from './weather';
+export * from './surfaces';

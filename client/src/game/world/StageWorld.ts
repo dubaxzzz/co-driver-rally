@@ -1,16 +1,21 @@
 import * as THREE from 'three';
-import type { BuiltStage } from '@cdr/shared';
+import { WEATHER, type BuiltStage, type WeatherDef, type WeatherId } from '@cdr/shared';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
-import { Atmosphere, DustSystem, RainSystem } from '../environment/Atmosphere';
+import { Atmosphere, DustSystem, RainSystem, SnowSystem } from '../environment/Atmosphere';
 import { Scenery } from '../environment/Scenery';
-import { buildTrack, type TerrainData } from '../tracks/TrackMeshes';
+import { buildTrack, type TerrainData, type WaterBody } from '../tracks/TrackMeshes';
 
 export interface StageWorld {
   terrain: TerrainData;
   scenery: Scenery;
   atmosphere: Atmosphere;
+  weather: WeatherDef;
   rain: RainSystem | null;
+  snow: SnowSystem | null;
   spray: DustSystem;
+  water: WaterBody[];
+  /** Per-frame animation of weather + rivers around the camera. */
+  update(dt: number, camera: THREE.Vector3, carVel: THREE.Vector3): void;
   /** Collider handle of the road surface (driver only). */
   roadColliderHandle: number | null;
 }
@@ -23,25 +28,57 @@ export interface StageWorld {
 export function buildStageWorld(
   scene: THREE.Scene,
   stage: BuiltStage,
-  opts: { quality: 'high' | 'low'; physics: PhysicsWorld | null; fogMultiplier: number },
+  opts: { quality: 'high' | 'low'; physics: PhysicsWorld | null; fogMultiplier: number; weather: WeatherId },
 ): StageWorld {
+  const weather = WEATHER[opts.weather] ?? WEATHER.storm;
   const track = buildTrack(stage);
   scene.add(track.road, track.terrain);
+  for (const w of track.water) scene.add(w.mesh);
   let roadColliderHandle: number | null = null;
   if (opts.physics) {
     roadColliderHandle = opts.physics.addTrimesh(track.roadCollider.vertices, track.roadCollider.indices, 0.9).handle;
     opts.physics.addTrimesh(track.terrainCollider.vertices, track.terrainCollider.indices, 0.8);
   }
-  const env = stage.def.environment;
-  const atmosphere = new Atmosphere(scene, env, opts.quality === 'high', opts.fogMultiplier);
+  const atmosphere = new Atmosphere(scene, weather, stage.def.scenery, opts.quality === 'high', opts.fogMultiplier);
   const scenery = new Scenery(stage, track.data, opts.physics, opts.quality);
   scene.add(scenery.group);
+  const q = opts.quality === 'high' ? 1 : 0.5;
   let rain: RainSystem | null = null;
-  if (env.rain > 0) {
-    rain = new RainSystem(env.rain * (opts.quality === 'high' ? 1 : 0.5));
+  if (weather.rain > 0) {
+    rain = new RainSystem(weather.rain * q);
     scene.add(rain.lines);
   }
-  const spray = new DustSystem(500, env.rain > 0 ? 'rgba(90,80,64,' : 'rgba(200,180,150,');
+  let snow: SnowSystem | null = null;
+  if (weather.snow > 0) {
+    snow = new SnowSystem(weather.snow * q);
+    scene.add(snow.points);
+  }
+  const sprayColor =
+    stage.def.surface === 'snow'
+      ? 'rgba(235,240,245,'
+      : weather.rain > 0 || stage.def.surface === 'tarmac'
+        ? 'rgba(90,80,64,'
+        : stage.def.offroad === 'sand'
+          ? 'rgba(190,100,50,'
+          : 'rgba(200,180,150,';
+  const spray = new DustSystem(500, sprayColor);
   scene.add(spray.points);
-  return { terrain: track.data, scenery, atmosphere, rain, spray, roadColliderHandle };
+  return {
+    terrain: track.data,
+    scenery,
+    atmosphere,
+    weather,
+    rain,
+    snow,
+    spray,
+    water: track.water,
+    roadColliderHandle,
+    update(dt, camera, carVel) {
+      rain?.update(dt, camera, carVel);
+      snow?.update(dt, camera, carVel);
+      for (const w of track.water) w.update(dt);
+      atmosphere.follow(camera);
+    },
+  };
+
 }

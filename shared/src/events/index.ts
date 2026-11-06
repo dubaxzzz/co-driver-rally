@@ -12,13 +12,16 @@ import type {
   RaceResult,
   RaceState,
   RaceWarning,
+  RallyConfig,
   RelayedTelemetry,
   RoomSnapshot,
   TelemetryPacket,
 } from '../types';
 
 export interface ClientToServerEvents {
-  'room:create': (payload: { name?: string; stageId?: string }, ack: (res: Ack<JoinResult>) => void) => void;
+  'room:create': (payload: { name?: string; config?: Partial<RallyConfig> }, ack: (res: Ack<JoinResult>) => void) => void;
+  /** Driver changes stage / weather / AI in the lobby. */
+  'room:configure': (payload: Partial<RallyConfig>, ack?: (res: Ack<RaceState>) => void) => void;
   'room:join': (payload: { code: string; name?: string }, ack: (res: Ack<JoinResult>) => void) => void;
   'session:resume': (payload: { token: string }, ack: (res: Ack<JoinResult>) => void) => void;
   'room:leave': (ack?: (res: Ack<null>) => void) => void;

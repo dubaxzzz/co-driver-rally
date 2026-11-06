@@ -50,6 +50,10 @@ export class Interpolator {
           p: lerpAngle(a.p, c.p, u),
           r: lerpAngle(a.r, c.r, u),
           steer: lerp(a.steer, c.steer, u),
+          ai:
+            a.ai && c.ai && a.ai.length === c.ai.length
+              ? c.ai.map((v, k) => (k % 6 === 3 ? lerpAngle(a.ai![k], v, u) : k % 6 === 5 ? v : lerp(a.ai![k], v, u)))
+              : c.ai,
           v: lerp(a.v, c.v, u),
           rpm: lerp(a.rpm, c.rpm, u),
           dist: lerp(a.dist, c.dist, u),

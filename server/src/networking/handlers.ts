@@ -6,6 +6,7 @@ import {
   sanitiseName,
   validateNavCall,
   validateTelemetry,
+  validateConfig,
   type Ack,
   type ClientToServerEvents,
   type ErrorCode,
@@ -74,9 +75,10 @@ export function registerHandlers(io: IO) {
     socket.on('room:create', (payload, ackFn) => {
       const ack = safeAck(ackFn);
       const name = sanitiseName(payload && (payload as { name?: unknown }).name, 'Driver');
-      const stageId = typeof payload?.stageId === 'string' ? payload.stageId : undefined;
+      const config = payload?.config === undefined ? {} : validateConfig(payload.config);
+      if (!config) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
       leaveCurrent();
-      const res = rooms.createRoom(socket.id, name, stageId);
+      const res = rooms.createRoom(socket.id, name, config);
       if (res.ok) {
         socket.join(res.data.session.roomCode);
         console.log(`[rooms] ${res.data.session.roomCode} created (${rooms.size} active)`);
@@ -150,6 +152,16 @@ export function registerHandlers(io: IO) {
       room.lastTelemetry = null;
       ack({ ok: true, data: room.race.toLobby() });
     };
+    socket.on('room:configure', (payload, ackFn) => {
+      const ack = safeAck<RaceState>(ackFn);
+      const ctx = currentRoom();
+      if (!ctx) return ack(err('NOT_IN_ROOM', 'You are not in a rally.'));
+      if (ctx.b.role !== 'driver') return ack(err('NOT_ALLOWED', 'Only the driver can choose the stage.'));
+      if (ctx.room.race.state.phase !== 'lobby') return ack(err('WRONG_PHASE', 'Return to the lobby to change the stage.'));
+      const cfg = validateConfig(payload);
+      if (!cfg) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
+      ack({ ok: true, data: ctx.room.race.configure(cfg) });
+    });
     socket.on('race:start', (ack) => raceAction('start', ack));
     socket.on('race:restart', (ack) => raceAction('restart', ack));
     socket.on('race:lobby', (ack) => raceAction('lobby', ack));

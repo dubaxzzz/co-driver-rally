@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { StageDef } from '@cdr/shared';
+import type { StageScenery, WeatherDef } from '@cdr/shared';
 
 /**
  * Sky dome, fog, sun/moon light and the shadow frustum that follows the car.
@@ -12,7 +12,7 @@ export class Atmosphere {
   readonly fog: THREE.FogExp2;
   private sunOffset: THREE.Vector3;
 
-  constructor(scene: THREE.Scene, private env: StageDef['environment'], shadows: boolean, fogMultiplier = 1) {
+  constructor(scene: THREE.Scene, private env: WeatherDef, scenery: StageScenery, shadows: boolean, fogMultiplier = 1) {
     this.fog = new THREE.FogExp2(env.fogColor, env.fogDensity * fogMultiplier);
     scene.fog = this.fog;
     scene.background = new THREE.Color(env.fogColor);
@@ -32,15 +32,17 @@ export class Atmosphere {
     scene.add(this.sky);
 
     const night = env.night;
-    this.hemi = night ? new THREE.HemisphereLight(0x3a4a66, 0x0a0d08, 0.35) : new THREE.HemisphereLight(0xcfe3ff, 0x3a4a2a, 0.9);
+    this.hemi = new THREE.HemisphereLight(env.hemiSky, env.hemiGround, env.hemiIntensity);
     scene.add(this.hemi);
 
-    const el = (env.sunElevationDeg * Math.PI) / 180;
-    const az = (env.sunAzimuthDeg * Math.PI) / 180;
+    // dusk keeps the sun low on the horizon whatever the stage says
+    const elevation = env.id === 'dusk' ? 6 : scenery.sunElevationDeg;
+    const el = (elevation * Math.PI) / 180;
+    const az = (scenery.sunAzimuthDeg * Math.PI) / 180;
     this.sunOffset = new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)).multiplyScalar(120);
     // At night this is a weak bluish moon without shadows.
-    this.sun = night ? new THREE.DirectionalLight(0x7f95c0, 0.25) : new THREE.DirectionalLight(0xfff0d6, 2.4);
-    this.sun.castShadow = shadows && !night;
+    this.sun = new THREE.DirectionalLight(env.sunColor, env.sunIntensity);
+    this.sun.castShadow = shadows && !night && env.sunIntensity > 0.8;
     if (this.sun.castShadow) {
       this.sun.shadow.mapSize.set(2048, 2048);
       const s = this.sun.shadow.camera;
@@ -124,6 +126,62 @@ export class RainSystem {
   }
 }
 
+/** Snowflakes drifting around the camera. */
+export class SnowSystem {
+  readonly points: THREE.Points;
+  private pos: Float32Array;
+  private phase: Float32Array;
+  private readonly count: number;
+  private readonly box = 24;
+  private t = 0;
+
+  constructor(intensity: number) {
+    this.count = Math.round(2600 * intensity);
+    this.pos = new Float32Array(this.count * 3);
+    this.phase = new Float32Array(this.count);
+    for (let i = 0; i < this.count; i++) {
+      this.pos[i * 3] = (Math.random() - 0.5) * this.box * 2;
+      this.pos[i * 3 + 1] = Math.random() * 20 - 4;
+      this.pos[i * 3 + 2] = (Math.random() - 0.5) * this.box * 2;
+      this.phase[i] = Math.random() * 10;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
+    const c = document.createElement('canvas');
+    c.width = c.height = 32;
+    const g = c.getContext('2d')!;
+    const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 32, 32);
+    const mat = new THREE.PointsMaterial({ size: 0.16, map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, opacity: 0.9 });
+    this.points = new THREE.Points(geo, mat);
+    this.points.frustumCulled = false;
+  }
+
+  update(dt: number, center: THREE.Vector3, carVel: THREE.Vector3) {
+    this.t += dt;
+    const b = this.box;
+    for (let i = 0; i < this.count; i++) {
+      const o = i * 3;
+      let x = this.pos[o] + Math.sin(this.t * 0.8 + this.phase[i]) * 0.6 * dt - carVel.x * 0.02 * dt;
+      let y = this.pos[o + 1] - 1.4 * dt;
+      let z = this.pos[o + 2] + Math.cos(this.t * 0.6 + this.phase[i]) * 0.6 * dt - carVel.z * 0.02 * dt;
+      if (x - center.x > b) x -= b * 2;
+      else if (x - center.x < -b) x += b * 2;
+      if (z - center.z > b) z -= b * 2;
+      else if (z - center.z < -b) z += b * 2;
+      if (y < center.y - 5) y += 22;
+      else if (y > center.y + 17) y -= 22;
+      this.pos[o] = x;
+      this.pos[o + 1] = y;
+      this.pos[o + 2] = z;
+    }
+    this.points.geometry.attributes.position.needsUpdate = true;
+  }
+}
+
 /** Pooled spray/mud particles kicked up by the wheels. */
 export class DustSystem {
   readonly points: THREE.Points;
@@ -133,7 +191,7 @@ export class DustSystem {
   private next = 0;
   private readonly count: number;
 
-  constructor(count = 600, color = 'rgba(200,180,150,') {
+  constructor(count = 600, color = 'rgba(200,180,150,', private readonly gravity = 4, size = 1.6) {
     this.count = count;
     this.pos = new Float32Array(count * 3);
     this.vel = new Float32Array(count * 3);
@@ -149,12 +207,12 @@ export class DustSystem {
     grad.addColorStop(1, `${color}0)`);
     g.fillStyle = grad;
     g.fillRect(0, 0, 64, 64);
-    const mat = new THREE.PointsMaterial({ size: 1.6, map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, opacity: 0.5 });
+    const mat = new THREE.PointsMaterial({ size, map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, opacity: 0.5 });
     this.points = new THREE.Points(geo, mat);
     this.points.frustumCulled = false;
   }
 
-  emit(x: number, y: number, z: number, vx: number, vz: number) {
+  emit(x: number, y: number, z: number, vx: number, vz: number, life = 1.0) {
     const i = this.next;
     this.next = (this.next + 1) % this.count;
     this.pos[i * 3] = x;
@@ -163,7 +221,7 @@ export class DustSystem {
     this.vel[i * 3] = vx * 0.2 + (Math.random() - 0.5) * 2;
     this.vel[i * 3 + 1] = 1 + Math.random() * 1.5;
     this.vel[i * 3 + 2] = vz * 0.2 + (Math.random() - 0.5) * 2;
-    this.life[i] = 1.0;
+    this.life[i] = life;
   }
 
   update(dt: number) {
@@ -177,7 +235,7 @@ export class DustSystem {
       this.pos[i * 3] += this.vel[i * 3] * dt;
       this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
       this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
-      this.vel[i * 3 + 1] -= 4 * dt;
+      this.vel[i * 3 + 1] -= this.gravity * dt;
       this.vel[i * 3] *= 0.97;
       this.vel[i * 3 + 2] *= 0.97;
     }

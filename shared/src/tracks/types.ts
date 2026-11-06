@@ -1,3 +1,6 @@
+import type { SurfaceId } from '../surfaces';
+import type { WeatherId } from '../weather';
+
 export type CornerDir = 'L' | 'R';
 /** 1 = slowest (near-hairpin) ... 6 = nearly flat. 'H' = hairpin. */
 export type Severity = 1 | 2 | 3 | 4 | 5 | 6 | 'H';
@@ -11,6 +14,10 @@ export type SegmentDef =
       /** Elevation feature placed at the middle of the straight. */
       feature?: 'crest' | 'jump';
       hazard?: HazardType;
+      /** A wooden bridge over a fast river in the middle of this straight. */
+      bridge?: boolean;
+      /** Road surface for this segment (defaults to the stage surface). */
+      surface?: SurfaceId;
     }
   | {
       kind: 'corner';
@@ -20,32 +27,46 @@ export type SegmentDef =
       angle: number;
       modifier?: CornerModifier;
       hazard?: HazardType;
+      surface?: SurfaceId;
     };
+
+export type TreeStyle = 'pine' | 'snowpine' | 'eucalyptus' | 'scrub';
+
+export interface StageScenery {
+  sunElevationDeg: number;
+  sunAzimuthDeg: number;
+  trees: TreeStyle;
+  /** 0..1.5 – how dense the roadside vegetation is. */
+  treeDensity: number;
+  grassA: number;
+  grassB: number;
+  /** Patches mixed into the ground colour (moss, rock, snow…). */
+  patch: number;
+  /** Colour of the road shoulders / verge. */
+  verge: number;
+  rock: number;
+  /** Height of the surrounding hills (m). */
+  hills: number;
+}
 
 export interface StageDef {
   id: string;
   name: string;
   location: string;
-  surface: 'gravel' | 'tarmac' | 'snow';
+  description: string;
+  /** Default road surface (segments can override). */
+  surface: SurfaceId;
+  /** What you drive on if you leave the road. */
+  offroad: SurfaceId;
   roadWidth: number;
   segments: SegmentDef[];
   /** Fractions of the stage length at which checkpoints are placed. */
   checkpointFractions: number[];
   /** Seed for deterministic scenery. */
   seed: number;
-  environment: {
-    fogColor: number;
-    fogDensity: number;
-    skyTop: number;
-    skyBottom: number;
-    sunElevationDeg: number;
-    sunAzimuthDeg: number;
-    treeDensity: number;
-    /** Night stage: dark sky, moonlight, headlights do the work. */
-    night: boolean;
-    /** Rain intensity 0..1 (streaks + drops on the windscreen). */
-    rain: number;
-  };
+  /** Weather picked when this stage is selected (players can change it). */
+  defaultWeather: WeatherId;
+  scenery: StageScenery;
 }
 
 export interface CenterlineSample {
@@ -87,6 +108,34 @@ export interface Checkpoint {
   h: number;
 }
 
+export interface SurfaceSpan {
+  from: number;
+  to: number;
+  surface: SurfaceId;
+}
+
+export interface Bridge {
+  index: number;
+  /** Distance of the bridge centre along the stage. */
+  distance: number;
+  length: number;
+  x: number;
+  y: number;
+  z: number;
+  h: number;
+}
+
+export interface River {
+  bridgeIndex: number;
+  /** Centre line of the river (crosses the road at its bridge). */
+  points: Array<{ x: number; z: number }>;
+  halfWidth: number;
+  /** Water surface height. */
+  waterY: number;
+  /** River bed height. */
+  bedY: number;
+}
+
 export interface BuiltStage {
   def: StageDef;
   samples: CenterlineSample[];
@@ -98,5 +147,8 @@ export interface BuiltStage {
   finishDistance: number;
   checkpoints: Checkpoint[];
   paceNotes: PaceNote[];
+  surfaceSpans: SurfaceSpan[];
+  bridges: Bridge[];
+  rivers: River[];
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number; minY: number; maxY: number };
 }

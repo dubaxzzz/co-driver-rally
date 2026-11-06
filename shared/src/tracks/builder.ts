@@ -1,10 +1,14 @@
+import type { SurfaceId } from '../surfaces';
 import type {
+  Bridge,
   BuiltStage,
   CenterlineSample,
   Checkpoint,
   PaceNote,
+  River,
   SegmentDef,
   StageDef,
+  SurfaceSpan,
 } from './types';
 
 /** Corner radius (m) for each severity. */
@@ -83,14 +87,33 @@ export function buildStage(def: StageDef): BuiltStage {
   const spans: Span[] = [];
   const features: ElevationFeature[] = [];
   const notes: PaceNote[] = [];
+  const surfaceSpans: SurfaceSpan[] = [];
+  const bridgeAt: Array<{ d: number; length: number }> = [];
+  const addSurface = (from: number, to: number, surface: SurfaceId) => {
+    const last = surfaceSpans[surfaceSpans.length - 1];
+    if (last && last.surface === surface && Math.abs(last.to - from) < 1e-6) last.to = to;
+    else surfaceSpans.push({ from, to, surface });
+  };
   const leadIn = 40; // road behind the start line
   let d = 0;
   spans.push({ from: 0, to: leadIn, k0: 0, k1: 0 });
+  addSurface(0, leadIn, def.surface);
   d = leadIn;
 
   for (const seg of def.segments) {
+    const segSurface = seg.surface ?? def.surface;
     if (seg.kind === 'straight') {
       spans.push({ from: d, to: d + seg.length, k0: 0, k1: 0 });
+      if (seg.bridge) {
+        const bl = Math.min(26, seg.length * 0.6);
+        const c = d + seg.length / 2;
+        addSurface(d, c - bl / 2, segSurface);
+        addSurface(c - bl / 2, c + bl / 2, 'wood');
+        addSurface(c + bl / 2, d + seg.length, segSurface);
+        bridgeAt.push({ d: c, length: bl });
+      } else {
+        addSurface(d, d + seg.length, segSurface);
+      }
       if (seg.feature) features.push({ center: d + seg.length / 2, type: seg.feature });
       if (seg.hazard) {
         const at = seg.feature ? d + seg.length / 2 - 20 : d;
@@ -157,10 +180,13 @@ export function buildStage(def: StageDef): BuiltStage {
         spoken: t.spoken,
       });
       spans.push({ from: d, to: d + len, k0, k1 });
+      addSurface(d, d + len, segSurface);
       d += len;
     }
   }
   const length = d;
+  // run-off after the last segment keeps the last surface
+  surfaceSpans[surfaceSpans.length - 1].to = length + 1;
 
   // 2. Integrate heading and position.
   const samples: CenterlineSample[] = [];
@@ -227,6 +253,23 @@ export function buildStage(def: StageDef): BuiltStage {
     bounds.maxY = Math.max(bounds.maxY, s.y);
   }
 
+  const bridges: Bridge[] = bridgeAt.map((b, index) => {
+    const c = sampleAt(samples, b.d);
+    return { index, distance: b.d, length: b.length, x: c.x, y: c.y, z: c.z, h: c.h };
+  });
+  const rivers: River[] = bridges.map((b) => {
+    // The river runs across the road at the bridge and meanders away on both sides.
+    const lx = Math.cos(b.h), lz = -Math.sin(b.h); // left (across the road)
+    const fx = Math.sin(b.h), fz = Math.cos(b.h); // along the road
+    const points: Array<{ x: number; z: number }> = [];
+    for (let t = -380; t <= 380; t += 8) {
+      const wobble = 16 * Math.sin(t / 57 + b.index) + 6 * Math.sin(t / 21);
+      const fade = Math.min(1, Math.abs(t) / 40); // straight under the bridge
+      points.push({ x: b.x + lx * t + fx * wobble * fade, z: b.z + lz * t + fz * wobble * fade });
+    }
+    return { bridgeIndex: b.index, points, halfWidth: 7, waterY: b.y - 3.2, bedY: b.y - 4.8 };
+  });
+
   return {
     def,
     samples,
@@ -237,6 +280,9 @@ export function buildStage(def: StageDef): BuiltStage {
     finishDistance,
     checkpoints,
     paceNotes: notes,
+    surfaceSpans,
+    bridges,
+    rivers,
     bounds,
   };
 }
@@ -324,4 +370,38 @@ export function projectOnStage(
     roadY: a.y + (b.y - a.y) * Math.max(0, Math.min(1, u)),
     index: best,
   };
+}
+
+/** Road surface at a distance along the stage. */
+export function surfaceAt(stage: BuiltStage, d: number): SurfaceId {
+  const spans = stage.surfaceSpans;
+  let lo = 0, hi = spans.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid].to <= d) lo = mid + 1;
+    else hi = mid;
+  }
+  return spans[lo]?.surface ?? stage.def.surface;
+}
+
+/** Distance from a point to the nearest river centre line (and that river). */
+export function riverDistance(stage: BuiltStage, x: number, z: number): { dist: number; river: River | null } {
+  let best = Infinity;
+  let bestRiver: River | null = null;
+  for (const r of stage.rivers) {
+    const p = r.points;
+    for (let i = 0; i < p.length - 1; i++) {
+      const ax = p[i].x, az = p[i].z, bx = p[i + 1].x, bz = p[i + 1].z;
+      const ex = bx - ax, ez = bz - az;
+      const len2 = ex * ex + ez * ez || 1;
+      const u = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / len2));
+      const dx = ax + ex * u - x, dz = az + ez * u - z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < best) {
+        best = d2;
+        bestRiver = r;
+      }
+    }
+  }
+  return { dist: Math.sqrt(best), river: bestRiver };
 }

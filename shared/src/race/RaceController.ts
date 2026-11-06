@@ -1,6 +1,10 @@
 import { COUNTDOWN_MS, MAX_PLAUSIBLE_SPEED_MS, MAX_TELEPORT_SLACK_M } from '../constants';
 import { getStage, projectOnStage, type BuiltStage } from '../tracks';
-import type { CheckpointEvent, RaceResult, RaceState, RaceWarning, TelemetryPacket } from '../types';
+import type { CheckpointEvent, RaceResult, RaceState, RaceWarning, RallyConfig, TelemetryPacket } from '../types';
+import { DEFAULT_STAGE_ID } from '../tracks';
+import { DEFAULT_WEATHER } from '../weather';
+
+export const DEFAULT_CONFIG: RallyConfig = { stageId: DEFAULT_STAGE_ID, weather: DEFAULT_WEATHER, aiCount: 0, aiSkill: 'medium' };
 
 export interface RaceEvents {
   onState: (state: RaceState) => void;
@@ -18,7 +22,7 @@ const GATE_HALF_WIDTH = 13;
  * finished – the driver's client cannot simply claim a finish.
  */
 export class RaceController {
-  readonly stage: BuiltStage;
+  stage: BuiltStage;
   state: RaceState;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private hint = -1;
@@ -29,13 +33,14 @@ export class RaceController {
   private warnedCheckpoint = -1;
   private warnedFinish = false;
 
-  constructor(stageId: string, private readonly events: RaceEvents) {
-    const stage = getStage(stageId);
-    if (!stage) throw new Error(`Unknown stage ${stageId}`);
+  constructor(config: Partial<RallyConfig>, private readonly events: RaceEvents) {
+    const cfg = { ...DEFAULT_CONFIG, ...config };
+    const stage = getStage(cfg.stageId);
+    if (!stage) throw new Error(`Unknown stage ${cfg.stageId}`);
     this.stage = stage;
     this.state = {
+      ...cfg,
       phase: 'lobby',
-      stageId,
       runId: 0,
       startAt: null,
       finishedAt: null,
@@ -66,6 +71,19 @@ export class RaceController {
         this.events.onState(this.state);
       }
     }, COUNTDOWN_MS);
+    this.events.onState(this.state);
+    return this.state;
+  }
+
+  /** Changes stage / weather / AI. Only allowed in the lobby. */
+  configure(cfg: Partial<RallyConfig>): RaceState {
+    if (this.state.phase !== 'lobby') return this.state;
+    if (cfg.stageId && cfg.stageId !== this.state.stageId) {
+      const stage = getStage(cfg.stageId);
+      if (!stage) return this.state;
+      this.stage = stage;
+    }
+    this.state = { ...this.state, ...cfg };
     this.events.onState(this.state);
     return this.state;
   }

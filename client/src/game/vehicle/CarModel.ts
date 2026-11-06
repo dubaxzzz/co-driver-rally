@@ -25,6 +25,8 @@ export interface CarModel {
   enableHeadlights(): void;
   /** Extra roof/bonnet light pod for more reach. */
   setLightPod(on: boolean): void;
+  /** Front-end damage smashes the headlights (left first, then right, then the pod). */
+  setHeadlightDamage(front: number): void;
   readonly lightPodOn: boolean;
   dispose(): void;
 }
@@ -191,7 +193,10 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption): CarModel
   const lightRig = new THREE.Group();
   root.add(lightRig);
   let pod: THREE.SpotLight | null = null;
+  let lowL: THREE.SpotLight | null = null;
+  let lowR: THREE.SpotLight | null = null;
   let podOn = false;
+  let frontDamage = 0;
   const spot = (x: number, y: number, z: number, intensity: number, angle: number, distance: number, aimY: number) => {
     const l = new THREE.SpotLight(0xfff0d8, intensity, distance, angle, 0.6, 1.3);
     l.position.set(x, y, z);
@@ -213,13 +218,22 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption): CarModel
     },
     enableHeadlights() {
       if (lightRig.children.length) return;
-      spot(0.45, 0.2, 2.1, 140, 0.5, 75, -3.2); // left low beam
-      spot(-0.45, 0.2, 2.1, 140, 0.5, 75, -3.2); // right low beam
+      lowL = spot(0.45, 0.2, 2.1, 140, 0.5, 75, -3.2); // left low beam
+      lowR = spot(-0.45, 0.2, 2.1, 140, 0.5, 75, -3.2); // right low beam
       pod = spot(0, 0.35, 2.15, 0, 0.26, 120, -1.6); // light pod (off by default)
+      this.setHeadlightDamage(frontDamage);
     },
     setLightPod(on) {
       podOn = on;
-      if (pod) pod.intensity = on ? 380 : 0;
+      if (pod) pod.intensity = on && frontDamage < 0.9 ? 380 : 0;
+    },
+    setHeadlightDamage(front) {
+      frontDamage = front;
+      // intensity (not visibility) so the light count – and the shaders – stay the same
+      if (lowL) lowL.intensity = front < 0.45 ? 140 : 0;
+      if (lowR) lowR.intensity = front < 0.8 ? 140 : 0;
+      if (pod) pod.intensity = podOn && front < 0.9 ? 380 : 0;
+      lightMat.emissiveIntensity = front < 0.8 ? 0.6 : 0.05;
     },
     setPaint(p) {
       paintMat.color.setHex(p.body);

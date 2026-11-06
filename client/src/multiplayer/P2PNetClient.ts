@@ -2,7 +2,6 @@ import Peer, { type DataConnection, type PeerOptions } from 'peerjs';
 import {
   CALL_LOG_LENGTH,
   DEFAULT_NAVIGATOR_RECONNECT_GRACE_MS,
-  DEFAULT_STAGE_ID,
   NAV_CALL_MAX_PER_SECOND,
   RaceController,
   ROOM_CODE_ALPHABET,
@@ -10,6 +9,7 @@ import {
   SESSION_STORAGE_KEY,
   normaliseRoomCode,
   sanitiseName,
+  validateConfig,
   validateNavCall,
   type Ack,
   type ErrorCode,
@@ -17,6 +17,7 @@ import {
   type NavCall,
   type NavCallRequest,
   type RaceState,
+  type RallyConfig,
   type RelayedTelemetry,
   type RoomSnapshot,
   type SessionInfo,
@@ -110,6 +111,7 @@ interface NavSeat {
 
 interface HostRecord {
   code: string;
+  config: Partial<RallyConfig>;
   createdAt: number;
   driverId: string;
   driverName: string;
@@ -255,6 +257,7 @@ export class P2PNetClient extends NetBase {
     const h = this.host;
     const rec: HostRecord = {
       code: h.code,
+      config: { stageId: h.race.state.stageId, weather: h.race.state.weather, aiCount: h.race.state.aiCount, aiSkill: h.race.state.aiSkill },
       createdAt: h.createdAt,
       driverId: h.driverId,
       driverName: h.driverName,
@@ -279,14 +282,14 @@ export class P2PNetClient extends NetBase {
   }
 
   // =============================================================== HOST (driver)
-  async createRoom(name: string): Promise<JoinResult> {
+  async createRoom(name: string, config: Partial<RallyConfig> = {}): Promise<JoinResult> {
     if (this.session) await this.leave();
     this.setStatus('connecting');
     for (let attempt = 0; attempt < 8; attempt++) {
       const code = randomCode();
       try {
         const peer = await this.openPeer(peerIdFor(code));
-        const rec: HostRecord = { code, createdAt: Date.now(), driverId: randomHex(8), driverName: sanitiseName(name, 'Driver'), nav: null };
+        const rec: HostRecord = { code, config: validateConfig(config) ?? {}, createdAt: Date.now(), driverId: randomHex(8), driverName: sanitiseName(name, 'Driver'), nav: null };
         const res = this.startHosting(peer, rec, randomHex(24));
         this.setStatus('connected');
         return res;
@@ -301,7 +304,7 @@ export class P2PNetClient extends NetBase {
   }
 
   private startHosting(peer: Peer, rec: HostRecord, token: string): JoinResult {
-    const race = new RaceController(DEFAULT_STAGE_ID, {
+    const race = new RaceController(rec.config ?? {}, {
       onState: (state) => {
         if (this.room) this.room = { ...this.room, race: state };
         this.emit('race', state);
@@ -816,6 +819,17 @@ export class P2PNetClient extends NetBase {
     }
     this.clearSession();
     if (this.base && !this.base.destroyed && !this.base.disconnected) this.setStatus('connected');
+  }
+
+  async configure(config: Partial<RallyConfig>): Promise<RaceState> {
+    const h = this.host;
+    if (!h) throw new NetError('NOT_ALLOWED', 'Only the driver can choose the stage.');
+    if (h.race.state.phase !== 'lobby') throw new NetError('WRONG_PHASE', 'Return to the lobby to change the stage.');
+    const cfg = validateConfig(config);
+    if (!cfg) throw new NetError('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.');
+    const state = h.race.configure(cfg);
+    this.persistHost();
+    return state;
   }
 
   async startRace(): Promise<RaceState> {

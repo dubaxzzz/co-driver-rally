@@ -59,7 +59,7 @@ async function render() {
       if (net.session?.role !== 'navigator') return go('join');
       const { NavigatorApp } = await import('./navigator/NavigatorApp');
       if (token !== routeToken) return;
-      const navApp = new NavigatorApp(() => go('menu'));
+      const navApp = new NavigatorApp(() => go('menu'), () => void render());
       current = { el: navApp.root, dispose: () => navApp.dispose() };
       break;
     }

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
-import type { VehicleDef, WheelOption } from '@cdr/shared';
+import { SURFACES, type SurfaceDef, type VehicleDef, type WheelOption } from '@cdr/shared';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 import type { DriveInput } from '../input/Input';
 import { WHEEL_LAYOUT, type CarModel } from './CarModel';
@@ -10,6 +10,25 @@ export { SUSPENSION } from './setup';
 
 const RPM_PER_MS = 142; // engine rpm per (m/s × gear ratio)
 
+
+/**
+ * Collision groups: cars collide with the world but never with each other
+ * (AI opponents can't take you out), and the wheel rays only see the world.
+ * Packed as (membership << 16) | filter.
+ */
+export const CAR_GROUPS = (0x0002 << 16) | 0x0001;
+
+/** Damage per zone, 0 (fine) .. 1 (wrecked). */
+export interface DamageZones {
+  front: number;
+  left: number;
+  right: number;
+  rear: number;
+  windscreen: number;
+  engine: number;
+}
+export const DAMAGE_KEYS: Array<keyof DamageZones> = ['front', 'left', 'right', 'rear', 'windscreen', 'engine'];
+export const noDamage = (): DamageZones => ({ front: 0, left: 0, right: 0, rear: 0, windscreen: 0, engine: 0 });
 
 export interface VehicleTelemetry {
   speed: number; // signed m/s along forward axis
@@ -47,7 +66,18 @@ export class Vehicle {
   bump = 0;
   private lastSusp = [0, 0, 0, 0];
   onGearChange: ((up: boolean) => void) | null = null;
-  onImpact: ((strength: number) => void) | null = null;
+  onImpact: ((strength: number, zone: keyof DamageZones) => void) | null = null;
+  /** Damage by zone – drives the visuals (cracked glass, bent bonnet…) and performance. */
+  readonly damage: DamageZones = noDamage();
+  /** Surface under the wheels that touch the road / everything else. Set by the game each frame. */
+  roadSurface: SurfaceDef = SURFACES.gravel;
+  offroadSurface: SurfaceDef = SURFACES.grass;
+  /** True when the car is down in a river. */
+  inWater = false;
+  /** Weather grip multiplier (rain, snow…). */
+  weatherGrip = 1;
+  /** Name of the surface most wheels are on (for sound/HUD). */
+  surfaceName: SurfaceDef = SURFACES.gravel;
   /** Collider handles considered "road" (gravel). Others = grass/verge. */
   roadColliders = new Set<number>();
   frozen = true;
@@ -87,6 +117,7 @@ export class Vehicle {
     };
     world.createCollider(
       R.ColliderDesc.cuboid(hx, hy, hz)
+        .setCollisionGroups(CAR_GROUPS)
         .setTranslation(0, 0.1, 0)
         .setMassProperties(m, { x: 0, y: CHASSIS.comY, z: 0.05 }, inertia, { x: 0, y: 0, z: 0, w: 1 })
         .setFriction(0.4)
@@ -94,7 +125,7 @@ export class Vehicle {
       this.body,
     );
     // A cabin collider so rolling onto the roof behaves sensibly
-    world.createCollider(R.ColliderDesc.cuboid(0.72, 0.22, 0.95).setTranslation(0, 0.65, -0.25).setDensity(0).setFriction(0.5), this.body);
+    world.createCollider(R.ColliderDesc.cuboid(0.72, 0.22, 0.95).setTranslation(0, 0.65, -0.25).setDensity(0).setFriction(0.5).setCollisionGroups(CAR_GROUPS), this.body);
 
     this.controller = world.createVehicleController(this.body);
     this.controller.indexUpAxis = 1;
@@ -159,6 +190,7 @@ export class Vehicle {
 
   resetDamage() {
     this.telemetry.damage = 0;
+    for (const k of DAMAGE_KEYS) this.damage[k] = 0;
   }
 
   /** One fixed physics step. */
@@ -220,7 +252,8 @@ export class Vehicle {
     const curve = 0.62 + 0.38 * Math.sin(Math.min(1, Math.max(0, n)) * Math.PI * 0.9);
     const limiter = rpm >= def.maxRpm - 20 ? 0.15 : 1;
     const shiftCut = this.shiftTimer > 0.1 ? 0.2 : 1;
-    const damageLoss = 1 - this.telemetry.damage * 0.15;
+    // engine damage costs power; a smashed front end chokes the radiator too
+    const damageLoss = 1 - this.damage.engine * 0.45 - this.damage.front * 0.1;
     let force = def.enginePowerN * curve * (ratio / ratios[0]) * throttle * limiter * shiftCut * damageLoss;
     if (this.gear === -1) force = -def.enginePowerN * 0.45 * throttle;
     if (this.frozen) force = 0;
@@ -241,27 +274,32 @@ export class Vehicle {
     c.setWheelBrake(3, brake * 0.4 + hb);
 
     // --- Steering (speed sensitive) ---
-    const steerAngle = input.steer * def.maxSteerRad * (this.frozen ? 0 : 1);
+    // bent steering arms after side impacts make the car pull to that side
+    const pull = (this.damage.left - this.damage.right) * 0.07;
+    const steerAngle = (input.steer * def.maxSteerRad + pull) * (this.frozen ? 0 : 1);
     c.setWheelSteering(0, steerAngle);
     c.setWheelSteering(1, steerAngle);
 
     // --- Tyre grip: gravel vs verge, handbrake slides the rear ---
     let onGravel = 0;
     let grounded = 0;
+    const wheelSurfaces: SurfaceDef[] = [];
     for (let i = 0; i < 4; i++) {
       const ground = c.wheelGroundObject(i);
       const isRoad = !!ground && this.roadColliders.has(ground.handle);
       if (c.wheelIsInContact(i)) grounded++;
       if (isRoad) onGravel++;
       const rearWheel = i >= 2;
-      let grip = this.gripBase * (isRoad ? 1 : 0.82) * (rearWheel ? CHASSIS.rearGripBias : 1);
+      const surf = this.inWater ? SURFACES.water : isRoad ? this.roadSurface : this.offroadSurface;
+      wheelSurfaces[i] = surf;
+      let grip = this.gripBase * surf.grip * this.weatherGrip * (rearWheel ? CHASSIS.rearGripBias : 1);
       if (rearWheel && handbrake) grip *= 0.45;
       c.setWheelFrictionSlip(i, grip);
       const side = rearWheel ? CHASSIS.sideFrictionRear : CHASSIS.sideFrictionFront;
       c.setWheelSideFrictionStiffness(i, rearWheel && handbrake ? side * 0.55 : side);
     }
 
-    c.updateVehicle(dt);
+    c.updateVehicle(dt, undefined, CAR_GROUPS);
 
     // Downforce + mild aero drag (forces persist in Rapier, so clear last step's first)
     // Rapier keeps user forces AND torques until cleared – clear both every step,
@@ -269,7 +307,24 @@ export class Vehicle {
     this.body.resetForces(false);
     this.body.resetTorques(false);
     const down = Math.min(6000, 1.6 * speed * speed);
-    const drag = -0.42 * speed * Math.abs(speed);
+    // Surface resistance: sand, mud, snow, grass and water slow the car a lot.
+    let rolling = 0;
+    let surfDrag = 0;
+    let contacts = 0;
+    let main = this.roadSurface;
+    for (let i = 0; i < 4; i++) {
+      if (!c.wheelIsInContact(i)) continue;
+      const sf = wheelSurfaces[i] ?? this.roadSurface;
+      rolling += sf.rolling;
+      surfDrag += sf.drag;
+      contacts++;
+      if (i === 0) main = sf;
+    }
+    this.surfaceName = contacts ? main : this.surfaceName;
+    let resist = 0;
+    if (contacts && absSpeed > 0.3) resist = ((rolling + surfDrag * absSpeed) / 4) * Math.sign(speed);
+    if (this.inWater) resist += 900 * Math.sign(speed) + 60 * speed; // wading through the river
+    const drag = -0.42 * speed * Math.abs(speed) - resist;
     this.body.addForce({ x: fwd.x * drag, y: -down + fwd.y * drag, z: fwd.z * drag }, true);
 
     // Anti-roll bars: resist body roll by pushing up the compressed side and
@@ -313,12 +368,35 @@ export class Vehicle {
 
     // --- Impact detection (sudden change in velocity) ---
     this.impactCooldown -= dt;
-    const dv = vel.clone().sub(this.lastVel).length();
+    const dvWorld = vel.clone().sub(this.lastVel);
+    const dv = dvWorld.length();
     if (dv > 4.5 && this.impactCooldown <= 0) {
       const strength = Math.min(1, (dv - 4.5) / 10);
-      this.telemetry.damage = Math.min(1, this.telemetry.damage + strength * 0.08);
+      // which side took the hit? (velocity change in the car's frame: +x left, +z forward)
+      const local = dvWorld.clone().applyQuaternion(this.tmpQ.clone().invert());
+      const d = this.damage;
+      const add = (k: keyof DamageZones, v: number) => (d[k] = Math.min(1, d[k] + v));
+      let zone: keyof DamageZones;
+      const upsideDown = up.y < 0.3;
+      if (upsideDown) {
+        zone = 'windscreen'; // roof/pillar hit while rolling
+        add('windscreen', 0.25 + strength * 0.5);
+        add('front', strength * 0.15);
+      } else if (Math.abs(local.z) >= Math.abs(local.x)) {
+        zone = local.z < 0 ? 'front' : 'rear';
+        add(zone, 0.12 + strength * 0.45);
+        if (zone === 'front') {
+          add('engine', strength * 0.35);
+          if (strength > 0.15) add('windscreen', 0.1 + strength * 0.5);
+        }
+      } else {
+        zone = local.x > 0 ? 'right' : 'left'; // pushed left = hit on the right
+        add(zone, 0.12 + strength * 0.45);
+        if (strength > 0.35) add('windscreen', strength * 0.25);
+      }
+      this.telemetry.damage = Math.min(1, (d.front + d.left + d.right + d.rear + d.engine) / 3.2);
       this.impactCooldown = 0.35;
-      this.onImpact?.(strength);
+      this.onImpact?.(strength, zone);
     }
     // acceleration in the car's own frame (for G-force head movement)
     const accWorld = vel.clone().sub(this.lastVel).divideScalar(dt);

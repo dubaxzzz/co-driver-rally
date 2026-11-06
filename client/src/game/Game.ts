@@ -1,9 +1,14 @@
 import * as THREE from 'three';
 import {
   DEFAULT_STAGE_ID,
+  SURFACES,
   TELEMETRY_INTERVAL_MS,
+  WEATHER,
+  WHEELS,
   getStage,
   sampleAt,
+  surfaceAt,
+  type WeatherDef,
   type BuiltStage,
   type RaceResult,
   type RaceState,
@@ -14,14 +19,16 @@ import { net } from '../multiplayer/NetClient';
 import { fogMultiplier, garageStore, settings } from '../settings';
 import { h, loadingOverlay, toast } from '../ui/dom';
 import { Hud } from '../ui/hud';
-import { resultsOverlay } from '../ui/results';
+import { resultsOverlay, type Standing } from '../ui/results';
+import { AIDriver, AI_CREWS } from './ai/AIDriver';
+import { DustSystem } from './environment/Atmosphere';
 import { FirstPersonCamera } from './camera/FirstPersonCamera';
 import { Input } from './input/Input';
 import { loadRapier, PhysicsWorld } from './physics/PhysicsWorld';
 import { RaceClient } from './race/RaceClient';
 import { createCarModel } from './vehicle/CarModel';
 import { Cockpit } from './vehicle/Cockpit';
-import { Vehicle } from './vehicle/Vehicle';
+import { DAMAGE_KEYS, Vehicle } from './vehicle/Vehicle';
 import { buildStageWorld, type StageWorld } from './world/StageWorld';
 
 export type GameExit = 'menu' | 'lobby';
@@ -37,6 +44,10 @@ export class Game {
   private vehicle!: Vehicle;
   private stage!: BuiltStage;
   private world!: StageWorld;
+  private weather!: WeatherDef;
+  private ai: AIDriver[] = [];
+  private smoke = new DustSystem(260, 'rgba(70,70,74,', -0.8, 2.6);
+  private underwaterFor = 0;
   private cockpit!: Cockpit;
   private fp!: FirstPersonCamera;
   private input = new Input();
@@ -71,13 +82,14 @@ export class Game {
       const stage = getStage(room?.race.stageId ?? DEFAULT_STAGE_ID);
       if (!stage) throw new Error('Stage not found');
       this.stage = stage;
+      this.weather = WEATHER[room?.race.weather ?? 'storm'] ?? WEATHER.storm;
       const quality = settings.get().quality;
 
       // Renderer
       this.renderer = new THREE.WebGLRenderer({ antialias: quality === 'high', powerPreference: 'high-performance' });
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality === 'high' ? 2 : 1));
       this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
-      this.renderer.shadowMap.enabled = quality === 'high' && !stage.def.environment.night;
+      this.renderer.shadowMap.enabled = quality === 'high' && !this.weather.night;
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
       this.renderer.toneMappingExposure = 1.05;
@@ -87,7 +99,8 @@ export class Game {
       // Physics + world
       this.physics = new PhysicsWorld(R);
       await new Promise((r) => setTimeout(r, 0)); // let the loading screen paint
-      this.world = buildStageWorld(this.scene, stage, { quality, physics: this.physics, fogMultiplier: fogMultiplier() });
+      this.world = buildStageWorld(this.scene, stage, { quality, physics: this.physics, fogMultiplier: fogMultiplier(), weather: this.weather.id });
+      this.scene.add(this.smoke.points);
       this.unsubs.push(settings.subscribe(() => this.world.atmosphere.setFogMultiplier(fogMultiplier())));
 
       // Vehicle
@@ -98,16 +111,32 @@ export class Game {
       if (this.world.roadColliderHandle !== null) this.vehicle.roadColliders.add(this.world.roadColliderHandle);
       // First person only: hide the outside of the car, show the cockpit and switch on real headlights.
       model.setExteriorVisible(false);
-      model.enableHeadlights();
+      if (this.weather.headlights) model.enableHeadlights();
+      this.vehicle.weatherGrip = this.weather.grip;
       this.cockpit = new Cockpit(sel.paint, 'driver');
       model.root.add(this.cockpit.group);
       this.vehicle.onGearChange = (up) => audio.gearChange(up);
-      this.vehicle.onImpact = (s) => audio.impact(s);
+      this.vehicle.onImpact = (s, zone) => {
+        audio.impact(s);
+        if (zone === 'windscreen' || (zone === 'front' && s > 0.15)) audio.glass(s);
+      };
+
+      // AI opponents: real physics cars lined up behind you; they never collide with you.
+      const aiCount = room?.race.aiCount ?? 0;
+      for (let i = 0; i < aiCount; i++) {
+        const crew = AI_CREWS[i % AI_CREWS.length];
+        const aiModel = createCarModel(crew.paint, WHEELS[0]);
+        this.scene.add(aiModel.root);
+        const driver = new AIDriver(this.physics, stage, crew.name, aiModel, room?.race.aiSkill ?? 'medium', 9 * (i + 1), this.weather);
+        if (this.world.roadColliderHandle !== null) driver.vehicle.roadColliders.add(this.world.roadColliderHandle);
+        this.ai.push(driver);
+      }
 
       // No automatic pace notes: the co-driver calls the stage out loud.
       this.race = new RaceClient(stage);
 
       this.fp = new FirstPersonCamera(this.container.clientWidth / this.container.clientHeight, 'driver');
+      if (import.meta.env.DEV) (window as unknown as { __cdrGame?: unknown }).__cdrGame = this;
 
       this.hud = new Hud(stage);
       this.container.append(this.hud.root);
@@ -189,13 +218,34 @@ export class Game {
   }
 
   private spawn() {
-    const s = sampleAt(this.stage.samples, this.stage.spawnDistance);
+    // Development-only shortcuts for screenshots/testing (stripped from production builds):
+    //   ?devspawn=bridge|<metres>  start somewhere else on the stage
+    //   ?devdamage=0.8            start with a damaged car
+    let spawnD = this.stage.spawnDistance;
+    let devDamage = 0;
+    if (import.meta.env.DEV) {
+      const q = new URLSearchParams(location.search);
+      const sp = q.get('devspawn');
+      if (sp === 'bridge' && this.stage.bridges[0]) spawnD = this.stage.bridges[0].distance - 45;
+      else if (sp && Number.isFinite(Number(sp))) spawnD = Number(sp);
+      devDamage = Number(q.get('devdamage') ?? 0) || 0;
+    }
+    const s = sampleAt(this.stage.samples, spawnD);
     this.vehicle.place(s.x, s.y + 0.9, s.z, s.h);
     this.vehicle.resetDamage();
+    if (devDamage) {
+      const d = this.vehicle.damage;
+      d.front = d.windscreen = d.engine = devDamage;
+      d.left = devDamage * 0.5;
+    }
     this.vehicle.syncVisuals();
     this.race.resetRun();
     this.resets = 0;
     this.stage.checkpoints.forEach((c) => this.world.scenery.markCheckpoint(c.index, false));
+    this.ai.forEach((a) => {
+      a.resetToGrid();
+      a.vehicle.syncVisuals();
+    });
   }
 
   private resetVehicle() {
@@ -242,9 +292,16 @@ export class Game {
           { label: 'Restart stage', primary: true, onClick: () => this.restart() },
           { label: 'Back to lobby', onClick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) },
           { label: 'Main menu', onClick: () => this.leave() },
-        ]),
+        ], () => this.standings(r.timeMs)),
       );
     }, 1200);
+  }
+
+  private standings(playerMs: number): Standing[] {
+    return [
+      { name: net.room?.driver?.name ?? 'You', timeMs: playerMs, you: true },
+      ...this.ai.map((a) => ({ name: a.name, timeMs: a.finishTimeMs, you: false })),
+    ];
   }
 
   private restart() {
@@ -307,12 +364,33 @@ export class Game {
     const v = this.vehicle;
 
     this.input.update(dt, v.telemetry.speed);
-    this.physics.step(dt, (fixed) => v.step(fixed, this.input.state));
+    const phase = this.raceState?.phase;
+
+    // Surface under the car: road surface at this point of the stage, the
+    // stage's verge when off the road, and the river if we went in.
+    const p0 = v.position;
+    v.roadSurface = SURFACES[surfaceAt(this.stage, this.race.distance)];
+    v.offroadSurface = SURFACES[this.stage.def.offroad];
+    const river = this.world.terrain.waterAt(p0.x, p0.z);
+    v.inWater = !!river && p0.y < river.waterY + 0.6;
+
+    const aiRacing = phase === 'racing' || phase === 'finished';
+    const raceMs = this.raceTimeMs();
+    this.physics.step(dt, (fixed) => {
+      v.step(fixed, this.input.state);
+      for (const a of this.ai) a.step(fixed, aiRacing, phase === 'racing' ? Math.max(0, net.serverNow() - (this.raceState?.startAt ?? 0)) : raceMs);
+    });
     v.afterStep();
     v.syncVisuals();
+    for (const a of this.ai) {
+      a.afterStep();
+      a.vehicle.syncVisuals();
+      // AI cars pass through you (no contact in rally) – hide one while it overlaps your car
+      a.vehicle.model.root.visible = a.vehicle.model.root.position.distanceTo(v.model.root.position) > 4.2;
+    }
+    v.model.setHeadlightDamage(v.damage.front);
 
     const pos = v.position.clone();
-    const phase = this.raceState?.phase;
     this.race.update(pos.x, pos.z, v.telemetry.speed, false);
 
     // Countdown display
@@ -329,6 +407,18 @@ export class Game {
     // Off-road safety: fell through/away, or stuck upside down
     const roadY = sampleAt(this.stage.samples, this.race.distance).y;
     if (pos.y < roadY - 25 || Math.abs(this.race.lateral) > 105) this.resetVehicle();
+    // stuck in the river?
+    if (v.inWater && Math.abs(v.telemetry.speed) < 2) {
+      this.underwaterFor += dt;
+      if (this.underwaterFor > 3) this.hud.warn('IN THE RIVER – PRESS R', 1);
+    } else this.underwaterFor = 0;
+    // a damaged engine smokes from under the bonnet
+    if (v.damage.engine > 0.35 && Math.random() < v.damage.engine * dt * 30) {
+      const sp = new THREE.Vector3((Math.random() - 0.5) * 0.6, 0.45, 1.7).applyQuaternion(v.model.root.quaternion).add(pos);
+      const lvv = v.body.linvel();
+      this.smoke.emit(sp.x, sp.y, sp.z, lvv.x * 2, lvv.z * 2, 1.6);
+    }
+    this.smoke.update(dt);
     if (v.upright < 0.2 && Math.abs(v.telemetry.speed) < 2) {
       this.upsideDownFor += dt;
       if (this.upsideDownFor > 2.5) {
@@ -360,12 +450,14 @@ export class Game {
       handbrake: this.input.state.handbrake && !v.frozen,
       brake: t.brake,
       wipers: st.wipers,
-      rain: this.stage.def.environment.rain,
+      rain: this.weather.rain,
+      snow: this.weather.snow,
       speedUnit: st.units,
+      damage: v.damage,
     });
     this.fp.update(dt, v.model.root, v.accelLocal, v.bump);
-    this.world.rain?.update(dt, this.fp.camera.position, vel);
-    this.world.atmosphere.follow(pos);
+    this.world.update(dt, this.fp.camera.position, vel);
+    audio.setRiver(Math.max(0, 1 - this.world.terrain.riverDistanceAt(pos.x, pos.z) / 80));
 
     // HUD
     const timeMs = this.raceTimeMs();
@@ -373,7 +465,8 @@ export class Game {
     this.hud.updateRace(timeMs, this.race.distance, this.race.remaining, this.race.progress01, this.raceState?.checkpointsPassed ?? 0);
     this.hud.tick(dt);
 
-    audio.update(t.rpm, phase === 'racing' ? t.throttle : 0, t.speed, t.slip, t.onGravel, t.grounded);
+    this.hud.setDamage(v.damage, v.surfaceName.name);
+    audio.update(t.rpm, phase === 'racing' ? t.throttle : 0, t.speed, t.slip, v.surfaceName.sound, t.grounded);
 
     // Telemetry at ~20 Hz
     this.telemetryAcc += dt * 1000;
@@ -424,6 +517,11 @@ export class Game {
       toNote: r2(this.race.distanceToNext),
       dmg: r2(t.damage),
       resets: this.resets,
+      dz: DAMAGE_KEYS.map((k) => r2(v.damage[k])),
+      ai: this.ai.flatMap((a) => {
+        const ap = a.vehicle.position;
+        return [r2(ap.x), r2(ap.y), r2(ap.z), Math.round(a.vehicle.heading * 1000) / 1000, Math.round(a.distance), a.finishTimeMs ?? -1];
+      }),
     };
     net.sendTelemetry(packet);
   }
@@ -443,6 +541,10 @@ export class Game {
     this.input.dispose();
     audio.stopDriving();
     this.vehicle?.model.dispose();
+    this.ai.forEach((a) => {
+      a.vehicle.model.dispose();
+      a.dispose();
+    });
     this.cockpit?.dispose();
     this.world?.scenery.dispose();
     this.physics?.dispose();

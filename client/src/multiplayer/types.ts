@@ -6,6 +6,7 @@ import type {
   RaceResult,
   RaceState,
   RaceWarning,
+  RallyConfig,
   RelayedTelemetry,
   RoomSnapshot,
   SessionInfo,
@@ -71,7 +72,9 @@ export abstract class NetBase {
   /** Current time on the authoritative clock (server, or the driver's browser in P2P). */
   abstract serverNow(): number;
   abstract get latencyMs(): number | null;
-  abstract createRoom(name: string): Promise<JoinResult>;
+  abstract createRoom(name: string, config?: Partial<RallyConfig>): Promise<JoinResult>;
+  /** Driver only, in the lobby: change stage / weather / AI. */
+  abstract configure(config: Partial<RallyConfig>): Promise<RaceState>;
   abstract joinRoom(code: string, name: string): Promise<JoinResult>;
   abstract resume(): Promise<JoinResult | null>;
   abstract leave(): Promise<void>;

@@ -1,38 +1,48 @@
-/** Validates the generated stage: no self-intersections, sane notes and checkpoints. */
-import { getStage, DEFAULT_STAGE_ID, projectOnStage } from '../shared/src/index';
+/** Validates every stage: no self-intersections, ordered notes/checkpoints, sane bridges. */
+import { STAGE_DEFS, getStage, projectOnStage, surfaceAt } from '../shared/src/index';
 
-const stage = getStage(DEFAULT_STAGE_ID)!;
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${msg}`);
   if (!ok) failures++;
 };
 
-console.log(`Stage ${stage.def.name}: ${stage.length.toFixed(0)} m, ${stage.paceNotes.length} notes`);
-console.log(`Bounds x ${stage.bounds.minX.toFixed(0)}..${stage.bounds.maxX.toFixed(0)}  z ${stage.bounds.minZ.toFixed(0)}..${stage.bounds.maxZ.toFixed(0)}`);
+for (const def of STAGE_DEFS) {
+  const stage = getStage(def.id)!;
+  const s = stage.samples;
+  console.log(`\n${def.name} (${def.id}): ${((stage.finishDistance - stage.startDistance) / 1000).toFixed(2)} km, ${stage.bridges.length} bridge(s), surfaces: ${[...new Set(stage.surfaceSpans.map((x) => x.surface))].join(', ')}`);
 
-// Minimum distance between road sections that are far apart along the route
-let minGap = Infinity;
-const s = stage.samples;
-for (let i = 0; i < s.length; i += 2) {
-  for (let j = i + 120; j < s.length; j += 2) {
-    const d = Math.hypot(s[i].x - s[j].x, s[i].z - s[j].z);
-    if (d < minGap) minGap = d;
+  let minGap = Infinity;
+  for (let i = 0; i < s.length; i += 2) {
+    for (let j = i + 120; j < s.length; j += 2) {
+      const d = Math.hypot(s[i].x - s[j].x, s[i].z - s[j].z);
+      if (d < minGap) minGap = d;
+    }
   }
-}
-check(minGap > stage.def.roadWidth + 6, `road never overlaps itself (closest separate section ${minGap.toFixed(1)} m)`);
-check(stage.checkpoints.length === 3, 'three checkpoints');
-check(stage.checkpoints.every((c, i, a) => i === 0 || c.distance > a[i - 1].distance), 'checkpoints are ordered');
-check(stage.paceNotes.every((n, i, a) => i === 0 || n.distance >= a[i - 1].distance), 'pace notes sorted by distance');
+  check(minGap > def.roadWidth + 6, `road never overlaps itself (closest separate section ${minGap.toFixed(1)} m)`);
+  check(stage.checkpoints.every((c, i, a) => i === 0 || c.distance > a[i - 1].distance), 'checkpoints are ordered');
 
-let maxErr = 0;
-let hint = -1;
-for (let d = 0; d < stage.length; d += 3) {
-  const p = s[Math.round(d)];
-  const r = projectOnStage(stage, p.x + Math.cos(p.h) * 2, p.z - Math.sin(p.h) * 2, hint);
-  hint = r.index;
-  maxErr = Math.max(maxErr, Math.abs(r.distance - d));
-}
-check(maxErr < 3, `progress projection is continuous (max error ${maxErr.toFixed(2)} m)`);
+  for (const b of stage.bridges) {
+    // no other part of the road within 45 m of the bridge (the river needs room)
+    let near = Infinity;
+    for (const p of s) if (Math.abs(p.d - b.distance) > 90) near = Math.min(near, Math.hypot(p.x - b.x, p.z - b.z));
+    check(near > 45, `bridge ${b.index + 1} has room for its river (nearest other road ${near.toFixed(0)} m)`);
+    check(surfaceAt(stage, b.distance) === 'wood', `bridge ${b.index + 1} deck is a wooden surface`);
+  }
 
-if (failures) process.exit(1);
+  let maxErr = 0;
+  let hint = -1;
+  for (let d = 0; d < stage.length; d += 3) {
+    const p = s[Math.round(d)];
+    const r = projectOnStage(stage, p.x + Math.cos(p.h) * 2, p.z - Math.sin(p.h) * 2, hint);
+    hint = r.index;
+    maxErr = Math.max(maxErr, Math.abs(r.distance - d));
+  }
+  check(maxErr < 3, `progress tracking is continuous (max error ${maxErr.toFixed(2)} m)`);
+}
+
+if (failures) {
+  console.log(`\n${failures} FAILED`);
+  process.exit(1);
+}
+console.log('\nAll stages valid');

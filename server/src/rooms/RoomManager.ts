@@ -1,7 +1,6 @@
 import {
   CALL_LOG_LENGTH,
-  DEFAULT_STAGE_ID,
-  getStage,
+  type RallyConfig,
   type Ack,
   type ErrorCode,
   type JoinResult,
@@ -58,10 +57,9 @@ export class RoomManager {
     return this.bySocket.get(socketId) ?? null;
   }
 
-  createRoom(socketId: string, name: string, stageId = DEFAULT_STAGE_ID): Ack<JoinResult> {
+  createRoom(socketId: string, name: string, rally: Partial<RallyConfig> = {}): Ack<JoinResult> {
     if (this.bySocket.has(socketId)) this.leave(socketId);
     if (this.rooms.size >= config.maxRooms) return fail('SERVER_FULL', 'The server has reached its room limit. Try again shortly.');
-    if (!getStage(stageId)) return fail('BAD_PAYLOAD', 'Unknown stage.');
     const code = generateRoomCode((c) => this.rooms.has(c));
     if (!code) return fail('SERVER_FULL', 'No room codes available.');
     const now = Date.now();
@@ -72,7 +70,7 @@ export class RoomManager {
       lastActivity: now,
       driver: seat,
       navigator: null,
-      race: new RaceController(stageId, this.raceEventsFor(code)),
+      race: new RaceController(rally, this.raceEventsFor(code)),
       lastTelemetry: null,
       callLog: [],
       callSeq: 0,

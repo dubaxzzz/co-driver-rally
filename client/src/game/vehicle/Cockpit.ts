@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { PaintOption } from '@cdr/shared';
+import { noDamage, type DamageZones } from './Vehicle';
 
 export type Seat = 'driver' | 'navigator';
 
@@ -19,7 +20,9 @@ export interface CockpitState {
   brake: number;
   wipers: 0 | 1 | 2;
   rain: number; // 0..1
+  snow: number; // 0..1 (flakes settle on the glass)
   speedUnit: 'kmh' | 'mph';
+  damage: DamageZones;
 }
 
 // Windscreen geometry (car-local)
@@ -69,6 +72,14 @@ export class Cockpit {
   private navHead = new THREE.Group();
   private time = 0;
   private readonly dx = SEATS.driver.x;
+  // damage visuals
+  private bonnetPivot = new THREE.Group();
+  private bonnetCrease: THREE.Mesh | null = null;
+  private doorCards: Record<'left' | 'right', THREE.Mesh | null> = { left: null, right: null };
+  private crackCanvas: HTMLCanvasElement;
+  private crackTex: THREE.CanvasTexture;
+  private cracksDrawn = 0;
+  private lastDamage: DamageZones = noDamage();
 
   constructor(paint: PaintOption, readonly seat: Seat) {
     const mat = (o: THREE.MeshStandardMaterialParameters) => this.track(new THREE.MeshStandardMaterial(o));
@@ -99,9 +110,15 @@ export class Cockpit {
     const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
     // ---- Bonnet seen through the windscreen ----
-    const bonnet = box(1.66, 0.07, 1.2, paintMat, 0, 0.3, 1.4);
+    // bonnet hinges at the windscreen end so a front impact lifts and bends it into view
+    this.bonnetPivot.position.set(0, 0.32, 0.82);
+    this.group.add(this.bonnetPivot);
+    const bonnet = box(1.66, 0.07, 1.2, paintMat, 0, -0.02, 0.58, this.bonnetPivot);
     bonnet.rotation.x = 0.07;
-    box(0.5, 0.06, 0.4, darkPlastic, 0, 0.36, 1.2);
+    box(0.5, 0.06, 0.4, darkPlastic, 0, 0.04, 0.38, this.bonnetPivot);
+    this.bonnetCrease = box(1.5, 0.05, 0.5, paintMat, 0, 0.06, 1.0, this.bonnetPivot);
+    this.bonnetCrease.rotation.x = -0.5;
+    this.bonnetCrease.visible = false;
     // ---- Dashboard ----
     box(1.62, 0.18, 0.38, plastic, 0, 0.34, 0.62);
     const dashTop = box(1.62, 0.04, 0.32, darkPlastic, 0, 0.44, 0.6);
@@ -132,7 +149,8 @@ export class Cockpit {
       tube(v(sx * 0.75, 0.44, 0.8), v(sx * 0.7, 0.87, 0.45), 0.035, darkPlastic); // A-pillar
       tube(v(sx * 0.72, 0.87, 0.45), v(sx * 0.72, 0.88, -0.9), 0.03, darkPlastic); // roof rail
       tube(v(sx * 0.78, 0.42, -0.85), v(sx * 0.72, 0.88, -0.9), 0.04, darkPlastic); // B-pillar
-      box(0.05, 0.44, 1.7, plastic, sx * 0.86, 0.2, -0.1); // door card
+      const door = box(0.05, 0.44, 1.7, plastic, sx * 0.86, 0.2, -0.1); // door card
+      this.doorCards[sx > 0 ? 'left' : 'right'] = door;
       box(0.12, 0.04, 1.7, darkPlastic, sx * 0.83, 0.42, -0.1); // window sill
     }
     box(1.48, 0.06, 0.08, darkPlastic, 0, 0.87, 0.45); // header above windscreen
@@ -264,6 +282,18 @@ export class Cockpit {
     );
     glass.renderOrder = 10;
     wsInner.add(glass);
+    // cracks live on their own layer: the wipers can't clear them
+    this.crackCanvas = document.createElement('canvas');
+    this.crackCanvas.width = CANVAS_W * 2;
+    this.crackCanvas.height = CANVAS_H * 2;
+    this.crackTex = this.track(new THREE.CanvasTexture(this.crackCanvas));
+    const crackGlass = new THREE.Mesh(
+      this.track(new THREE.PlaneGeometry(WS_WIDTH, WS_HEIGHT)),
+      this.track(new THREE.MeshBasicMaterial({ map: this.crackTex, transparent: true, depthWrite: false })),
+    );
+    crackGlass.position.z = 0.004;
+    crackGlass.renderOrder = 11;
+    wsInner.add(crackGlass);
     const scale = WS_WIDTH / CANVAS_W;
     for (const px of WIPER_PIVOTS) {
       const arm = new THREE.Group();
@@ -283,7 +313,7 @@ export class Cockpit {
     glow.position.set(0, 0.62, 0.2);
     this.group.add(glow);
     const cabin = new THREE.PointLight(0x9fb4d8, 0.9, 2.4, 1.2); // faint map light
-    cabin.position.set(0, 0.86, -0.3);
+    cabin.position.set(0, 0.74, -0.2); // low enough to light the roof lining too
     this.group.add(cabin);
   }
 
@@ -328,6 +358,7 @@ export class Cockpit {
     // Co-driver glances up at the road now and then
     this.navHead.rotation.x = 0.35 + Math.sin(this.time * 0.7) * 0.08 + (Math.sin(this.time * 0.23) > 0.85 ? -0.4 : 0);
 
+    this.updateDamage(s.damage);
     this.updateWindscreen(dt, s);
     this.clusterTimer -= dt;
     if (this.clusterTimer <= 0) {
@@ -349,6 +380,16 @@ export class Cockpit {
     this.wiperAngle = (WIPER_SWEEP * (1 - Math.cos(this.wiperPhase * Math.PI * 2))) / 2;
     this.wiperArms.forEach((a) => (a.rotation.z = this.wiperAngle));
 
+    if (s.snow > 0) {
+      // snowflakes settle on the glass
+      const n = s.snow * (1 + Math.min(4, Math.abs(s.speed) * 0.1)) * dt * 60;
+      for (let i = 0; i < n; i++) {
+        g.fillStyle = 'rgba(245,248,252,0.75)';
+        g.beginPath();
+        g.arc(Math.random() * W, Math.random() * H, 1 + Math.random() * 2.5, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
     if (s.rain > 0) {
       // wet film builds up slowly everywhere the wipers don't reach
       g.globalCompositeOperation = 'source-over';
@@ -384,6 +425,34 @@ export class Cockpit {
     this.wsTex.needsUpdate = true;
   }
 
+  /** Bonnet, doors and windscreen react to damage. */
+  private updateDamage(d: DamageZones) {
+    const last = this.lastDamage;
+    if (d.front !== last.front) {
+      this.bonnetPivot.rotation.x = -Math.min(1, d.front) * 0.32; // front lifts into view
+      this.bonnetPivot.rotation.z = (d.left - d.right) * 0.06;
+      this.bonnetPivot.scale.y = 1 + d.front * 1.5;
+      if (this.bonnetCrease) this.bonnetCrease.visible = d.front > 0.45;
+    }
+    for (const side of ['left', 'right'] as const) {
+      const door = this.doorCards[side];
+      if (door && d[side] !== last[side]) {
+        const sx = side === 'left' ? 1 : -1;
+        door.position.x = sx * (0.86 - d[side] * 0.12); // dented inwards
+        door.rotation.y = sx * d[side] * 0.12;
+      }
+    }
+    // windscreen: more cracks the more damage it has taken (deterministic, so
+    // the navigator's screen shows the same pattern)
+    const target = Math.min(9, Math.floor(d.windscreen * 10));
+    if (target !== this.cracksDrawn) {
+      drawCracks(this.crackCanvas, target);
+      this.crackTex.needsUpdate = true;
+      this.cracksDrawn = target;
+    }
+    this.lastDamage = { ...d };
+  }
+
   private drawCluster(s: CockpitState) {
     const g = this.clusterCanvas.getContext('2d')!;
     const W = 256, H = 96;
@@ -408,6 +477,11 @@ export class Cockpit {
     g.fillStyle = '#7c8794';
     g.fillText(s.speedUnit === 'mph' ? 'MPH' : 'KM/H', 230, 86);
     g.fillText(`${Math.round(s.rpm / 100) * 100} RPM`, 170, 34);
+    if (s.damage.engine > 0.4) {
+      g.fillStyle = Math.floor(performance.now() / 400) % 2 ? '#ff2a3a' : '#7a1018';
+      g.font = 'bold 13px sans-serif';
+      g.fillText('ENGINE', 50, 34);
+    }
     this.clusterTex.needsUpdate = true;
   }
 
@@ -446,4 +520,67 @@ function fakeMapTexture() {
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
+}
+
+/** Spider-web cracks: impact points with radial and ring fractures. */
+function drawCracks(canvas: HTMLCanvasElement, count: number) {
+  const g = canvas.getContext('2d')!;
+  const W = canvas.width, H = canvas.height;
+  g.clearRect(0, 0, W, H);
+  // seeded so every device draws the same cracks for the same damage
+  let seed = 12345;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let c = 0; c < count; c++) {
+    const cx = W * (0.15 + rnd() * 0.7), cy = H * (0.2 + rnd() * 0.65);
+    const size = (0.18 + rnd() * 0.22) * H * (c > 4 ? 1.6 : 1);
+    // impact point
+    g.fillStyle = 'rgba(235,245,255,0.55)';
+    g.beginPath();
+    g.arc(cx, cy, 5 + rnd() * 6, 0, Math.PI * 2);
+    g.fill();
+    const rays = 7 + Math.floor(rnd() * 6);
+    const ends: Array<[number, number]> = [];
+    g.lineCap = 'round';
+    for (let r = 0; r < rays; r++) {
+      const a = (r / rays) * Math.PI * 2 + rnd() * 0.4;
+      const len = size * (0.5 + rnd() * 0.8);
+      let x = cx, y = cy;
+      g.beginPath();
+      g.moveTo(x, y);
+      const segs = 5;
+      for (let k = 1; k <= segs; k++) {
+        const aa = a + (rnd() - 0.5) * 0.35;
+        x = cx + Math.cos(aa) * (len * k) / segs;
+        y = cy + Math.sin(aa) * (len * k) / segs;
+        g.lineTo(x, y);
+      }
+      g.strokeStyle = 'rgba(230,240,250,0.75)';
+      g.lineWidth = 1.6;
+      g.stroke();
+      g.strokeStyle = 'rgba(20,25,30,0.35)';
+      g.lineWidth = 0.8;
+      g.stroke();
+      ends.push([x, y]);
+    }
+    // concentric rings between the rays
+    for (const ring of [0.25, 0.5]) {
+      g.beginPath();
+      for (let r = 0; r <= rays; r++) {
+        const a = (r / rays) * Math.PI * 2;
+        const rr = size * ring * (0.8 + rnd() * 0.4);
+        const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+        if (r === 0) g.moveTo(x, y);
+        else g.lineTo(x, y);
+      }
+      g.strokeStyle = 'rgba(230,240,250,0.5)';
+      g.lineWidth = 1.1;
+      g.stroke();
+    }
+    // frosted area around the impact
+    const grad = g.createRadialGradient(cx, cy, 0, cx, cy, size * 0.3);
+    grad.addColorStop(0, 'rgba(220,230,240,0.35)');
+    grad.addColorStop(1, 'rgba(220,230,240,0)');
+    g.fillStyle = grad;
+    g.fillRect(cx - size, cy - size, size * 2, size * 2);
+  }
 }

@@ -1,5 +1,5 @@
 /** User preferences + garage selection (local to this device). */
-import { PAINTS, VEHICLES, WHEELS } from '@cdr/shared';
+import { DEFAULT_CONFIG, PAINTS, VEHICLES, WHEELS, type RallyConfig } from '@cdr/shared';
 
 export interface Settings {
   playerName: string;
@@ -14,6 +14,8 @@ export interface Settings {
   /** How far the driver can see through the night fog. */
   visibility: 'verylow' | 'low' | 'normal';
   wipers: 0 | 1 | 2; // off / slow / fast
+  /** Last stage / weather / AI choice (used by PLAY and the lobby). */
+  rally: RallyConfig;
 }
 
 export interface GarageSelection {
@@ -37,6 +39,7 @@ const defaults: Settings = {
   showHelp: true,
   visibility: 'verylow',
   wipers: 1,
+  rally: { ...DEFAULT_CONFIG },
 };
 
 function load<T extends object>(key: string, fallback: T): T {

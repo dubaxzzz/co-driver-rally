@@ -28,7 +28,7 @@ const waitFor = <T>(s: S, ev: keyof ServerToClientEvents, ms = 5000, pred: (x: T
 
 const packet = (runId: number, seq: number, d: number, resets = 0): TelemetryPacket => {
   const p = sampleAt(stage.samples, d);
-  return { runId, seq, t: 0, x: p.x, y: p.y, z: p.z, h: p.h, p: 0, r: 0, v: 30, steer: 0, throttle: 1, brake: 0, handbrake: false, gear: 4, rpm: 6000, dist: d, remain: stage.finishDistance - d, cp: 0, nextNote: 0, toNote: 50, dmg: 0, resets };
+  return { runId, seq, t: 0, x: p.x, y: p.y, z: p.z, h: p.h, p: 0, r: 0, v: 30, steer: 0, throttle: 1, brake: 0, handbrake: false, gear: 4, rpm: 6000, dist: d, remain: stage.finishDistance - d, cp: 0, nextNote: 0, toNote: 50, dmg: 0, resets, dz: [0.1, 0, 0, 0, 0.2, 0], ai: [1, 2, 3, 0.5, 100, -1] };
 };
 
 const driver = await connect();
@@ -53,7 +53,19 @@ const driver2 = await connect();
 const created2 = await call<JoinResult>((a) => driver2.emit('room:create', {}, a));
 check(created2.ok && created2.data.room.code !== code, 'second room gets a different code');
 
+// lobby configuration (stage / weather / AI) – on the second room
+const cfg = await call<{ stageId: string; weather: string; aiCount: number }>((a) => driver2.emit('room:configure', { stageId: 'snow-varmland', weather: 'snow', aiCount: 2 }, a as never));
+check(cfg.ok && cfg.data.stageId === 'snow-varmland' && cfg.data.weather === 'snow' && cfg.data.aiCount === 2, 'driver can choose stage, weather and AI opponents');
+const badCfg = await call((a) => driver2.emit('room:configure', { stageId: 'nope' }, a as never));
+check(!badCfg.ok && !badCfg.ok && badCfg.code === 'BAD_PAYLOAD', 'unknown stage rejected');
+const badAi = await call((a) => driver2.emit('room:configure', { aiCount: 9 }, a as never));
+check(!badAi.ok, 'too many AI opponents rejected');
+const created3 = await call<JoinResult>((a) => driver2.emit('room:create', { config: { stageId: 'tarmac-turini', weather: 'dusk' } }, a));
+check(created3.ok && created3.data.room.race.stageId === 'tarmac-turini' && created3.data.room.race.weather === 'dusk', 'room can be created with a chosen stage and weather');
+
 // navigator cannot start / send telemetry; driver can't send calls
+const navCfg = await call((a) => nav.emit('room:configure', { weather: 'clear' }, a as never));
+check(!navCfg.ok, 'navigator cannot change the stage or weather');
 const navStart = await call((a) => nav.emit('race:start', a));
 check(!navStart.ok, 'navigator cannot start the stage');
 const drvCall = await call((a) => driver.emit('nav:call', { kind: 'custom', text: 'hi' }, a));
@@ -66,6 +78,8 @@ const st = await call<{ runId: number }>((a) => driver.emit('race:start', a as n
 const runId = st.ok ? st.data.runId : 1;
 const racing = await waitFor<{ phase: string }>(nav, 'race:state', 5000, (s) => s.phase === 'racing');
 check(!!racing, 'countdown ends and both see phase "racing"');
+const lateCfg = await call((a) => driver.emit('room:configure', { weather: 'clear' }, a as never));
+check(!lateCfg.ok, 'stage/weather cannot be changed mid-stage');
 
 // telemetry relay + navigator call relay
 const gotTel = waitFor<TelemetryPacket>(nav, 'telemetry', 3000);

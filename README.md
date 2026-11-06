@@ -147,6 +147,36 @@ Set `CLIENT_ORIGIN` if the page is served from a different origin than the serve
 | Reset car onto the road | R | X |
 | Pause menu | Esc | Start |
 
+## Stages, weather and opponents
+
+The driver picks everything in the **lobby** (the navigator's screen follows):
+
+| Stage | Where | Surfaces |
+|---|---|---|
+| Kallio Forest | Finland | gravel, mud section, river bridge |
+| Värmland Ice | Sweden | compacted snow, snowbanks, river bridge |
+| Col de Turini | France | mountain tarmac hairpins, gorge bridge |
+| Red Centre | Western Australia | red gravel, soft sand, creek bridge |
+| Hafren Mud | Wales | gravel and mud, two river bridges |
+| Derwent Highlands | Tasmania | tarmac, then gravel after the bridge |
+
+**Weather:** Clear, Overcast, Rain, Night storm (fog + rain), Snowfall, Dusk.
+Weather changes light, fog, rain/snow on the windscreen and tyre grip.
+
+**Surfaces matter:** tarmac grips best; gravel is looser; mud, snow and sand
+are slippery *and* slow you down; leaving the road onto grass, snowbanks or sand
+costs a lot of speed; miss a bridge and you're wading through a fast river.
+
+**AI opponents (0–3, Easy/Medium/Hard):** real physics cars that drive the same
+stage at the same time (they pass through you – no contact, like real rally),
+and appear on the navigator's map and in the final leaderboard.
+
+**Damage:** hits are tracked per zone – front, left, right, rear, windscreen,
+engine. Front hits bend the bonnet up into view and knock out headlights;
+big hits and rollovers crack the windscreen (the wipers can't clear cracks);
+engine damage makes it smoke and lose power; side hits make the car pull.
+Resetting (R) doesn't repair the car – restarting the stage does.
+
 ## First-person cockpit
 
 Both players sit inside the car. The stage is run **at night, in rain and fog**:
@@ -164,7 +194,7 @@ you can see through the windscreen (drag to look around); **Look at tablet**
 - **Live map** – follow (heading-up, zoomed) or full-stage view, the car's
   position and heading from live telemetry, the driven trail, checkpoints and finish.
   There are no corner labels: read the road shape and call it.
-- **Live data** – speed, gear, RPM, timer, stage progress, distance remaining, checkpoints.
+- **Live data** – speed, gear, RPM, timer, stage progress, distance remaining, checkpoints, surface, car damage.
 - **Look at road / look at tablet** – switch between the windscreen and the map.
 
 ---
@@ -266,6 +296,9 @@ Rebuild the `play/` folder after changing code with `npm run build:play`
 npm run typecheck        # TypeScript across shared/server/client
 npm run test:track       # stage geometry
 npm run test:physics     # vehicle physics (headless Rapier)
+npm run test:handling    # real Vehicle class: no spin-outs, handbrake still slides
+npm run test:rollover    # no roll-overs in hard cornering
+npm run test:ai          # AI drivers finish every stage
 npm run dev:server       # then, in another terminal:
 npm run test:server      # 20 multiplayer checks incl. a full-stage finish (~50 s)
 npm run test:e2e         # with `npm run dev` running; needs Python Playwright
