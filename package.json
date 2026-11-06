@@ -22,6 +22,7 @@
     "test:server": "tsx tests/server.test.ts",
     "test:track": "tsx tests/track.test.ts",
     "test:physics": "tsx tests/physics.test.ts",
+    "test:rollover": "tsx tests/rollover.test.ts",
     "test:e2e": "python3 tests/e2e_two_browsers.py",
     "render-build": "npm install --include=dev && npm run build"
   },

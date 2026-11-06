@@ -4,21 +4,13 @@ import type { VehicleDef, WheelOption } from '@cdr/shared';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 import type { DriveInput } from '../input/Input';
 import { WHEEL_LAYOUT, type CarModel } from './CarModel';
+import { CHASSIS, SUSPENSION } from './setup';
+
+export { SUSPENSION } from './setup';
 
 const RPM_PER_MS = 142; // engine rpm per (m/s × gear ratio)
 const FRONT_DRIVE_SHARE = 0.42;
 
-/** Gravel rally set-up: soft springs, long travel, anti-roll bars. */
-export const SUSPENSION = {
-  restLength: 0.4,
-  maxTravel: 0.34,
-  stiffness: 21,
-  compression: 2.3,
-  relaxation: 3.1,
-  maxForce: 70000,
-  antiRollFront: 24000, // N per metre of left/right compression difference
-  antiRollRear: 16000,
-};
 
 export interface VehicleTelemetry {
   speed: number; // signed m/s along forward axis
@@ -83,7 +75,7 @@ export class Vehicle {
       R.RigidBodyDesc.dynamic()
         .setTranslation(0, 2, 0)
         .setLinearDamping(0.05)
-        .setAngularDamping(0.6)
+        .setAngularDamping(CHASSIS.angularDamping)
         .setCanSleep(false)
         .setCcdEnabled(true),
     );
@@ -97,7 +89,7 @@ export class Vehicle {
     world.createCollider(
       R.ColliderDesc.cuboid(hx, hy, hz)
         .setTranslation(0, 0.1, 0)
-        .setMassProperties(m, { x: 0, y: -0.25, z: 0.05 }, inertia, { x: 0, y: 0, z: 0, w: 1 })
+        .setMassProperties(m, { x: 0, y: CHASSIS.comY, z: 0.05 }, inertia, { x: 0, y: 0, z: 0, w: 1 })
         .setFriction(0.4)
         .setRestitution(0.1),
       this.body,
@@ -118,7 +110,7 @@ export class Vehicle {
     ];
     pts.forEach(([x, z], i) => {
       const S = SUSPENSION;
-      this.controller.addWheel({ x, y: L.connectionY, z }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, S.restLength, L.radius);
+      this.controller.addWheel({ x, y: CHASSIS.wheelY, z }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, S.restLength, L.radius);
       this.controller.setWheelSuspensionStiffness(i, S.stiffness);
       this.controller.setWheelSuspensionCompression(i, S.compression);
       this.controller.setWheelSuspensionRelaxation(i, S.relaxation);
@@ -292,6 +284,14 @@ export class Vehicle {
         this.body.addForceAtPoint({ x: -up.x * f, y: -up.y * f, z: -up.z * f }, pr, true);
       }
     }
+    // Roll stabiliser: gently pulls the car back upright when it leans,
+    // so hard cornering slides the car instead of rolling it over.
+    const left = new THREE.Vector3().crossVectors(up, fwd);
+    const av = this.body.angvel();
+    const rollRate = av.x * fwd.x + av.y * fwd.y + av.z * fwd.z;
+    const tq = -left.y * CHASSIS.rollStabiliser - rollRate * CHASSIS.rollDamping;
+    this.body.addTorque({ x: fwd.x * tq, y: fwd.y * tq, z: fwd.z * tq }, true);
+
     for (let i = 0; i < 4; i++) {
       const len = c.wheelSuspensionLength(i) ?? SUSPENSION.restLength;
       bump += Math.abs(len - this.lastSusp[i]) / dt;
