@@ -9,7 +9,6 @@ import { CHASSIS, SUSPENSION } from './setup';
 export { SUSPENSION } from './setup';
 
 const RPM_PER_MS = 142; // engine rpm per (m/s × gear ratio)
-const FRONT_DRIVE_SHARE = 0.42;
 
 
 export interface VehicleTelemetry {
@@ -226,8 +225,8 @@ export class Vehicle {
     if (this.gear === -1) force = -def.enginePowerN * 0.45 * throttle;
     if (this.frozen) force = 0;
 
-    const front = (force * FRONT_DRIVE_SHARE) / 2;
-    const rear = (force * (1 - FRONT_DRIVE_SHARE)) / 2;
+    const front = (force * CHASSIS.frontDriveShare) / 2;
+    const rear = (force * (1 - CHASSIS.frontDriveShare)) / 2;
     c.setWheelEngineForce(0, front);
     c.setWheelEngineForce(1, front);
     c.setWheelEngineForce(2, rear);
@@ -254,16 +253,21 @@ export class Vehicle {
       const isRoad = !!ground && this.roadColliders.has(ground.handle);
       if (c.wheelIsInContact(i)) grounded++;
       if (isRoad) onGravel++;
-      let grip = this.gripBase * (isRoad ? 1 : 0.82);
-      if (i >= 2 && handbrake) grip *= 0.45;
+      const rearWheel = i >= 2;
+      let grip = this.gripBase * (isRoad ? 1 : 0.82) * (rearWheel ? CHASSIS.rearGripBias : 1);
+      if (rearWheel && handbrake) grip *= 0.45;
       c.setWheelFrictionSlip(i, grip);
-      c.setWheelSideFrictionStiffness(i, i >= 2 && handbrake ? 0.55 : 1.0);
+      const side = rearWheel ? CHASSIS.sideFrictionRear : CHASSIS.sideFrictionFront;
+      c.setWheelSideFrictionStiffness(i, rearWheel && handbrake ? side * 0.55 : side);
     }
 
     c.updateVehicle(dt);
 
     // Downforce + mild aero drag (forces persist in Rapier, so clear last step's first)
+    // Rapier keeps user forces AND torques until cleared – clear both every step,
+    // otherwise the anti-roll/stabiliser torques pile up and spin the car.
     this.body.resetForces(false);
+    this.body.resetTorques(false);
     const down = Math.min(6000, 1.6 * speed * speed);
     const drag = -0.42 * speed * Math.abs(speed);
     this.body.addForce({ x: fwd.x * drag, y: -down + fwd.y * drag, z: fwd.z * drag }, true);
@@ -291,6 +295,14 @@ export class Vehicle {
     const rollRate = av.x * fwd.x + av.y * fwd.y + av.z * fwd.z;
     const tq = -left.y * CHASSIS.rollStabiliser - rollRate * CHASSIS.rollDamping;
     this.body.addTorque({ x: fwd.x * tq, y: fwd.y * tq, z: fwd.z * tq }, true);
+    // Yaw damping: resists the car rotating faster than its steering asks for
+    // (stops small steering inputs turning into spins; the handbrake bypasses it).
+    if (CHASSIS.yawDamping > 0 && !handbrake) {
+      const yawRate = av.x * up.x + av.y * up.y + av.z * up.z;
+      const expected = absSpeed > 1 ? (speed * Math.tan(steerAngle)) / 2.5 : 0; // kinematic bicycle model
+      const yq = -(yawRate - expected) * CHASSIS.yawDamping;
+      this.body.addTorque({ x: up.x * yq, y: up.y * yq, z: up.z * yq }, true);
+    }
 
     for (let i = 0; i < 4; i++) {
       const len = c.wheelSuspensionLength(i) ?? SUSPENSION.restLength;
@@ -329,6 +341,7 @@ export class Vehicle {
   /** Must be called after world.step() to clear accumulated user forces. */
   afterStep() {
     this.body.resetForces(true);
+    this.body.resetTorques(true);
   }
 
   /** Syncs the Three.js model with the physics body and wheel states. */

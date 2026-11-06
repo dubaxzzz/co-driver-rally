@@ -14,7 +14,7 @@ const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation
 const m = 1230;
 world.createCollider(
   RAPIER.ColliderDesc.cuboid(0.86, 0.32, 1.95).setTranslation(0, 0.1, 0)
-    .setMassProperties(m, { x: 0, y: -0.25, z: 0.05 }, { x: 1600, y: 1800, z: 400 }, { x: 0, y: 0, z: 0, w: 1 }),
+    .setMassProperties(m, { x: 0, y: -0.36, z: 0.05 }, { x: 1600, y: 1800, z: 400 }, { x: 0, y: 0, z: 0, w: 1 }),
   body,
 );
 const c = world.createVehicleController(body);
@@ -22,12 +22,12 @@ c.indexUpAxis = 1;
 c.setIndexForwardAxis = 2;
 const pts: Array<[number, number]> = [[0.8, 1.28], [-0.8, 1.28], [0.8, -1.22], [-0.8, -1.22]];
 pts.forEach(([x, z], i) => {
-  c.addWheel({ x, y: -0.12, z }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, 0.36, 0.34);
+  c.addWheel({ x, y: -0.12, z }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, 0.3, 0.34);
   c.setWheelSuspensionStiffness(i, 26);
-  c.setWheelSuspensionCompression(i, 2.6);
-  c.setWheelSuspensionRelaxation(i, 3.4);
-  c.setWheelMaxSuspensionTravel(i, 0.3);
-  c.setWheelMaxSuspensionForce(i, 60000);
+  c.setWheelSuspensionCompression(i, 2.3);
+  c.setWheelSuspensionRelaxation(i, 3.1);
+  c.setWheelMaxSuspensionTravel(i, 0.22);
+  c.setWheelMaxSuspensionForce(i, 70000);
   c.setWheelFrictionSlip(i, 2.1);
   c.setWheelSideFrictionStiffness(i, 1);
 });

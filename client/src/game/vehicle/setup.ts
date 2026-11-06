@@ -28,4 +28,13 @@ export const CHASSIS = {
   rollStabiliser: 7000,
   /** Damping of roll rate (N·m per rad/s). */
   rollDamping: 2000,
+  /** Share of engine force sent to the front axle (4WD split). */
+  frontDriveShare: 0.42,
+  /** Lateral tyre stiffness front / rear (higher rear = more stable). */
+  sideFrictionFront: 1.0,
+  sideFrictionRear: 1.0,
+  /** Rear tyre grip relative to front. */
+  rearGripBias: 1.0,
+  /** Damping torque against spinning (N·m per rad/s of yaw rate). */
+  yawDamping: 0,
 };
