@@ -8,6 +8,18 @@ import { WHEEL_LAYOUT, type CarModel } from './CarModel';
 const RPM_PER_MS = 142; // engine rpm per (m/s × gear ratio)
 const FRONT_DRIVE_SHARE = 0.42;
 
+/** Gravel rally set-up: soft springs, long travel, anti-roll bars. */
+export const SUSPENSION = {
+  restLength: 0.4,
+  maxTravel: 0.34,
+  stiffness: 21,
+  compression: 2.3,
+  relaxation: 3.1,
+  maxForce: 70000,
+  antiRollFront: 24000, // N per metre of left/right compression difference
+  antiRollRear: 16000,
+};
+
 export interface VehicleTelemetry {
   speed: number; // signed m/s along forward axis
   rpm: number;
@@ -38,6 +50,11 @@ export class Vehicle {
     throttle: 0,
     brake: 0,
   };
+  /** Smoothed acceleration in the car frame (x = left, y = up, z = forward), m/s². */
+  readonly accelLocal = new THREE.Vector3();
+  /** Suspension activity (0..1+) – drives head shake in the cockpit. */
+  bump = 0;
+  private lastSusp = [0, 0, 0, 0];
   onGearChange: ((up: boolean) => void) | null = null;
   onImpact: ((strength: number) => void) | null = null;
   /** Collider handles considered "road" (gravel). Others = grass/verge. */
@@ -100,12 +117,13 @@ export class Vehicle {
       [-L.halfTrack, L.rearZ],
     ];
     pts.forEach(([x, z], i) => {
-      this.controller.addWheel({ x, y: L.connectionY, z }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, 0.36, L.radius);
-      this.controller.setWheelSuspensionStiffness(i, 26);
-      this.controller.setWheelSuspensionCompression(i, 2.6);
-      this.controller.setWheelSuspensionRelaxation(i, 3.4);
-      this.controller.setWheelMaxSuspensionTravel(i, 0.3);
-      this.controller.setWheelMaxSuspensionForce(i, 60000);
+      const S = SUSPENSION;
+      this.controller.addWheel({ x, y: L.connectionY, z }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, S.restLength, L.radius);
+      this.controller.setWheelSuspensionStiffness(i, S.stiffness);
+      this.controller.setWheelSuspensionCompression(i, S.compression);
+      this.controller.setWheelSuspensionRelaxation(i, S.relaxation);
+      this.controller.setWheelMaxSuspensionTravel(i, S.maxTravel);
+      this.controller.setWheelMaxSuspensionForce(i, S.maxForce);
       this.controller.setWheelFrictionSlip(i, this.gripBase);
       this.controller.setWheelSideFrictionStiffness(i, 1.0);
     });
@@ -258,6 +276,29 @@ export class Vehicle {
     const drag = -0.42 * speed * Math.abs(speed);
     this.body.addForce({ x: fwd.x * drag, y: -down + fwd.y * drag, z: fwd.z * drag }, true);
 
+    // Anti-roll bars: resist body roll by pushing up the compressed side and
+    // pulling down the extended side of each axle.
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(this.tmpQ);
+    let bump = 0;
+    for (const [l, r, k] of [[0, 1, SUSPENSION.antiRollFront], [2, 3, SUSPENSION.antiRollRear]] as const) {
+      if (!c.wheelIsInContact(l) || !c.wheelIsInContact(r)) continue;
+      const compL = SUSPENSION.restLength - (c.wheelSuspensionLength(l) ?? SUSPENSION.restLength);
+      const compR = SUSPENSION.restLength - (c.wheelSuspensionLength(r) ?? SUSPENSION.restLength);
+      const f = (compL - compR) * k * 0.5;
+      const pl = c.wheelHardPoint(l);
+      const pr = c.wheelHardPoint(r);
+      if (pl && pr) {
+        this.body.addForceAtPoint({ x: up.x * f, y: up.y * f, z: up.z * f }, pl, true);
+        this.body.addForceAtPoint({ x: -up.x * f, y: -up.y * f, z: -up.z * f }, pr, true);
+      }
+    }
+    for (let i = 0; i < 4; i++) {
+      const len = c.wheelSuspensionLength(i) ?? SUSPENSION.restLength;
+      bump += Math.abs(len - this.lastSusp[i]) / dt;
+      this.lastSusp[i] = len;
+    }
+    this.bump = Math.min(2, bump * 0.08);
+
     // --- Impact detection (sudden change in velocity) ---
     this.impactCooldown -= dt;
     const dv = vel.clone().sub(this.lastVel).length();
@@ -267,6 +308,12 @@ export class Vehicle {
       this.impactCooldown = 0.35;
       this.onImpact?.(strength);
     }
+    // acceleration in the car's own frame (for G-force head movement)
+    const accWorld = vel.clone().sub(this.lastVel).divideScalar(dt);
+    const inv = this.tmpQ.clone().invert();
+    const accLocal = accWorld.applyQuaternion(inv);
+    // local axes: car +X is left, +Z forward – same as the model
+    this.accelLocal.lerp(accLocal, Math.min(1, dt * 8));
     this.lastVel.copy(vel);
 
     const t = this.telemetry;

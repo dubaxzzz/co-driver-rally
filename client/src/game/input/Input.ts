@@ -6,7 +6,7 @@ export interface DriveInput {
   handbrake: boolean;
 }
 
-type Action = 'camera' | 'reset' | 'pause';
+type Action = 'wipers' | 'lights' | 'reset' | 'pause';
 
 export class Input {
   private keys = new Set<string>();
@@ -21,7 +21,8 @@ export class Input {
     const code = e.code;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(code)) e.preventDefault();
     if (!e.repeat) {
-      if (code === 'KeyC') this.fire('camera');
+      if (code === 'KeyE') this.fire('wipers');
+      if (code === 'KeyL') this.fire('lights');
       if (code === 'KeyR') this.fire('reset');
       if (code === 'Escape' || code === 'KeyP') this.fire('pause');
     }
@@ -67,7 +68,8 @@ export class Input {
       const edge = (i: number, a: Action) => {
         if (pressed(i) && !this.padPrev[i]) this.fire(a);
       };
-      edge(3, 'camera'); // Y
+      edge(3, 'lights'); // Y
+      edge(5, 'wipers'); // RB
       edge(2, 'reset'); // X
       edge(9, 'pause'); // Start
       this.padPrev = pad.buttons.map((b) => b.pressed);

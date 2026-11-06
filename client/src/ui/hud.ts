@@ -15,20 +15,12 @@ export class Hud {
   private cps: HTMLElement[] = [];
   private progLeft: HTMLElement;
   private progRight: HTMLElement;
-  private noteEl: HTMLElement;
-  private noteText: HTMLElement;
-  private noteDist: HTMLElement;
-  private nextEl: HTMLElement;
-  private callEl: HTMLElement;
-  private callMsg: HTMLElement;
   private centerEl: HTMLElement;
   private warnEl: HTMLElement;
   private netEl: HTMLElement;
   private navEl: HTMLElement;
   private codeEl: HTMLElement;
   private dmgEl: HTMLElement;
-  private noteTimer = 0;
-  private callTimer = 0;
   private warnTimer = 0;
 
   constructor(private stage: BuiltStage) {
@@ -55,12 +47,6 @@ export class Hud {
     }
     this.progLeft = h('span', {}, '0 m');
     this.progRight = h('span', {}, '');
-    this.noteText = h('div', { class: 'text' }, '');
-    this.noteDist = h('div', { class: 'dist' }, '');
-    this.noteEl = h('div', { class: 'hud-note' }, this.noteText, this.noteDist);
-    this.nextEl = h('div', { class: 'v' }, '—');
-    this.callMsg = h('div', { class: 'msg' }, '');
-    this.callEl = h('div', { class: 'hud-call' }, h('div', { class: 'who' }, 'CO-DRIVER'), this.callMsg);
     this.centerEl = h('div', { class: 'hud-center-msg' }, '');
     this.warnEl = h('div', { class: 'hud-warning' }, '');
     this.netEl = h('div', { class: 'hud-chip' }, h('span', { class: 'status-dot' }), 'ONLINE');
@@ -72,7 +58,7 @@ export class Hud {
           'div',
           { class: 'hud-controls-help' },
           h('div', { html: '<b>W/↑</b> Throttle &nbsp; <b>S/↓</b> Brake/Reverse &nbsp; <b>A D</b> Steer' }),
-          h('div', { html: '<b>Space</b> Handbrake &nbsp; <b>C</b> Camera &nbsp; <b>R</b> Reset &nbsp; <b>Esc</b> Menu' }),
+          h('div', { html: '<b>Space</b> Handbrake &nbsp; <b>E</b> Wipers &nbsp; <b>L</b> Light pod &nbsp; <b>R</b> Reset &nbsp; <b>Esc</b> Menu' }),
         )
       : null;
 
@@ -82,9 +68,6 @@ export class Hud {
       h('div', { class: 'hud-top-left' }, h('div', { class: 'hud-chip' }, 'RALLY', this.codeEl), this.netEl, this.navEl),
       h('div', { class: 'hud-timer' }, this.timerEl, this.timerSub),
       h('div', { class: 'hud-progress' }, track, h('div', { class: 'labels' }, this.progLeft, this.progRight)),
-      this.noteEl,
-      h('div', { class: 'hud-next' }, h('div', { class: 'k' }, 'NEXT'), this.nextEl),
-      this.callEl,
       this.centerEl,
       this.warnEl,
       h('div', { class: 'hud-dash' }, h('div', {}, this.gearEl, h('span', { class: 'hud-speed' }, this.speedEl, this.unitEl)), rpm, this.dmgEl),
@@ -112,27 +95,12 @@ export class Hud {
     this.dmgEl.textContent = `DAMAGE ${Math.round(damage * 100)}%`;
   }
 
-  updateRace(timeMs: number, distance: number, remaining: number, progress01: number, cpPassed: number, nextText: string, toNext: number) {
+  updateRace(timeMs: number, distance: number, remaining: number, progress01: number, cpPassed: number) {
     this.timerEl.textContent = formatTime(timeMs);
     this.fill.style.width = `${progress01 * 100}%`;
     this.cps.forEach((c, i) => c.classList.toggle('done', i < cpPassed));
     this.progLeft.textContent = formatDistance(Math.max(0, distance - this.stage.startDistance));
     this.progRight.textContent = `${formatDistance(remaining)} TO FINISH`;
-    this.nextEl.textContent = nextText ? `${nextText} · ${Math.max(0, Math.round(toNext))}m` : 'FINISH';
-  }
-
-  showNote(text: string, dist: number) {
-    this.noteText.textContent = text;
-    this.noteDist.textContent = `${Math.max(0, Math.round(dist / 10) * 10)} M`;
-    this.noteEl.classList.add('show');
-    this.noteTimer = 2.6;
-  }
-
-  showCall(text: string, caution: boolean) {
-    this.callMsg.textContent = text;
-    this.callEl.classList.toggle('caution', caution);
-    this.callEl.classList.add('show');
-    this.callTimer = 3.8;
   }
 
   center(text: string) {
@@ -149,8 +117,6 @@ export class Hud {
   }
 
   tick(dt: number) {
-    if (this.noteTimer > 0 && (this.noteTimer -= dt) <= 0) this.noteEl.classList.remove('show');
-    if (this.callTimer > 0 && (this.callTimer -= dt) <= 0) this.callEl.classList.remove('show');
     if (this.warnTimer > 0 && (this.warnTimer -= dt) <= 0) this.warnEl.classList.remove('show');
   }
 }

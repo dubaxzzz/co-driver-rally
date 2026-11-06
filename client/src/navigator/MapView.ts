@@ -1,9 +1,5 @@
 import type { BuiltStage, RelayedTelemetry } from '@cdr/shared';
 
-const SEV_COLOR: Record<string, string> = {
-  H: '#ff3b4e', '1': '#ff3b4e', '2': '#ff6a2b', '3': '#ff9d2b', '4': '#ffd02b', '5': '#a6e22e', '6': '#2fd27a',
-};
-
 /**
  * Top-down 2D map of the stage drawn on a canvas. "Follow" mode zooms in and
  * rotates heading-up around the car; "Stage" mode shows the whole route.
@@ -105,23 +101,9 @@ export class MapView {
       g.stroke();
     }
 
-    // corners (pace-note markers)
-    const font = this.mode === 'full' ? 10 : 13;
-    g.font = `800 ${font}px sans-serif`;
+    // No corner labels: the navigator reads the road shape and calls it themselves.
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    for (const n of st.paceNotes) {
-      if (n.kind !== 'corner') continue;
-      const mid = s[Math.min(s.length - 1, Math.round(n.distance + n.length / 2))];
-      const [px, py] = toScreen(mid.x, mid.z);
-      if (px < -20 || py < -20 || px > w + 20 || py > hgt + 20) continue;
-      g.fillStyle = SEV_COLOR[String(n.severity)] ?? '#fff';
-      g.beginPath();
-      g.arc(px, py, this.mode === 'full' ? 7 : 11, 0, Math.PI * 2);
-      g.fill();
-      g.fillStyle = '#111';
-      g.fillText(`${n.dir}${n.severity === 'H' ? 'H' : n.severity}`, px, py + 0.5);
-    }
 
     // start / checkpoints / finish
     const flag = (x: number, z: number, color: string, label: string) => {

@@ -1,15 +1,20 @@
 import * as THREE from 'three';
 import type { StageDef } from '@cdr/shared';
 
-/** Sky dome, fog, sun with a shadow frustum that follows the car, and dust particles. */
+/**
+ * Sky dome, fog, sun/moon light and the shadow frustum that follows the car.
+ * Night stages are lit almost entirely by the car's own headlights.
+ */
 export class Atmosphere {
   readonly sun: THREE.DirectionalLight;
   readonly hemi: THREE.HemisphereLight;
   readonly sky: THREE.Mesh;
+  readonly fog: THREE.FogExp2;
   private sunOffset: THREE.Vector3;
 
-  constructor(scene: THREE.Scene, env: StageDef['environment'], shadows: boolean) {
-    scene.fog = new THREE.FogExp2(env.fogColor, env.fogDensity);
+  constructor(scene: THREE.Scene, private env: StageDef['environment'], shadows: boolean, fogMultiplier = 1) {
+    this.fog = new THREE.FogExp2(env.fogColor, env.fogDensity * fogMultiplier);
+    scene.fog = this.fog;
     scene.background = new THREE.Color(env.fogColor);
 
     const skyGeo = new THREE.SphereGeometry(900, 24, 12);
@@ -26,15 +31,17 @@ export class Atmosphere {
     this.sky.frustumCulled = false;
     scene.add(this.sky);
 
-    this.hemi = new THREE.HemisphereLight(0xcfe3ff, 0x3a4a2a, 0.9);
+    const night = env.night;
+    this.hemi = night ? new THREE.HemisphereLight(0x3a4a66, 0x0a0d08, 0.35) : new THREE.HemisphereLight(0xcfe3ff, 0x3a4a2a, 0.9);
     scene.add(this.hemi);
 
     const el = (env.sunElevationDeg * Math.PI) / 180;
     const az = (env.sunAzimuthDeg * Math.PI) / 180;
     this.sunOffset = new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)).multiplyScalar(120);
-    this.sun = new THREE.DirectionalLight(0xfff0d6, 2.4);
-    this.sun.castShadow = shadows;
-    if (shadows) {
+    // At night this is a weak bluish moon without shadows.
+    this.sun = night ? new THREE.DirectionalLight(0x7f95c0, 0.25) : new THREE.DirectionalLight(0xfff0d6, 2.4);
+    this.sun.castShadow = shadows && !night;
+    if (this.sun.castShadow) {
       this.sun.shadow.mapSize.set(2048, 2048);
       const s = this.sun.shadow.camera;
       s.left = -55;
@@ -49,6 +56,10 @@ export class Atmosphere {
     scene.add(this.sun, this.sun.target);
   }
 
+  setFogMultiplier(m: number) {
+    this.fog.density = this.env.fogDensity * m;
+  }
+
   /** Keeps sky and shadow camera centred on the player. */
   follow(p: THREE.Vector3) {
     this.sky.position.copy(p);
@@ -57,7 +68,63 @@ export class Atmosphere {
   }
 }
 
-/** Pooled dust/gravel particles kicked up by the wheels. */
+/** Falling rain streaks that wrap around the camera. */
+export class RainSystem {
+  readonly lines: THREE.LineSegments;
+  private pos: Float32Array;
+  private readonly count: number;
+  private readonly box = 26;
+
+  constructor(intensity: number) {
+    this.count = Math.round(2200 * intensity);
+    this.pos = new Float32Array(this.count * 6);
+    for (let i = 0; i < this.count; i++) {
+      const x = (Math.random() - 0.5) * this.box * 2;
+      const y = Math.random() * 18 - 4;
+      const z = (Math.random() - 0.5) * this.box * 2;
+      this.set(i, x, y, z, 0, 0);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
+    const mat = new THREE.LineBasicMaterial({ color: 0xa9bccf, transparent: true, opacity: 0.38, depthWrite: false });
+    this.lines = new THREE.LineSegments(geo, mat);
+    this.lines.frustumCulled = false;
+  }
+
+  private set(i: number, x: number, y: number, z: number, vx: number, vz: number) {
+    const o = i * 6;
+    this.pos[o] = x;
+    this.pos[o + 1] = y;
+    this.pos[o + 2] = z;
+    // streak length follows fall speed + car motion (relative wind)
+    this.pos[o + 3] = x + vx * 0.03;
+    this.pos[o + 4] = y + 0.55;
+    this.pos[o + 5] = z + vz * 0.03;
+  }
+
+  /** `center` = camera position, `carVel` = car velocity (rain streaks lean with speed). */
+  update(dt: number, center: THREE.Vector3, carVel: THREE.Vector3) {
+    const fall = 14 * dt;
+    const b = this.box;
+    for (let i = 0; i < this.count; i++) {
+      const o = i * 6;
+      let x = this.pos[o];
+      let y = this.pos[o + 1] - fall;
+      let z = this.pos[o + 2];
+      // wrap inside a box that follows the camera
+      if (x - center.x > b) x -= b * 2;
+      else if (x - center.x < -b) x += b * 2;
+      if (z - center.z > b) z -= b * 2;
+      else if (z - center.z < -b) z += b * 2;
+      if (y < center.y - 6) y += 22;
+      else if (y > center.y + 16) y -= 22;
+      this.set(i, x, y, z, carVel.x, carVel.z);
+    }
+    this.lines.geometry.attributes.position.needsUpdate = true;
+  }
+}
+
+/** Pooled spray/mud particles kicked up by the wheels. */
 export class DustSystem {
   readonly points: THREE.Points;
   private pos: Float32Array;
@@ -66,7 +133,7 @@ export class DustSystem {
   private next = 0;
   private readonly count: number;
 
-  constructor(count = 600) {
+  constructor(count = 600, color = 'rgba(200,180,150,') {
     this.count = count;
     this.pos = new Float32Array(count * 3);
     this.vel = new Float32Array(count * 3);
@@ -78,11 +145,11 @@ export class DustSystem {
     c.width = c.height = 64;
     const g = c.getContext('2d')!;
     const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    grad.addColorStop(0, 'rgba(200,180,150,0.9)');
-    grad.addColorStop(1, 'rgba(200,180,150,0)');
+    grad.addColorStop(0, `${color}0.9)`);
+    grad.addColorStop(1, `${color}0)`);
     g.fillStyle = grad;
     g.fillRect(0, 0, 64, 64);
-    const mat = new THREE.PointsMaterial({ size: 2.2, map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, opacity: 0.55 });
+    const mat = new THREE.PointsMaterial({ size: 1.6, map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, opacity: 0.5 });
     this.points = new THREE.Points(geo, mat);
     this.points.frustumCulled = false;
   }
@@ -96,7 +163,7 @@ export class DustSystem {
     this.vel[i * 3] = vx * 0.2 + (Math.random() - 0.5) * 2;
     this.vel[i * 3 + 1] = 1 + Math.random() * 1.5;
     this.vel[i * 3 + 2] = vz * 0.2 + (Math.random() - 0.5) * 2;
-    this.life[i] = 1.4;
+    this.life[i] = 1.0;
   }
 
   update(dt: number) {
@@ -110,9 +177,9 @@ export class DustSystem {
       this.pos[i * 3] += this.vel[i * 3] * dt;
       this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
       this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
-      this.vel[i * 3 + 1] -= 0.8 * dt;
-      this.vel[i * 3] *= 0.98;
-      this.vel[i * 3 + 2] *= 0.98;
+      this.vel[i * 3 + 1] -= 4 * dt;
+      this.vel[i * 3] *= 0.97;
+      this.vel[i * 3 + 2] *= 0.97;
     }
     this.points.geometry.attributes.position.needsUpdate = true;
   }

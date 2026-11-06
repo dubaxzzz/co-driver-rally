@@ -5,26 +5,24 @@ import {
   getStage,
   sampleAt,
   type BuiltStage,
-  type NavCall,
   type RaceResult,
   type RaceState,
   type TelemetryPacket,
 } from '@cdr/shared';
 import { audio } from '../audio/AudioEngine';
 import { net } from '../multiplayer/NetClient';
-import { garageStore, settings } from '../settings';
+import { fogMultiplier, garageStore, settings } from '../settings';
 import { h, loadingOverlay, toast } from '../ui/dom';
 import { Hud } from '../ui/hud';
 import { resultsOverlay } from '../ui/results';
-import { CameraRig } from './camera/CameraRig';
-import { Atmosphere, DustSystem } from './environment/Atmosphere';
-import { Scenery } from './environment/Scenery';
+import { FirstPersonCamera } from './camera/FirstPersonCamera';
 import { Input } from './input/Input';
 import { loadRapier, PhysicsWorld } from './physics/PhysicsWorld';
 import { RaceClient } from './race/RaceClient';
-import { buildTrack, type TerrainData } from './tracks/TrackMeshes';
 import { createCarModel } from './vehicle/CarModel';
+import { Cockpit } from './vehicle/Cockpit';
 import { Vehicle } from './vehicle/Vehicle';
+import { buildStageWorld, type StageWorld } from './world/StageWorld';
 
 export type GameExit = 'menu' | 'lobby';
 
@@ -38,11 +36,9 @@ export class Game {
   private physics!: PhysicsWorld;
   private vehicle!: Vehicle;
   private stage!: BuiltStage;
-  private terrain!: TerrainData;
-  private scenery!: Scenery;
-  private atmosphere!: Atmosphere;
-  private dust = new DustSystem();
-  private rig!: CameraRig;
+  private world!: StageWorld;
+  private cockpit!: Cockpit;
+  private fp!: FirstPersonCamera;
   private input = new Input();
   private race!: RaceClient;
   private hud!: Hud;
@@ -81,7 +77,7 @@ export class Game {
       this.renderer = new THREE.WebGLRenderer({ antialias: quality === 'high', powerPreference: 'high-performance' });
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality === 'high' ? 2 : 1));
       this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
-      this.renderer.shadowMap.enabled = quality === 'high';
+      this.renderer.shadowMap.enabled = quality === 'high' && !stage.def.environment.night;
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
       this.renderer.toneMappingExposure = 1.05;
@@ -91,33 +87,27 @@ export class Game {
       // Physics + world
       this.physics = new PhysicsWorld(R);
       await new Promise((r) => setTimeout(r, 0)); // let the loading screen paint
-      const track = buildTrack(stage);
-      this.terrain = track.data;
-      this.scene.add(track.road, track.terrain);
-      const roadCol = this.physics.addTrimesh(track.roadCollider.vertices, track.roadCollider.indices, 0.9);
-      this.physics.addTrimesh(track.terrainCollider.vertices, track.terrainCollider.indices, 0.8);
-      this.atmosphere = new Atmosphere(this.scene, stage.def.environment, quality === 'high');
-      this.scenery = new Scenery(stage, this.terrain, this.physics, quality);
-      this.scene.add(this.scenery.group, this.dust.points);
+      this.world = buildStageWorld(this.scene, stage, { quality, physics: this.physics, fogMultiplier: fogMultiplier() });
+      this.unsubs.push(settings.subscribe(() => this.world.atmosphere.setFogMultiplier(fogMultiplier())));
 
       // Vehicle
       const sel = garageStore.resolve();
       const model = createCarModel(sel.paint, sel.wheel);
       this.scene.add(model.root);
       this.vehicle = new Vehicle(this.physics, sel.vehicle, sel.wheel, model);
-      this.vehicle.roadColliders.add(roadCol.handle);
+      if (this.world.roadColliderHandle !== null) this.vehicle.roadColliders.add(this.world.roadColliderHandle);
+      // First person only: hide the outside of the car, show the cockpit and switch on real headlights.
+      model.setExteriorVisible(false);
+      model.enableHeadlights();
+      this.cockpit = new Cockpit(sel.paint, 'driver');
+      model.root.add(this.cockpit.group);
       this.vehicle.onGearChange = (up) => audio.gearChange(up);
       this.vehicle.onImpact = (s) => audio.impact(s);
 
+      // No automatic pace notes: the co-driver calls the stage out loud.
       this.race = new RaceClient(stage);
-      this.race.onAnnounce = (note, dist) => {
-        this.hud.showNote(note.text, dist);
-        audio.chime(note.kind === 'hazard');
-        if (!net.room?.navigator?.connected || settings.get().autoNotes === 'always') audio.speak(note.spoken);
-      };
 
-      this.rig = new CameraRig(this.container.clientWidth / this.container.clientHeight, (x, z) => this.terrain.heightAt(x, z));
-      this.rig.mode = settings.get().camera % 3;
+      this.fp = new FirstPersonCamera(this.container.clientWidth / this.container.clientHeight, 'driver');
 
       this.hud = new Hud(stage);
       this.container.append(this.hud.root);
@@ -144,10 +134,15 @@ export class Game {
 
   // ---------------------------------------------------------------- setup
   private bindInput() {
-    this.input.on('camera', () => {
-      const name = this.rig.cycle();
-      settings.update({ camera: this.rig.mode });
-      toast(`Camera: ${name}`);
+    this.input.on('wipers', () => {
+      const next = ((settings.get().wipers + 1) % 3) as 0 | 1 | 2;
+      settings.update({ wipers: next });
+      toast(`Wipers: ${['off', 'slow', 'fast'][next]}`);
+    });
+    this.input.on('lights', () => {
+      const m = this.vehicle.model;
+      m.setLightPod(!m.lightPodOn);
+      toast(`Light pod ${m.lightPodOn ? 'on' : 'off'}`);
     });
     this.input.on('reset', () => this.resetVehicle());
     this.input.on('pause', () => (this.paused ? this.closeOverlay() : this.openPause()));
@@ -156,10 +151,9 @@ export class Game {
   private bindNet() {
     this.unsubs.push(
       net.on('race', (s) => this.applyRaceState(s)),
-      net.on('call', (c) => this.onNavCall(c)),
       net.on('checkpoint', (e) => {
         if (e.runId !== this.raceState?.runId) return;
-        this.scenery.markCheckpoint(e.index, true);
+        this.world.scenery.markCheckpoint(e.index, true);
         this.hud.center(`CP ${e.index + 1}`);
         audio.chime();
       }),
@@ -201,8 +195,7 @@ export class Game {
     this.vehicle.syncVisuals();
     this.race.resetRun();
     this.resets = 0;
-    this.stage.checkpoints.forEach((c) => this.scenery.markCheckpoint(c.index, false));
-    this.rig?.snap();
+    this.stage.checkpoints.forEach((c) => this.world.scenery.markCheckpoint(c.index, false));
   }
 
   private resetVehicle() {
@@ -211,7 +204,6 @@ export class Game {
     const s = sampleAt(this.stage.samples, d);
     this.vehicle.place(s.x, s.y + 1.0, s.z, s.h);
     this.resets++;
-    this.rig.snap();
     this.upsideDownFor = 0;
   }
 
@@ -255,13 +247,6 @@ export class Game {
     }, 1200);
   }
 
-  private onNavCall(c: NavCall) {
-    const caution = c.kind === 'caution';
-    this.hud.showCall(c.repeated ? `${c.text} (REPEAT)` : c.text, caution);
-    audio.chime(caution);
-    audio.speak(c.text);
-  }
-
   private restart() {
     this.closeOverlay();
     net.restartRace().catch((e) => toast(e.message, 'bad'));
@@ -303,7 +288,6 @@ export class Game {
           h('button', { class: 'btn primary', onclick: () => this.closeOverlay() }, 'Resume'),
           h('button', { class: 'btn', onclick: () => this.restart() }, 'Restart stage'),
           h('button', { class: 'btn', onclick: () => { this.closeOverlay(); this.resetVehicle(); } }, 'Reset car'),
-          h('button', { class: 'btn', onclick: () => { const n = this.rig.cycle(); settings.update({ camera: this.rig.mode }); toast(`Camera: ${n}`); } }, 'Change camera'),
           h('button', { class: 'btn', onclick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) }, 'Back to lobby'),
           h('button', { class: 'btn danger', onclick: () => void this.leave() }, 'Quit rally'),
         ),
@@ -329,8 +313,7 @@ export class Game {
 
     const pos = v.position.clone();
     const phase = this.raceState?.phase;
-    this.race.update(pos.x, pos.z, v.telemetry.speed, phase === 'racing' && settings.get().autoNotes !== 'off' &&
-      (settings.get().autoNotes === 'always' || !net.room?.navigator?.connected));
+    this.race.update(pos.x, pos.z, v.telemetry.speed, false);
 
     // Countdown display
     if (phase === 'countdown' && this.raceState?.startAt) {
@@ -353,28 +336,41 @@ export class Game {
       }
     } else this.upsideDownFor = 0;
 
-    // Dust from the wheels
+    // Mud spray from the wheels
     const t = v.telemetry;
+    const lv = v.body.linvel();
+    const vel = new THREE.Vector3(lv.x, lv.y, lv.z);
     if (t.grounded && Math.abs(t.speed) > 6 && settings.get().quality === 'high') {
-      const lv = v.body.linvel();
       const n = Math.min(4, Math.floor(Math.abs(t.speed) / 8 + t.slip * 3));
       for (let i = 0; i < n; i++) {
-        const back = new THREE.Vector3((Math.random() - 0.5) * 1.6, -0.3, -1.6).applyQuaternion(v.model.root.quaternion).add(pos);
-        this.dust.emit(back.x, back.y, back.z, lv.x, lv.z);
+        const back = new THREE.Vector3((Math.random() - 0.5) * 1.6, -0.5, -1.8).applyQuaternion(v.model.root.quaternion).add(pos);
+        this.world.spray.emit(back.x, back.y, back.z, lv.x, lv.z);
       }
     }
-    this.dust.update(dt);
+    this.world.spray.update(dt);
 
-    // Camera + atmosphere
-    const lv = v.body.linvel();
-    this.rig.update(dt, v.model.root, new THREE.Vector3(lv.x, lv.y, lv.z), t.speed);
-    this.atmosphere.follow(pos);
+    // Cockpit animation, first-person camera, weather
+    const st = settings.get();
+    this.cockpit.update(dt, {
+      steer: this.input.state.steer,
+      rpm: t.rpm,
+      maxRpm: v.def.maxRpm,
+      speed: t.speed,
+      gear: t.gear,
+      handbrake: this.input.state.handbrake && !v.frozen,
+      brake: t.brake,
+      wipers: st.wipers,
+      rain: this.stage.def.environment.rain,
+      speedUnit: st.units,
+    });
+    this.fp.update(dt, v.model.root, v.accelLocal, v.bump);
+    this.world.rain?.update(dt, this.fp.camera.position, vel);
+    this.world.atmosphere.follow(pos);
 
     // HUD
     const timeMs = this.raceTimeMs();
-    const next = this.race.nextNote;
     this.hud.updateDash(t.speed, t.gear, t.rpm, v.def.maxRpm, t.damage);
-    this.hud.updateRace(timeMs, this.race.distance, this.race.remaining, this.race.progress01, this.raceState?.checkpointsPassed ?? 0, next?.text ?? '', this.race.distanceToNext);
+    this.hud.updateRace(timeMs, this.race.distance, this.race.remaining, this.race.progress01, this.raceState?.checkpointsPassed ?? 0);
     this.hud.tick(dt);
 
     audio.update(t.rpm, phase === 'racing' ? t.throttle : 0, t.speed, t.slip, t.onGravel, t.grounded);
@@ -386,7 +382,7 @@ export class Game {
       this.sendTelemetry(timeMs);
     }
 
-    this.renderer.render(this.scene, this.rig.camera);
+    this.renderer.render(this.scene, this.fp.camera);
   };
 
   private raceTimeMs() {
@@ -436,7 +432,7 @@ export class Game {
     const w = this.container.clientWidth;
     const hgt = this.container.clientHeight;
     this.renderer.setSize(w, hgt);
-    this.rig.resize(w / hgt);
+    this.fp.resize(w / hgt);
   };
 
   dispose() {
@@ -447,7 +443,8 @@ export class Game {
     this.input.dispose();
     audio.stopDriving();
     this.vehicle?.model.dispose();
-    this.scenery?.dispose();
+    this.cockpit?.dispose();
+    this.world?.scenery.dispose();
     this.physics?.dispose();
     this.renderer?.dispose();
     this.scene.traverse((o) => {

@@ -41,6 +41,10 @@ export interface StageDef {
     sunElevationDeg: number;
     sunAzimuthDeg: number;
     treeDensity: number;
+    /** Night stage: dark sky, moonlight, headlights do the work. */
+    night: boolean;
+    /** Rain intensity 0..1 (streaks + drops on the windscreen). */
+    rain: number;
   };
 }
 

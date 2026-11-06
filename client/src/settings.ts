@@ -11,6 +11,9 @@ export interface Settings {
   units: 'kmh' | 'mph';
   camera: number;
   showHelp: boolean;
+  /** How far the driver can see through the night fog. */
+  visibility: 'verylow' | 'low' | 'normal';
+  wipers: 0 | 1 | 2; // off / slow / fast
 }
 
 export interface GarageSelection {
@@ -27,11 +30,13 @@ const defaults: Settings = {
   audioEnabled: true,
   volume: 0.7,
   voiceCalls: true,
-  autoNotes: 'always',
+  autoNotes: 'solo',
   quality: 'high',
   units: 'kmh',
   camera: 0,
   showHelp: true,
+  visibility: 'verylow',
+  wipers: 1,
 };
 
 function load<T extends object>(key: string, fallback: T): T {
@@ -89,6 +94,11 @@ export const garageStore = {
     };
   },
 };
+
+/** Fog density for the chosen visibility (multiplies the stage's base fog). */
+export function fogMultiplier(): number {
+  return current.visibility === 'normal' ? 0.35 : current.visibility === 'low' ? 0.65 : 1;
+}
 
 export function formatSpeed(ms: number): { value: string; unit: string } {
   const kmh = Math.abs(ms) * 3.6;

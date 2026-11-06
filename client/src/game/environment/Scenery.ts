@@ -61,7 +61,8 @@ export class Scenery {
   constructor(
     private stage: BuiltStage,
     private terrain: TerrainData,
-    private physics: PhysicsWorld,
+    /** null on the navigator's device: scenery is visual only there. */
+    private physics: PhysicsWorld | null,
     quality: 'high' | 'low',
   ) {
     const rand = mulberry32(stage.def.seed + 7);
@@ -115,7 +116,7 @@ export class Scenery {
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const col = new THREE.Color();
-    const R = this.physics.R;
+    const R = this.physics?.R;
     let placed = 0;
     let colliders = 0;
     for (let i = 0; i < count; i++) {
@@ -129,7 +130,7 @@ export class Scenery {
       col.setHSL(0.27 + rand() * 0.08, 0.35 + rand() * 0.2, 0.17 + rand() * 0.1);
       leaves.setColorAt(placed, col);
       placed++;
-      if (p.rd < 26 && colliders < 900) {
+      if (this.physics && R && p.rd < 26 && colliders < 900) {
         colliders++;
         const body = this.physics.world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(p.x, p.y + 2, p.z));
         this.physics.world.createCollider(R.ColliderDesc.cylinder(2, 0.32 * s).setFriction(0.6), body);
@@ -148,13 +149,13 @@ export class Scenery {
     rocks.castShadow = rocks.receiveShadow = true;
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
-    const R = this.physics.R;
+    const R = this.physics?.R;
     let placed = 0;
     const place = (x: number, y: number, z: number, s: number, collide: boolean) => {
       q.setFromEuler(new THREE.Euler(rand() * 3, rand() * 3, rand() * 3));
       m.compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(s, s * 0.6, s * (0.8 + rand() * 0.4)));
       rocks.setMatrixAt(placed++, m);
-      if (collide) {
+      if (collide && this.physics && R) {
         const body = this.physics.world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(x, y, z));
         this.physics.world.createCollider(R.ColliderDesc.ball(s * 0.7).setFriction(0.7), body);
       }
@@ -205,7 +206,7 @@ export class Scenery {
   private buildBarriersAndSigns() {
     const st = this.stage;
     const hw = st.def.roadWidth / 2;
-    const R = this.physics.R;
+    const R = this.physics?.R;
     const postGeo = this.track(new THREE.BoxGeometry(0.14, 1.0, 0.14));
     const railGeo = this.track(new THREE.BoxGeometry(0.08, 0.28, 1));
     const postMat = this.track(new THREE.MeshStandardMaterial({ color: 0x6b4b2e, roughness: 1 }));
@@ -214,8 +215,9 @@ export class Scenery {
     const rails: THREE.Matrix4[] = [];
     const signs = new THREE.Group();
     const signMats = {
-      L: this.track(new THREE.MeshStandardMaterial({ map: this.track(chevronTexture('L', '#ffd21f')), roughness: 0.6 })),
-      R: this.track(new THREE.MeshStandardMaterial({ map: this.track(chevronTexture('R', '#ffd21f')), roughness: 0.6 })),
+      // retro-reflective look: a little emissive so they glow in the headlights/fog
+      L: this.track(new THREE.MeshStandardMaterial({ map: this.track(chevronTexture('L', '#ffd21f')), roughness: 0.4, emissive: 0x3a2e00, emissiveMap: null })),
+      R: this.track(new THREE.MeshStandardMaterial({ map: this.track(chevronTexture('R', '#ffd21f')), roughness: 0.4, emissive: 0x3a2e00 })),
     };
     const signGeo = this.track(new THREE.PlaneGeometry(1.6, 0.8));
     const signPostGeo = this.track(new THREE.CylinderGeometry(0.05, 0.05, 1.6, 6));
@@ -243,10 +245,12 @@ export class Scenery {
             const yaw = Math.atan2(pt.x - prev.x, pt.z - prev.z);
             const q = new THREE.Quaternion().setFromAxisAngle(up, yaw);
             rails.push(new THREE.Matrix4().compose(mid.clone().setY(mid.y + 0.7), q, new THREE.Vector3(1, 1, len)));
+            if (this.physics && R) {
             const body = this.physics.world.createRigidBody(
               R.RigidBodyDesc.fixed().setTranslation(mid.x, mid.y + 0.55, mid.z).setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }),
             );
             this.physics.world.createCollider(R.ColliderDesc.cuboid(0.12, 0.6, len / 2).setFriction(0.3).setRestitution(0.2), body);
+            }
           }
           prev = pt;
         }
@@ -283,7 +287,7 @@ export class Scenery {
     const g = new THREE.Group();
     const postMat = this.track(new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.4, roughness: 0.5 }));
     const postGeo = this.track(new THREE.BoxGeometry(0.4, 6, 0.4));
-    const R = this.physics.R;
+    const R = this.physics?.R;
     for (const side of [-1, 1]) {
       const x = c.x + Math.cos(c.h) * hw * side, z = c.z - Math.sin(c.h) * hw * side;
       const y = this.terrain.heightAt(x, z);
@@ -291,11 +295,15 @@ export class Scenery {
       p.position.set(x, y + 3, z);
       p.castShadow = true;
       g.add(p);
-      const body = this.physics.world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(x, y + 3, z));
-      this.physics.world.createCollider(R.ColliderDesc.cuboid(0.2, 3, 0.2), body);
+      if (this.physics && R) {
+        const body = this.physics.world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(x, y + 3, z));
+        this.physics.world.createCollider(R.ColliderDesc.cuboid(0.2, 3, 0.2), body);
+      }
     }
     const tex = this.track(bannerTexture(text, color, '#ffffff', checker));
-    const mat = this.track(new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7, side: THREE.DoubleSide }));
+    const mat = this.track(
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7, side: THREE.DoubleSide, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.35 }),
+    );
     const banner = new THREE.Mesh(this.track(new THREE.BoxGeometry(hw * 2 + 0.4, 1.2, 0.2)), mat);
     banner.position.set(c.x, c.y + 5.6, c.z);
     banner.rotation.y = c.h;

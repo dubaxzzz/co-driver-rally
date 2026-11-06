@@ -15,13 +15,16 @@ export const FOREST_STAGE: StageDef = {
   seed: 1337,
   checkpointFractions: [0.25, 0.5, 0.75],
   environment: {
-    fogColor: 0xb9c6c9,
-    fogDensity: 0.0042,
-    skyTop: 0x5d87b5,
-    skyBottom: 0xd4dcd8,
-    sunElevationDeg: 38,
-    sunAzimuthDeg: 135,
+    // Night, heavy rain and fog: the driver can barely see – trust the co-driver.
+    fogColor: 0x0a0e12,
+    fogDensity: 0.03,
+    skyTop: 0x05070b,
+    skyBottom: 0x10161c,
+    sunElevationDeg: 30,
+    sunAzimuthDeg: 200,
     treeDensity: 1,
+    night: true,
+    rain: 0.9,
   },
   segments: [
     { kind: 'straight', length: 70 },

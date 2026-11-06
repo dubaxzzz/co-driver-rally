@@ -19,6 +19,13 @@ export interface CarModel {
   setPaint(p: PaintOption): void;
   setWheels(w: WheelOption): void;
   setBrakeLights(on: boolean): void;
+  /** Hide the outside of the car (first-person views show the cockpit instead). */
+  setExteriorVisible(v: boolean): void;
+  /** Switch on the 3D headlights (spot lights). */
+  enableHeadlights(): void;
+  /** Extra roof/bonnet light pod for more reach. */
+  setLightPod(on: boolean): void;
+  readonly lightPodOn: boolean;
   dispose(): void;
 }
 
@@ -180,10 +187,40 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption): CarModel
     wheels.push(steerGroup);
   }
 
+  // Headlights are created on demand (only the car the camera sits in needs real lights).
+  const lightRig = new THREE.Group();
+  root.add(lightRig);
+  let pod: THREE.SpotLight | null = null;
+  let podOn = false;
+  const spot = (x: number, y: number, z: number, intensity: number, angle: number, distance: number, aimY: number) => {
+    const l = new THREE.SpotLight(0xfff0d8, intensity, distance, angle, 0.6, 1.3);
+    l.position.set(x, y, z);
+    l.target.position.set(x, y + aimY, z + 30);
+    lightRig.add(l, l.target);
+    return l;
+  };
+
   return {
     root,
     body,
     wheels,
+    get lightPodOn() {
+      return podOn;
+    },
+    setExteriorVisible(v) {
+      body.visible = v;
+      wheels.forEach((w) => (w.visible = v));
+    },
+    enableHeadlights() {
+      if (lightRig.children.length) return;
+      spot(0.45, 0.2, 2.1, 140, 0.5, 75, -3.2); // left low beam
+      spot(-0.45, 0.2, 2.1, 140, 0.5, 75, -3.2); // right low beam
+      pod = spot(0, 0.35, 2.15, 0, 0.26, 120, -1.6); // light pod (off by default)
+    },
+    setLightPod(on) {
+      podOn = on;
+      if (pod) pod.intensity = on ? 380 : 0;
+    },
     setPaint(p) {
       paintMat.color.setHex(p.body);
       accentMat.color.setHex(p.accent);
