@@ -147,20 +147,10 @@ export class MapView {
     const fin = s[Math.round(st.finishDistance)];
     flag(fin.x, fin.z, '#ffffff', 'FINISH');
 
-    // potholes – the navigator can see them and call them
-    g.fillStyle = '#ffcf33';
-    for (const ph of st.potholes) {
-      const [px, py] = toScreen(ph.x, ph.z);
-      if (px < -10 || py < -10 || px > w + 10 || py > hgt + 10) continue;
-      const r = this.mode === 'full' ? 2 : Math.max(3, ph.radius * scale * 1.6);
-      g.beginPath();
-      g.arc(px, py, r, 0, Math.PI * 2);
-      g.fill();
-    }
 
     // AI opponents
     if (t?.ai) {
-      const colors = ['#1e5bc6', '#1f8a4c', '#f0b400'];
+      const colors = ['#1e5bc6', '#1f8a4c', '#f0b400', '#e11d48', '#a855f7', '#22d3ee', '#f97316'];
       for (let i = 0; i < t.ai.length / 6; i++) {
         const [px, py] = toScreen(t.ai[i * 6], t.ai[i * 6 + 2]);
         g.fillStyle = colors[i % colors.length];

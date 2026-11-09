@@ -78,9 +78,8 @@ function run(sc: Scenario) {
       if (slip > Math.max(60, sc.maxSlipDeg)) spun = true;
     }
   }
-  const wheelsOk = v.wheelDamage.every((w) => w < 0.05);
-  const ok = !spun && maxSlip <= sc.maxSlipDeg && maxSlip >= (sc.minSlipDeg ?? 0) && wheelsOk;
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${sc.name}: max slip ${maxSlip.toFixed(1)}° (limit ${sc.maxSlipDeg}°), top ${(maxSpeed * 3.6).toFixed(0)} km/h${spun ? ' – SPUN OUT' : ''}${wheelsOk ? '' : ' – WHEEL DAMAGED'}`);
+  const ok = !spun && maxSlip <= sc.maxSlipDeg && maxSlip >= (sc.minSlipDeg ?? 0);
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${sc.name}: max slip ${maxSlip.toFixed(1)}° (limit ${sc.maxSlipDeg}°), top ${(maxSpeed * 3.6).toFixed(0)} km/h${spun ? ' – SPUN OUT' : ''}`);
   physics.dispose();
   return ok;
 }

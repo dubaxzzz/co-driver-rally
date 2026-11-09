@@ -145,7 +145,8 @@ class AudioEngine {
     this.engine.o2.frequency.setTargetAtTime(fire * 0.5, t, 0.03);
     this.engine.o3.frequency.setTargetAtTime(fire * 1.5, t, 0.03);
     this.engine.filter.frequency.setTargetAtTime(500 + rpm * 0.35 + throttle * 900, t, 0.05);
-    this.engine.gain.gain.setTargetAtTime(0.05 + throttle * 0.09, t, 0.05);
+    // silent when the engine is off (rpm falls to 0)
+    this.engine.gain.gain.setTargetAtTime(rpm < 200 ? 0 : 0.05 + throttle * 0.09, t, 0.05);
     const sp = Math.min(1, Math.abs(speed) / 35);
     this.gravel.gain.gain.setTargetAtTime(grounded ? sp * (onGravel ? 0.35 : 0.15) : 0, t, 0.08);
     const tone = { tarmac: 2200, gravel: 900, soft: 350, snow: 1400, wood: 500, water: 300 }[surface];
@@ -169,6 +170,83 @@ class AudioEngine {
     o.connect(g).connect(this.master);
     o.start(t);
     o.stop(t + dur + 0.05);
+  }
+
+  /** Mechanical click of a cockpit switch. */
+  click(heavy = false) {
+    this.beep(heavy ? 1400 : 2400, 0.025, 'square', heavy ? 0.12 : 0.07);
+    this.beep(heavy ? 300 : 600, 0.04, 'triangle', 0.05, 0.01);
+  }
+
+  private crankNodes: { o: OscillatorNode; lfo: OscillatorNode; g: GainNode } | null = null;
+  /** Starter motor whirr while START is held. */
+  crank(on: boolean) {
+    const ctx = this.ensure();
+    if (!ctx || !this.master) return;
+    if (on && !this.crankNodes) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = 95;
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 9;
+      const lg = ctx.createGain();
+      lg.gain.value = 0.08;
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      lfo.connect(lg).connect(g.gain);
+      const f = ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = 700;
+      o.connect(f).connect(g).connect(this.master);
+      g.gain.setTargetAtTime(0.1, ctx.currentTime, 0.02);
+      o.start();
+      lfo.start();
+      this.crankNodes = { o, lfo, g };
+    } else if (!on && this.crankNodes) {
+      const n = this.crankNodes;
+      n.g.gain.setTargetAtTime(0, ctx.currentTime, 0.03);
+      n.o.stop(ctx.currentTime + 0.2);
+      n.lfo.stop(ctx.currentTime + 0.2);
+      this.crankNodes = null;
+    }
+  }
+
+  /** The engine catches. */
+  engineCatch() {
+    this.beep(70, 0.35, 'sawtooth', 0.22);
+    this.beep(140, 0.25, 'square', 0.08, 0.05);
+  }
+
+  private hornNodes: { o1: OscillatorNode; o2: OscillatorNode; g: GainNode } | null = null;
+  horn(on: boolean) {
+    const ctx = this.ensure();
+    if (!ctx || !this.master) return;
+    if (on && !this.hornNodes) {
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      const o1 = ctx.createOscillator();
+      const o2 = ctx.createOscillator();
+      o1.type = o2.type = 'square';
+      o1.frequency.value = 415;
+      o2.frequency.value = 494;
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = 900;
+      f.Q.value = 0.7;
+      o1.connect(f);
+      o2.connect(f);
+      f.connect(g).connect(this.master);
+      g.gain.setTargetAtTime(0.16, ctx.currentTime, 0.01);
+      o1.start();
+      o2.start();
+      this.hornNodes = { o1, o2, g };
+    } else if (!on && this.hornNodes) {
+      const n = this.hornNodes;
+      n.g.gain.setTargetAtTime(0, ctx.currentTime, 0.02);
+      n.o1.stop(ctx.currentTime + 0.15);
+      n.o2.stop(ctx.currentTime + 0.15);
+      this.hornNodes = null;
+    }
   }
 
   /** Breaking glass for windscreen hits. */

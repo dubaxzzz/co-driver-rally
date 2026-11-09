@@ -12,6 +12,8 @@ export interface RallyConfig {
   aiSkill: AiSkill;
   /** Set for the Daily Challenge (UTC date) – the server fixes stage/weather and records the time. */
   daily?: string;
+  /** Single-driver event (championship round / daily): other people can only join as navigator. */
+  soloEvent?: boolean;
 }
 
 export type Role = 'driver' | 'navigator';
@@ -21,6 +23,10 @@ export interface PlayerInfo {
   name: string;
   role: Role;
   connected: boolean;
+  /** Ticked "ready" in the lobby. */
+  ready: boolean;
+  /** For navigators: the driver they call for. */
+  navFor: string | null;
 }
 
 export type RacePhase = 'lobby' | 'countdown' | 'racing' | 'finished';
@@ -31,6 +37,8 @@ export interface CheckpointSplit {
 }
 
 export interface RaceResult {
+  playerId: string;
+  name: string;
   stageId: string;
   timeMs: number;
   splits: CheckpointSplit[];
@@ -41,26 +49,38 @@ export interface RaceResult {
   finishedAt: number;
 }
 
+/** One driver's run inside a stage. */
+export interface DriverRace {
+  playerId: string;
+  name: string;
+  /** Grid slot (0 = front left). */
+  slot: number;
+  checkpointsPassed: number;
+  splits: CheckpointSplit[];
+  result: RaceResult | null;
+  retired: boolean;
+}
+
 export interface RaceState extends RallyConfig {
   phase: RacePhase;
   /** Increments on every (re)start so stale packets/events can be ignored. */
   runId: number;
   /** Server timestamp at which the countdown ends and the timer starts. */
   startAt: number | null;
-  /** Server timestamp of finish (when phase is 'finished'). */
+  /** Server timestamp when the last driver finished/retired (phase 'finished'). */
   finishedAt: number | null;
-  checkpointsPassed: number;
-  splits: CheckpointSplit[];
-  result: RaceResult | null;
+  /** Every driver in this run, in grid order. */
+  drivers: DriverRace[];
+  /** The driver whose game simulates the AI cars for everybody. */
+  aiHost: string | null;
 }
 
 export interface RoomSnapshot {
   code: string;
   createdAt: number;
-  driver: PlayerInfo | null;
-  navigator: PlayerInfo | null;
-  /** True while a disconnected navigator still has the seat reserved. */
-  navigatorSeatReserved: boolean;
+  /** The player who picks the stage and starts the rally. */
+  hostId: string;
+  members: PlayerInfo[];
   race: RaceState;
 }
 
@@ -114,13 +134,19 @@ export interface TelemetryPacket {
   ai?: number[];
   /** Damage 0..1: front, left, right, rear, windscreen, engine, then wheels FL, FR, RL, RR (1 = wheel gone). */
   dz?: number[];
+  /** Cockpit switch state (see shared/src/switches.ts). */
+  sw?: number;
+  /** What the car looks like for other players: [vehicle index, body colour, accent colour]. */
+  look?: number[];
   /** Prize the driver earned this run (sent after the finish so the navigator gets their share). */
   prize?: number;
 }
 
-/** Telemetry as relayed by the server (server timestamp added). */
+/** Telemetry as relayed by the server (server timestamp + sender added). */
 export interface RelayedTelemetry extends TelemetryPacket {
   serverTime: number;
+  /** playerId of the driver who sent it. */
+  pid: string;
 }
 
 export type NavCallKind = 'pacenote' | 'caution' | 'repeat' | 'custom';
@@ -161,8 +187,8 @@ export type Ack<T> = { ok: true; data: T } | { ok: false; code: ErrorCode; messa
 export interface JoinResult {
   session: SessionInfo;
   room: RoomSnapshot;
-  /** Latest telemetry so a (re)joining navigator can render immediately. */
-  lastTelemetry: RelayedTelemetry | null;
+  /** Latest telemetry of every driver so a (re)joining player can render immediately. */
+  lastTelemetry: RelayedTelemetry[];
   callLog: NavCall[];
 }
 
@@ -173,6 +199,7 @@ export type RaceWarning =
 
 export interface CheckpointEvent {
   runId: number;
+  playerId: string;
   index: number;
   timeMs: number;
 }

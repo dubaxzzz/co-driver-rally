@@ -45,8 +45,8 @@ check(!missing.ok && missing.code === 'ROOM_NOT_FOUND', 'unknown room rejected')
 const joined = await call<JoinResult>((a) => nav.emit('room:join', { code: code.toLowerCase(), name: 'Nav' }, a));
 check(joined.ok && joined.ok && joined.data.session.role === 'navigator', 'navigator joins with the code (case-insensitive)');
 const third = await connect();
-const full = await call<JoinResult>((a) => third.emit('room:join', { code }, a));
-check(!full.ok && full.code === 'ROOM_FULL', 'second navigator rejected – room full');
+const thirdJoin = await call<JoinResult>((a) => third.emit('room:join', { code, name: 'Spare', role: 'navigator' }, a));
+check(thirdJoin.ok && thirdJoin.data.session.role === 'navigator' && thirdJoin.data.room.members.length === 3, 'a third player can join the same rally');
 
 // independent second room
 const driver2 = await connect();
@@ -85,10 +85,14 @@ check(!drvCall.ok, 'driver cannot send navigator calls');
 const malformed = await call((a) => nav.emit('nav:call', { kind: 'nope' } as never, a));
 check(!malformed.ok && !malformed.ok && malformed.code === 'BAD_PAYLOAD', 'malformed call rejected');
 
-// start race
+// start race (everyone else ticks ready first)
+const early = await call((a) => driver.emit('race:start', a as never));
+check(!early.ok && !early.ok && /ready/i.test(early.message), 'host cannot start until everyone is ready');
+await call((a) => nav.emit('room:ready', true, a));
+await call((a) => third.emit('room:ready', true, a));
 const st = await call<{ runId: number }>((a) => driver.emit('race:start', a as never));
 const runId = st.ok ? st.data.runId : 1;
-const racing = await waitFor<{ phase: string }>(nav, 'race:state', 5000, (s) => s.phase === 'racing');
+const racing = await waitFor<{ phase: string }>(nav, 'race:state', 15000, (s) => s.phase === 'racing');
 check(!!racing, 'countdown ends and both see phase "racing"');
 const lateCfg = await call((a) => driver.emit('room:configure', { weather: 'clear' }, a as never));
 check(!lateCfg.ok, 'stage/weather cannot be changed mid-stage');
@@ -110,15 +114,13 @@ check(r?.repeated === true && r.text === 'LEFT 3 TIGHTENS', 'repeat resends prev
 
 // navigator disconnect + reconnect with session token
 const token = joined.ok ? joined.data.session.token : '';
-const navLeft = waitFor<{ navigator: { connected: boolean } | null }>(driver, 'room:update', 3000, (x) => x.navigator?.connected === false);
+const navLeft = waitFor<{ members: Array<{ name: string; connected: boolean }> }>(driver, 'room:update', 3000, (x) => x.members.some((m) => m.name === 'Nav' && !m.connected));
 nav.disconnect();
 check(!!(await navLeft), 'driver is told the navigator disconnected');
 driver.emit('telemetry', packet(runId, 3, stage.spawnDistance + 2));
 const nav2 = await connect();
-const steal = await call<JoinResult>((a) => third.emit('room:join', { code }, a));
-check(!steal.ok && steal.code === 'SEAT_RESERVED', 'seat is reserved for the reconnecting navigator');
 const resumed = await call<JoinResult>((a) => nav2.emit('session:resume', { token }, a));
-check(resumed.ok && !!resumed.data.lastTelemetry && resumed.data.callLog.length >= 2, 'navigator resumes session with race state, telemetry and call log restored');
+check(resumed.ok && resumed.data.lastTelemetry.length === 1 && resumed.data.callLog.length >= 2, 'navigator resumes session with race state, telemetry and call log restored');
 
 // teleport protection
 const warn = waitFor<{ type: string }>(driver, 'race:warning', 1500, (w) => w.type === 'telemetry-rejected');
@@ -135,12 +137,12 @@ for (let d = stage.spawnDistance + 2; d <= stage.finishDistance + 5; d += 3.4) {
   await sleep(50);
 }
 const [rn, rd] = await Promise.all([finished, driverFinished]);
-check(!!rn && !!rd && rn.timeMs === rd.timeMs && rn.splits.length === 3, `both players receive the same result (${rn ? (rn.timeMs / 1000).toFixed(2) : '-'} s, ${rn?.splits.length} splits)`);
+check(!!rn && !!rd && rn.timeMs === rd.timeMs && rn.splits.length === 3 && rn.name === 'Tester', `both players receive the same result (${rn ? (rn.timeMs / 1000).toFixed(2) : '-'} s, ${rn?.splits.length} splits)`);
 
-// leaving closes room
-const closed = waitFor(nav2, 'room:closed', 3000);
+// host leaving hands the rally to the next player; last one out closes it
+const newHost = waitFor<{ hostId: string }>(nav2, 'room:update', 3000, (x) => x.hostId === (resumed.ok ? resumed.data.session.playerId : ''));
 driver.emit('room:leave');
-check(!!(await closed), 'driver leaving closes the room for the navigator');
+check(!!(await newHost), 'host leaving passes the rally to the next player');
 
 for (const s of [driver, nav2, third, driver2]) s.disconnect();
 console.log(failures ? `\n${failures} FAILED` : '\nAll server tests passed');

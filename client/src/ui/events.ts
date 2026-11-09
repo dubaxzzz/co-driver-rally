@@ -23,7 +23,6 @@ import { h, toast } from './dom';
 import type { Nav, Screen } from './screens';
 
 const DAMAGE_ZONE_NAMES = ['Front', 'Left side', 'Right side', 'Rear', 'Windscreen', 'Engine'];
-const WHEEL_LABELS = ['Front left', 'Front right', 'Rear left', 'Rear right'];
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
 /**
@@ -38,11 +37,12 @@ async function launch(nav: Nav, rally: RallyConfig, title: string, onStart?: () 
   const close = () => overlay.remove();
   try {
     if (net.room) await net.leave().catch(() => undefined);
-    const res = await net.createRoom(settings.get().playerName.trim() || 'Driver', rally);
+    const res = await net.createRoom(settings.get().playerName.trim() || 'Driver', { ...rally, soloEvent: true });
     const code = h('div', { class: 'room-code', 'data-testid': 'room-code', style: 'font-size:46px' }, res.room.code);
     const navState = h('div', { class: 'sub', 'data-testid': 'event-nav' }, 'No navigator yet – they can join with the code above.');
     const off = net.on('room', (r) => {
-      navState.textContent = r.navigator ? `Navigator: ${r.navigator.name}${r.navigator.connected ? '' : ' (reconnecting)'}` : 'No navigator yet – they can join with the code above.';
+      const n = r.members.find((m) => m.role === 'navigator');
+      navState.textContent = n ? `Navigator: ${n.name}${n.connected ? '' : ' (reconnecting)'}` : 'No navigator yet – they can join with the code above.';
     });
     const go = h('button', { class: 'btn primary big', 'data-testid': 'event-start' }, 'Start stage') as HTMLButtonElement;
     go.onclick = async () => {
@@ -173,20 +173,14 @@ export function championshipScreen(nav: Nav): Screen {
 
     // ---- service park
     const { cost, teamPays } = champ.repairQuote();
-    const wheelGone = s.carry.wheels.some((w) => w >= 1);
     const car = champ.carForRound();
     const svc = h('div', { class: 'panel', 'data-testid': 'service' }, h('div', { class: 'panel-title' }, 'Service park'));
     svc.append(h('div', { class: 'setup-desc' }, `${vehicleById(car.carId).name}${team.carId ? ` (${team.name} car)` : ' (your car)'}`));
     const grid = h('div', { class: 'dmg-grid' });
     DAMAGE_ZONE_NAMES.forEach((name, i) => grid.append(h('div', { class: `dmg-cell ${s.carry.zones[i] > 0.5 ? 'bad' : s.carry.zones[i] > 0.15 ? 'warn' : ''}` }, h('span', {}, name), h('b', {}, pct(s.carry.zones[i])))));
-    WHEEL_LABELS.forEach((name, i) => {
-      const w = s.carry.wheels[i];
-      grid.append(h('div', { class: `dmg-cell ${w >= 1 ? 'bad' : w > 0.3 ? 'warn' : ''}` }, h('span', {}, `${name} wheel`), h('b', {}, w >= 1 ? 'MISSING' : pct(w))));
-    });
     svc.append(grid);
     const bodyCost = cost - repairCost(s.carry.zones, [0, 0, 0, 0]);
-    const wheelCost = cost - repairCost([0, 0, 0, 0, 0, 0], s.carry.wheels);
-    const doRepair = (what: 'body' | 'wheels' | 'all') => {
+    const doRepair = (what: 'body' | 'all') => {
       const r = champ.repair(what);
       if (!r.ok) toast(r.reason ?? 'Could not repair', 'bad');
       redraw();
@@ -197,7 +191,6 @@ export function championshipScreen(nav: Nav): Screen {
         h('div', { class: 'actions' },
           h('button', { class: 'btn primary', 'data-testid': 'repair-all', onclick: () => doRepair('all') }, teamPays ? 'Repair everything (free)' : `Repair everything – ${money(cost)}`),
           bodyCost > 0 ? h('button', { class: 'btn', onclick: () => doRepair('body') }, teamPays ? 'Body only' : `Body – ${money(bodyCost)}`) : null,
-          wheelCost > 0 ? h('button', { class: 'btn', onclick: () => doRepair('wheels') }, teamPays ? 'Wheels only' : `Wheels – ${money(wheelCost)}`) : null,
         ),
       );
     } else {
@@ -220,10 +213,6 @@ export function championshipScreen(nav: Nav): Screen {
       const stage = getStage(round.stageId)!;
       const rivals = champ.onTrackRivals();
       const start = h('button', { class: 'btn primary big', 'data-testid': 'champ-go' }, `Go to round ${s.round + 1}`) as HTMLButtonElement;
-      if (wheelGone) {
-        start.disabled = true;
-        start.title = 'Fit a new wheel first';
-      }
       start.onclick = () => {
         eventCtx.set({ kind: 'championship', season: s.season, round: s.round, entrants: rivals, carId: car.carId, upgrades: car.upgrades, carry: s.carry });
         void launch(nav, { stageId: round.stageId, weather: round.weather, aiCount: rivals.length, aiSkill: 'hard' }, `Round ${s.round + 1} – ${stage.def.name}`, () => champ.markStarted());
@@ -235,7 +224,6 @@ export function championshipScreen(nav: Nav): Screen {
           h('div', { class: 'stage-meta' }, `${stage.def.location} · ${((stage.finishDistance - stage.startDistance) / 1000).toFixed(1)} km · ${WEATHER[round.weather].name}`),
           h('div', { class: 'setup-desc' }, `On the stage with you: ${rivals.map((r) => r.name).join(', ')}.`),
           team.carId ? h('div', { class: 'setup-desc' }, `Team goal: finish in the top ${team.goal}.${s.misses ? ` You missed it last round – miss again and you're out.` : ''}`) : null,
-          wheelGone ? h('div', { class: 'setup-desc', style: 'color:#ff8b97' }, 'A wheel came off last round – fit a new one at the service park first.') : null,
           start,
         ),
       );
@@ -326,7 +314,6 @@ export function dailyScreen(nav: Nav): Screen {
   };
 
   (async () => {
-    if (net.mode === 'p2p') return show(dailyChallenge(date), null);
     try {
       const base = import.meta.env.VITE_SERVER_URL || '';
       const res = await fetch(`${base}/api/daily`);

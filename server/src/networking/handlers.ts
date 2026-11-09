@@ -9,11 +9,14 @@ import {
   validateConfig,
   dailyChallenge,
   dailyKey,
+  SHARED_SWITCHES,
+  type SharedSwitch,
   type RallyConfig,
   type Ack,
   type ClientToServerEvents,
   type ErrorCode,
   type RaceState,
+  type RoomSnapshot,
   type ServerToClientEvents,
 } from '@cdr/shared';
 import { config } from '../config';
@@ -25,7 +28,7 @@ function applyDaily(cfg: Partial<RallyConfig>): Partial<RallyConfig> | string {
   if (!cfg.daily) return cfg;
   if (cfg.daily !== dailyKey()) return 'That Daily Challenge has ended – a new one is up.';
   const dc = dailyChallenge(cfg.daily);
-  return { ...cfg, stageId: dc.stageId, weather: dc.weather, aiCount: 0 };
+  return { ...cfg, stageId: dc.stageId, weather: dc.weather, aiCount: 0, soloEvent: true };
 }
 
 type IO = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -51,25 +54,28 @@ export function registerHandlers(io: IO) {
   const rooms: RoomManager = new RoomManager((code) => ({
     onState: (state) => io.to(code).emit('race:state', state),
     onCheckpoint: (evt) => io.to(code).emit('race:checkpoint', evt),
-    onWarning: (w) => io.to(code).emit('race:warning', w),
+    onWarning: (playerId, w) => {
+      const room = rooms.get(code);
+      const sid = room ? rooms.seat(room, playerId)?.socketId : null;
+      if (sid) io.to(sid).emit('race:warning', w);
+    },
     onFinished: (r) => {
       io.to(code).emit('race:finished', r);
-      const room = rooms.get(code);
-      const daily = room?.race.state.daily;
-      if (room && daily && room.driver) dailyBoard.add(daily, room.driver.name, r.timeMs);
+      const daily = rooms.get(code)?.race.state.daily;
+      if (daily) dailyBoard.add(daily, r.name, r.timeMs);
     },
   }));
 
   const broadcastRoom = (room: Room) => io.to(room.code).emit('room:update', rooms.snapshot(room));
 
   setInterval(() => {
-    const { closed, released } = rooms.sweep();
+    const { closed, changed } = rooms.sweep();
     for (const code of closed) {
       io.to(code).emit('room:closed', { reason: 'The rally was closed after the players disconnected.' });
       io.in(code).socketsLeave(code);
       console.log(`[rooms] cleaned up ${code} (${rooms.size} active)`);
     }
-    for (const code of released) {
+    for (const code of changed) {
       const room = rooms.get(code);
       if (room) broadcastRoom(room);
     }
@@ -109,8 +115,9 @@ export function registerHandlers(io: IO) {
       const ack = safeAck(ackFn);
       const code = normaliseRoomCode(payload?.code);
       if (!code) return ack(err('INVALID_CODE', 'Room codes are 4 letters/numbers, e.g. R7K2.'));
-      const name = sanitiseName(payload?.name, 'Navigator');
-      const res = rooms.joinAsNavigator(socket.id, code, name);
+      const name = sanitiseName(payload?.name, 'Player');
+      const want = payload?.role === 'driver' || payload?.role === 'navigator' ? payload.role : undefined;
+      const res = rooms.join(socket.id, code, name, want);
       if (!res.ok) return ack(res);
       socket.join(code);
       ack(res);
@@ -140,7 +147,6 @@ export function registerHandlers(io: IO) {
       if (!left) return;
       socket.leave(left.room.code);
       if (left.closed) {
-        io.to(left.room.code).emit('room:closed', { reason: 'The driver closed the rally.' });
         io.in(left.room.code).socketsLeave(left.room.code);
       } else {
         broadcastRoom(left.room);
@@ -152,33 +158,67 @@ export function registerHandlers(io: IO) {
       safeAck<null>(ackFn)({ ok: true, data: null });
     });
 
+    const seatOf = (ctx: { b: { playerId: string }; room: Room }) => rooms.seat(ctx.room, ctx.b.playerId);
     const raceAction = (action: 'start' | 'restart' | 'lobby', ackFn: unknown) => {
       const ack = safeAck<RaceState>(ackFn);
+      if (action === 'start') {
+        const chk = rooms.checkStart(socket.id);
+        if (!chk.ok) return ack(chk);
+        chk.room.lastTelemetry.clear();
+        for (const m of chk.room.members) if (m.playerId !== chk.room.hostId) m.ready = false; // tick again next time
+        const state = chk.room.race.start(chk.grid);
+        broadcastRoom(chk.room);
+        return ack({ ok: true, data: state });
+      }
       const ctx = currentRoom();
       if (!ctx) return ack(err('NOT_IN_ROOM', 'You are not in a rally.'));
       const { b, room } = ctx;
+      if (room.hostId !== b.playerId) return ack(err('NOT_ALLOWED', 'Only the host can do that.'));
       const phase = room.race.state.phase;
-      if (action === 'start') {
-        if (b.role !== 'driver') return ack(err('NOT_ALLOWED', 'Only the driver can start the stage.'));
-        if (phase !== 'lobby') return ack(err('WRONG_PHASE', 'The stage has already started.'));
-        return ack({ ok: true, data: room.race.start() });
-      }
+      room.lastTelemetry.clear();
       if (action === 'restart') {
         if (phase === 'lobby') return ack(err('WRONG_PHASE', 'The stage has not started yet.'));
-        room.lastTelemetry = null;
-        return ack({ ok: true, data: room.race.start() });
+        const grid = room.race.state.drivers
+          .filter((d) => rooms.seat(room, d.playerId)?.role === 'driver')
+          .map((d) => ({ playerId: d.playerId, name: d.name }));
+        if (!grid.length) return ack(err('NOT_ALLOWED', 'Nobody is left to drive.'));
+        return ack({ ok: true, data: room.race.start(grid) });
       }
-      room.lastTelemetry = null;
       ack({ ok: true, data: room.race.toLobby() });
     };
+    socket.on('room:role', (payload, ackFn) => {
+      const ack = safeAck<RoomSnapshot>(ackFn);
+      const role = payload?.role;
+      if (role !== 'driver' && role !== 'navigator') return ack(err('BAD_PAYLOAD', 'Unknown role.'));
+      const navFor = typeof payload?.navFor === 'string' ? payload.navFor : null;
+      const res = rooms.setRole(socket.id, role, navFor);
+      ack(res);
+      const ctx = currentRoom();
+      if (res.ok && ctx) broadcastRoom(ctx.room);
+    });
+    socket.on('room:ready', (ready, ackFn) => {
+      const ack = safeAck<RoomSnapshot>(ackFn);
+      const res = rooms.setReady(socket.id, ready === true);
+      ack(res);
+      const ctx = currentRoom();
+      if (res.ok && ctx) broadcastRoom(ctx.room);
+    });
+    socket.on('race:retire', (ackFn) => {
+      const ack = safeAck<RaceState>(ackFn);
+      const ctx = currentRoom();
+      if (!ctx) return ack(err('NOT_IN_ROOM', 'You are not in a rally.'));
+      ctx.room.race.retire(ctx.b.playerId);
+      ack({ ok: true, data: ctx.room.race.state });
+    });
     socket.on('room:configure', (payload, ackFn) => {
       const ack = safeAck<RaceState>(ackFn);
       const ctx = currentRoom();
       if (!ctx) return ack(err('NOT_IN_ROOM', 'You are not in a rally.'));
-      if (ctx.b.role !== 'driver') return ack(err('NOT_ALLOWED', 'Only the driver can choose the stage.'));
+      if (ctx.room.hostId !== ctx.b.playerId) return ack(err('NOT_ALLOWED', 'Only the host can choose the stage.'));
       if (ctx.room.race.state.phase !== 'lobby') return ack(err('WRONG_PHASE', 'Return to the lobby to change the stage.'));
       const raw = validateConfig(payload);
       if (!raw) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
+      delete raw.soloEvent; // fixed when the room is created
       // a daily room stays locked to today's challenge
       const cfg = applyDaily(ctx.room.race.state.daily ? { ...raw, daily: ctx.room.race.state.daily } : raw);
       if (typeof cfg === 'string') return ack(err('BAD_PAYLOAD', cfg));
@@ -190,16 +230,16 @@ export function registerHandlers(io: IO) {
 
     socket.on('telemetry', (raw) => {
       const ctx = currentRoom();
-      if (!ctx || ctx.b.role !== 'driver') return; // only the room's driver may send telemetry
+      if (!ctx || seatOf(ctx)?.role !== 'driver') return; // only drivers send telemetry
       if (!telemetryLimiter.allow()) return;
       const packet = validateTelemetry(raw);
       if (!packet) return;
-      const { room } = ctx;
-      if (!room.race.handleTelemetry(packet)) return;
-      const relayed = { ...packet, serverTime: Date.now() };
-      room.lastTelemetry = relayed;
+      const { room, b } = ctx;
+      if (!room.race.handleTelemetry(b.playerId, packet)) return;
+      const relayed = { ...packet, serverTime: Date.now(), pid: b.playerId };
+      room.lastTelemetry.set(b.playerId, relayed);
       room.lastActivity = relayed.serverTime;
-      // volatile: if the navigator is lagging, drop stale packets instead of queueing
+      // volatile: if someone is lagging, drop stale packets instead of queueing
       socket.to(room.code).volatile.emit('telemetry', relayed);
     });
 
@@ -207,7 +247,7 @@ export function registerHandlers(io: IO) {
       const ack = safeAck(ackFn);
       const ctx = currentRoom();
       if (!ctx) return ack(err('NOT_IN_ROOM', 'You are not in a rally.'));
-      if (ctx.b.role !== 'navigator') return ack(err('NOT_ALLOWED', 'Only the navigator can send calls.'));
+      if (seatOf(ctx)?.role !== 'navigator') return ack(err('NOT_ALLOWED', 'Only navigators can send calls.'));
       if (!callLimiter.allow()) return ack(err('RATE_LIMITED', 'Slow down – too many calls.'));
       const req = validateNavCall(raw);
       if (!req) return ack(err('BAD_PAYLOAD', 'That call could not be sent.'));
@@ -227,6 +267,18 @@ export function registerHandlers(io: IO) {
       const call = rooms.addCall(room, { kind, text, noteIndex, serverTime: Date.now(), repeated });
       io.to(room.code).emit('nav:call', call);
       ack({ ok: true, data: call });
+    });
+
+    const switchLimiter = new RateLimiter(12);
+    socket.on('car:switch', (payload) => {
+      const ctx = currentRoom();
+      if (!ctx || !switchLimiter.allow()) return;
+      const seat = seatOf(ctx);
+      if (!seat || seat.role !== 'navigator' || !seat.navFor) return;
+      const id = payload?.id;
+      if (typeof id !== 'string' || !(SHARED_SWITCHES as readonly string[]).includes(id)) return;
+      const target = rooms.seat(ctx.room, seat.navFor)?.socketId;
+      if (target) io.to(target).emit('car:switch', { id: id as SharedSwitch, down: payload.down !== false, from: seat.name });
     });
 
     socket.on('disconnect', () => {

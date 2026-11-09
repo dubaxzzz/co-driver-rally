@@ -16,15 +16,6 @@ const RPM_PER_MS = 142; // engine rpm per (m/s × gear ratio)
 export const CAR_GROUPS = (0x0002 << 16) | 0x0003;
 /** Wheel ray queries: see only the world (never ride on another car's roof). */
 export const RAY_GROUPS = (0x0002 << 16) | 0x0001;
-const WHEEL_NAMES = ['front-left', 'front-right', 'rear-left', 'rear-right'];
-
-/** A pothole the game passes in each frame (only the ones near the car). */
-export interface NearbyPothole {
-  x: number;
-  z: number;
-  radius: number;
-  severity: number;
-}
 
 /** Damage per zone, 0 (fine) .. 1 (wrecked). */
 export interface DamageZones {
@@ -75,17 +66,6 @@ export class Vehicle {
   private lastSusp = [0, 0, 0, 0];
   onGearChange: ((up: boolean) => void) | null = null;
   onImpact: ((strength: number, zone: keyof DamageZones) => void) | null = null;
-  /** Fired when a wheel breaks off (index 0 FL, 1 FR, 2 RL, 3 RR). */
-  onWheelLost: ((index: number, name: string) => void) | null = null;
-  /** A wheel hit a pothole or landed hard. */
-  onWheelHit: ((index: number, strength: number) => void) | null = null;
-  /** Wheel damage 0..1 (1 = the wheel comes off). */
-  readonly wheelDamage = [0, 0, 0, 0];
-  readonly wheelLost = [false, false, false, false];
-  /** Potholes near the car, set by the game each frame. */
-  nearbyPotholes: NearbyPothole[] = [];
-  private potholeCooldown = [0, 0, 0, 0];
-  private wobble = 0;
   private wasTipped = false;
   /** Damage by zone – drives the visuals (cracked glass, bent bonnet…) and performance. */
   readonly damage: DamageZones = noDamage();
@@ -101,6 +81,8 @@ export class Vehicle {
   /** Collider handles considered "road" (gravel). Others = grass/verge. */
   roadColliders = new Set<number>();
   frozen = true;
+  /** Engine running? (players start it with IGNITION + START; AI cars always run). */
+  engineOn = true;
 
   private gear = 1;
   private shiftTimer = 0;
@@ -208,36 +190,35 @@ export class Vehicle {
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.lastVel.set(0, 0, 0);
     this.gear = 1;
+    this.havePrev = false; // teleport: don't blend from the old spot
   }
 
   resetDamage() {
     this.telemetry.damage = 0;
     for (const k of DAMAGE_KEYS) this.damage[k] = 0;
-    // refit any wheels that came off
-    for (let i = 0; i < 4; i++) {
-      this.wheelDamage[i] = 0;
-      if (this.wheelLost[i]) {
-        this.wheelLost[i] = false;
-        this.controller.setWheelRadius(i, WHEEL_LAYOUT.radius);
-        this.controller.setWheelSuspensionRestLength(i, SUSPENSION.restLength);
-        this.model.wheels[i].visible = this.model.body.visible;
-      }
-    }
   }
 
-  /** Starts with damage carried over (championship). Lost wheels come back fitted but battered. */
-  setDamage(zones: number[], wheels: number[]) {
+  /** Starts with damage carried over (championship). */
+  setDamage(zones: number[]) {
     this.resetDamage();
     DAMAGE_KEYS.forEach((k, i) => (this.damage[k] = Math.max(0, Math.min(1, zones[i] ?? 0))));
-    for (let i = 0; i < 4; i++) this.wheelDamage[i] = Math.max(0, Math.min(0.95, wheels[i] ?? 0));
     this.telemetry.damage = Math.max(...DAMAGE_KEYS.map((k) => this.damage[k]));
   }
 
   /** One fixed physics step. */
+  /** Body pose before the latest physics step (drawing blends from this to the current pose). */
+  private prevPos = new THREE.Vector3();
+  private prevRot = new THREE.Quaternion();
+  private havePrev = false;
+
   step(dt: number, input: DriveInput) {
     const c = this.controller;
     const def = this.def;
+    const pt = this.body.translation();
     const rot = this.body.rotation();
+    this.prevPos.set(pt.x, pt.y, pt.z);
+    this.prevRot.set(rot.x, rot.y, rot.z, rot.w);
+    this.havePrev = true;
     this.tmpQ.set(rot.x, rot.y, rot.z, rot.w);
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.tmpQ);
     const right = new THREE.Vector3(-1, 0, 0).applyQuaternion(this.tmpQ);
@@ -246,7 +227,7 @@ export class Vehicle {
     const speed = vel.dot(fwd);
     const lateral = vel.dot(right);
 
-    let throttle = this.frozen ? 0 : input.throttle;
+    let throttle = this.frozen || !this.engineOn ? 0 : input.throttle;
     let brakeIn = this.frozen ? 1 : input.brake;
     const handbrake = this.frozen ? true : input.handbrake;
 
@@ -283,8 +264,8 @@ export class Vehicle {
     }
     const ratio = this.gear === -1 ? 3.0 : ratios[Math.max(0, this.gear - 1)];
     const wheelRpm = absSpeed * ratio * RPM_PER_MS;
-    const targetRpm = Math.max(def.idleRpm + throttle * 1800 * (this.telemetry.grounded ? 0.3 : 1), wheelRpm);
-    this.telemetry.rpm += (Math.min(def.maxRpm, targetRpm) - this.telemetry.rpm) * Math.min(1, dt * 12);
+    const targetRpm = this.engineOn ? Math.max(def.idleRpm + throttle * 1800 * (this.telemetry.grounded ? 0.3 : 1), wheelRpm) : 0;
+    this.telemetry.rpm += (Math.min(def.maxRpm, targetRpm) - this.telemetry.rpm) * Math.min(1, dt * (this.engineOn ? 12 : 4));
     const rpm = this.telemetry.rpm;
 
     // Torque curve: peak in the mid range, falls off at redline
@@ -301,10 +282,10 @@ export class Vehicle {
     // drivetrain split (FWD / RWD / 4WD); a missing wheel can't put power down
     const front = (force * def.frontDriveShare) / 2;
     const rear = (force * (1 - def.frontDriveShare)) / 2;
-    c.setWheelEngineForce(0, this.wheelLost[0] ? 0 : front);
-    c.setWheelEngineForce(1, this.wheelLost[1] ? 0 : front);
-    c.setWheelEngineForce(2, this.wheelLost[2] ? 0 : rear);
-    c.setWheelEngineForce(3, this.wheelLost[3] ? 0 : rear);
+    c.setWheelEngineForce(0, front);
+    c.setWheelEngineForce(1, front);
+    c.setWheelEngineForce(2, rear);
+    c.setWheelEngineForce(3, rear);
 
     // --- Brakes ---
     const brake = brakeIn * def.brakeForce * 0.5;
@@ -315,13 +296,8 @@ export class Vehicle {
     c.setWheelBrake(3, brake * 0.4 + hb);
 
     // --- Steering (speed sensitive) ---
-    // bent steering arms after side impacts make the car pull to that side
-    // a damaged front wheel pulls to its side and makes the steering shimmy
-    this.wobble += dt * (8 + absSpeed * 0.6);
-    const wheelPull = (this.wheelDamage[0] - this.wheelDamage[1]) * 0.09 + (this.wheelLost[0] ? 0.08 : 0) - (this.wheelLost[1] ? 0.08 : 0);
-    const shimmy = Math.sin(this.wobble) * Math.max(this.wheelDamage[0], this.wheelDamage[1]) * 0.05 * Math.min(1, absSpeed / 15);
-    const pull = (this.damage.left - this.damage.right) * 0.07 + wheelPull + shimmy;
-    const steerAngle = (input.steer * def.maxSteerRad + pull) * (this.frozen ? 0 : 1);
+    // the car goes exactly where you point it – damage never pulls the steering to one side
+    const steerAngle = input.steer * def.maxSteerRad * (this.frozen ? 0 : 1);
     c.setWheelSteering(0, steerAngle);
     c.setWheelSteering(1, steerAngle);
 
@@ -337,8 +313,7 @@ export class Vehicle {
       const rearWheel = i >= 2;
       const surf = this.inWater ? SURFACES.water : isRoad ? this.roadSurface : this.offroadSurface;
       wheelSurfaces[i] = surf;
-      let grip = this.gripBase * surf.grip * this.weatherGrip * (rearWheel ? CHASSIS.rearGripBias : 1) * (1 - this.wheelDamage[i] * 0.45);
-      if (this.wheelLost[i]) grip = 0.35; // dragging on the hub
+      let grip = this.gripBase * surf.grip * this.weatherGrip * (rearWheel ? CHASSIS.rearGripBias : 1);
       if (rearWheel && handbrake) grip *= 0.45;
       c.setWheelFrictionSlip(i, grip);
       const side = rearWheel ? CHASSIS.sideFrictionRear : CHASSIS.sideFrictionFront;
@@ -353,7 +328,6 @@ export class Vehicle {
       this.wasTipped = tipped;
     }
     c.updateVehicle(dt, undefined, RAY_GROUPS);
-    this.checkWheelHits(dt, absSpeed);
 
     // Downforce + mild aero drag (forces persist in Rapier, so clear last step's first)
     // Rapier keeps user forces AND torques until cleared – clear both every step,
@@ -417,10 +391,6 @@ export class Vehicle {
       const len = c.wheelSuspensionLength(i) ?? SUSPENSION.restLength;
       const rate = (this.lastSusp[i] - len) / dt; // compression speed
       bump += Math.abs(rate);
-      // slamming into the bump stop (big landings, kerbs, rocks) bends the wheel
-      if (!this.wheelLost[i] && rate > 3.2 && len < SUSPENSION.restLength - SUSPENSION.maxTravel * 0.8) {
-        this.damageWheel(i, (rate - 3.2) * 0.06);
-      }
       this.lastSusp[i] = len;
     }
     this.bump = Math.min(2, bump * 0.08);
@@ -458,9 +428,6 @@ export class Vehicle {
         add(zone, 0.12 + strength * 0.45);
         if (strength > 0.35) add('windscreen', strength * 0.25);
       }
-      if (zone === 'left') this.damageWheel(strength > 0.5 ? 0 : 2, strength * 0.5);
-      if (zone === 'right') this.damageWheel(strength > 0.5 ? 1 : 3, strength * 0.5);
-      if (zone === 'front' && strength > 0.4) this.damageWheel(local.x > 0 ? 1 : 0, strength * 0.35);
       this.telemetry.damage = Math.min(1, (d.front + d.left + d.right + d.rear + d.engine) / 3.2);
       this.impactCooldown = 0.35;
       this.onImpact?.(strength, zone);
@@ -483,70 +450,33 @@ export class Vehicle {
     t.brake = input.brake;
   }
 
-  /** Potholes: a wheel dropping into one jolts the car and damages the wheel. */
-  private checkWheelHits(dt: number, absSpeed: number) {
-    const c = this.controller;
-    for (let i = 0; i < 4; i++) {
-      this.potholeCooldown[i] -= dt;
-      if (this.wheelLost[i] || this.potholeCooldown[i] > 0 || !c.wheelIsInContact(i)) continue;
-      const cp = c.wheelContactPoint(i);
-      if (!cp) continue;
-      for (const p of this.nearbyPotholes) {
-        const dx = cp.x - p.x, dz = cp.z - p.z;
-        if (dx * dx + dz * dz > p.radius * p.radius) continue;
-        this.potholeCooldown[i] = 0.4;
-        const speedFactor = Math.min(1.6, absSpeed / 22);
-        if (speedFactor < 0.15) break;
-        // the edge of the hole kicks the wheel up and scrubs speed
-        const kick = 170 * p.severity * speedFactor; // a sharp jolt, not a launch
-        const lv = this.body.linvel();
-        const sp = Math.hypot(lv.x, lv.z) || 1;
-        this.body.applyImpulseAtPoint({ x: (-lv.x / sp) * kick * 0.35, y: kick, z: (-lv.z / sp) * kick * 0.35 }, cp, true);
-        // suspension upgrades + armour soften the blow
-        const soften = Math.max(0.35, 1 - (this.def.suspension - 1) * 2.5 - this.def.armour * 0.4);
-        const dmg = p.severity * speedFactor * 0.32 * soften;
-        this.damageWheel(i, dmg);
-        this.onWheelHit?.(i, Math.min(1, p.severity * speedFactor));
-        break;
-      }
-    }
-  }
-
-  /** Adds damage to a wheel; at 100% it breaks off. */
-  damageWheel(i: number, amount: number) {
-    if (this.wheelLost[i] || amount <= 0) return;
-    this.wheelDamage[i] = Math.min(1, this.wheelDamage[i] + amount);
-    if (this.wheelDamage[i] >= 1) {
-      this.wheelLost[i] = true;
-      // the corner drops onto the hub: tiny "wheel", no spring
-      this.controller.setWheelRadius(i, 0.06);
-      this.controller.setWheelSuspensionRestLength(i, 0.06);
-      this.model.wheels[i].visible = false;
-      this.onWheelLost?.(i, WHEEL_NAMES[i]);
-    }
-  }
-
   /** Must be called after world.step() to clear accumulated user forces. */
   afterStep() {
     this.body.resetForces(true);
     this.body.resetTorques(true);
   }
 
-  /** Syncs the Three.js model with the physics body and wheel states. */
-  syncVisuals() {
+  /**
+   * Syncs the Three.js model with the physics body and wheel states.
+   * `alpha` blends between the last two physics steps so the car (and the
+   * camera inside it) moves smoothly on any screen refresh rate.
+   */
+  syncVisuals(alpha = 1) {
     const t = this.body.translation();
     const r = this.body.rotation();
-    this.model.root.position.set(t.x, t.y, t.z);
-    this.model.root.quaternion.set(r.x, r.y, r.z, r.w);
+    const root = this.model.root;
+    root.position.set(t.x, t.y, t.z);
+    root.quaternion.set(r.x, r.y, r.z, r.w);
+    if (this.havePrev && alpha < 1) {
+      root.position.lerpVectors(this.prevPos, root.position, alpha);
+      root.quaternion.slerpQuaternions(this.prevRot, root.quaternion.clone(), alpha);
+    }
     const c = this.controller;
     for (let i = 0; i < 4; i++) {
       const w = this.model.wheels[i];
       const susp = c.wheelSuspensionLength(i) ?? 0.3;
       w.position.y = WHEEL_LAYOUT.connectionY - susp;
       w.rotation.y = c.wheelSteering(i) ?? 0;
-      // bent wheels lean and wobble
-      const wd = this.wheelDamage[i];
-      w.rotation.z = wd * 0.22 * (i % 2 ? -1 : 1) + Math.sin(this.wobble + i) * wd * 0.05;
       const spin = w.children[0];
       spin.rotation.x = c.wheelRotation(i) ?? 0;
     }

@@ -10,6 +10,10 @@ import {
   surfaceAt,
   bestKey,
   computePrize,
+  gridSpot,
+  aiGridOffset,
+  type DriverRace,
+  type RelayedTelemetry,
   type WeatherDef,
   type BuiltStage,
   type RaceResult,
@@ -24,12 +28,15 @@ import { Hud } from '../ui/hud';
 import { resultsOverlay, type Standing } from '../ui/results';
 import { career, money } from '../career';
 import { AIDriver, AI_CREWS } from './ai/AIDriver';
-import { VEHICLES, TEAMS, applyUpgrades, vehicleById, dailyChallenge, medalFor, MEDAL_PAY, MEDAL_RANK, DAILY_FINISH_PAY } from '@cdr/shared';
+import { VEHICLES, FIELD, TEAMS, applyUpgrades, vehicleById, dailyChallenge, medalFor, MEDAL_PAY, MEDAL_RANK, DAILY_FINISH_PAY } from '@cdr/shared';
 import { eventCtx, type EventContext } from '../events/context';
 import { champ } from '../championship/state';
 import { classificationTable, formatMs } from '../ui/classification';
+import { RemoteCar, fallbackPaint } from './RemoteCars';
+import { applySharedSwitch, decodeSwitches, defaultSwitches, encodeSwitches, SHARED_SWITCHES, type CarSwitches, type SharedSwitch } from '@cdr/shared';
+import { CockpitPicker } from './vehicle/CockpitPicker';
+import type { ControlId } from './vehicle/Controls';
 
-const VEHICLES_BODY = VEHICLES[0].body;
 import { DustSystem } from './environment/Atmosphere';
 import { FirstPersonCamera } from './camera/FirstPersonCamera';
 import { Input } from './input/Input';
@@ -37,7 +44,7 @@ import { loadRapier, PhysicsWorld } from './physics/PhysicsWorld';
 import { RaceClient } from './race/RaceClient';
 import { createCarModel } from './vehicle/CarModel';
 import { Cockpit } from './vehicle/Cockpit';
-import { DAMAGE_KEYS, Vehicle, type NearbyPothole } from './vehicle/Vehicle';
+import { DAMAGE_KEYS, Vehicle } from './vehicle/Vehicle';
 import type { AIDriver as AIDriverT } from './ai/AIDriver';
 import { buildStageWorld, type StageWorld } from './world/StageWorld';
 
@@ -58,8 +65,6 @@ export class Game {
   private ai: AIDriver[] = [];
   private smoke = new DustSystem(260, 'rgba(70,70,74,', -0.8, 2.6);
   private underwaterFor = 0;
-  private sparks = new DustSystem(200, 'rgba(255,170,60,', 7, 0.35);
-  private looseWheels: Array<{ body: import('@dimforge/rapier3d-compat').RigidBody; mesh: THREE.Object3D; age: number }> = [];
   /** Prize for the current run (sent to the navigator so they get their share). */
   private prize: { runId: number; total: number } | null = null;
   private cockpit!: Cockpit;
@@ -83,6 +88,20 @@ export class Game {
   private ctx: EventContext = eventCtx.get();
   private carryApplied = false;
   private retired = false;
+  /** Other players' cars, and AI cars run on the AI host's machine. */
+  private remotes = new Map<string, RemoteCar>();
+  /** True when this game simulates the AI cars (solo, or first on the grid). */
+  private aiLocal = true;
+  private look: number[] = [0, 0, 0];
+  private readonly myId = net.session?.playerId ?? '';
+  /** Cockpit switches of my car (ignition, lights, wipers…). */
+  private sw: CarSwitches = defaultSwitches();
+  private held = new Set<ControlId>();
+  private cranking = 0;
+  private crankNeed = 1;
+  private trip = { start: 0, watchStart: 0, watchAcc: 0, running: false, mapLight: false };
+  private picker: CockpitPicker | null = null;
+  private clock = 0;
 
   constructor(
     private readonly container: HTMLElement,
@@ -117,7 +136,7 @@ export class Game {
       this.physics = new PhysicsWorld(R);
       await new Promise((r) => setTimeout(r, 0)); // let the loading screen paint
       this.world = buildStageWorld(this.scene, stage, { quality, physics: this.physics, fogMultiplier: fogMultiplier(), weather: this.weather.id });
-      this.scene.add(this.smoke.points, this.sparks.points);
+      this.scene.add(this.smoke.points);
       this.unsubs.push(settings.subscribe(() => this.world.atmosphere.setFogMultiplier(fogMultiplier())));
 
       // Vehicle
@@ -137,33 +156,35 @@ export class Game {
       // First person only: hide the outside of the car, show the cockpit and switch on real headlights.
       model.setExteriorVisible(false);
       if (this.weather.headlights) model.enableHeadlights();
+      model.setHeadlights(false);
       this.vehicle.weatherGrip = this.weather.grip;
-      this.cockpit = new Cockpit(sel.paint, 'driver');
+      this.cockpit = new Cockpit(sel.paint, 'driver', sel.vehicle.body.model);
       model.root.add(this.cockpit.group);
       this.vehicle.onGearChange = (up) => audio.gearChange(up);
-      this.vehicle.onWheelLost = (i, name) => {
-        this.spawnLooseWheel(this.vehicle, i);
-        this.hud.warn(`${name.toUpperCase()} WHEEL GONE!`, 3);
-        audio.impact(0.9);
-      };
-      this.vehicle.onWheelHit = (_i, strength) => audio.impact(0.25 + strength * 0.5);
       this.vehicle.onImpact = (s, zone) => {
         audio.impact(s);
         if (zone === 'windscreen' || (zone === 'front' && s > 0.15)) audio.glass(s);
       };
 
-      // AI opponents: real physics cars lined up behind you; they never collide with you.
-      const aiCount = room?.race.aiCount ?? 0;
+      this.look = [Math.max(0, VEHICLES.findIndex((x) => x.id === sel.vehicle.id)), sel.paint.body, sel.paint.accent];
+      // AI opponents: real physics cars lined up behind the players. In a multiplayer rally
+      // the first driver on the grid runs them and everyone else sees them as remote cars.
+      const aiHost = room?.race.aiHost;
+      this.aiLocal = !aiHost || aiHost === this.myId;
+      const driverCount = Math.max(1, room?.race.drivers.length ?? 1);
+      const aiCount = this.aiLocal ? room?.race.aiCount ?? 0 : 0;
       for (let i = 0; i < aiCount; i++) {
         const entrant = this.ctx.kind === 'championship' ? this.ctx.entrants[i] : undefined;
         const crew = entrant ?? AI_CREWS[i % AI_CREWS.length];
-        const aiModel = createCarModel(crew.paint, WHEELS[0], VEHICLES_BODY);
+        // AI drive a mix of cars (their team's car in the championship) – looks only, same physics
+        const champEntrant = entrant ? FIELD.find((f) => f.id === entrant.entrantId) : undefined;
+        const bodyCar = champEntrant ? vehicleById(TEAMS[champEntrant.team].carId ?? VEHICLES[(i + 1) % VEHICLES.length].id) : VEHICLES[(i + 1) % VEHICLES.length];
+        const aiModel = createCarModel(crew.paint, WHEELS[0], bodyCar.body);
         this.scene.add(aiModel.root);
         const skill = entrant?.skill ?? room?.race.aiSkill ?? 'medium';
-        const driver = new AIDriver(this.physics, stage, crew.name, aiModel, skill, 9 * (i + 1), this.weather);
+        const driver = new AIDriver(this.physics, stage, crew.name, aiModel, skill, aiGridOffset(i, driverCount), this.weather);
         if (entrant) this.aiEntrant.set(driver, entrant.entrantId);
         if (this.world.roadColliderHandle !== null) driver.vehicle.roadColliders.add(this.world.roadColliderHandle);
-        driver.vehicle.onWheelLost = (wi) => this.spawnLooseWheel(driver.vehicle, wi);
         this.ai.push(driver);
       }
 
@@ -171,6 +192,7 @@ export class Game {
       this.race = new RaceClient(stage);
 
       this.fp = new FirstPersonCamera(this.container.clientWidth / this.container.clientHeight, 'driver');
+      this.picker = new CockpitPicker(this.container, () => this.fp.camera, this.cockpit.controls, (id) => this.pressControl(id), (id) => this.releaseControl(id));
       if (import.meta.env.DEV) (window as unknown as { __cdrGame?: unknown }).__cdrGame = this;
 
       this.hud = new Hud(stage);
@@ -198,16 +220,6 @@ export class Game {
 
   // ---------------------------------------------------------------- setup
   private bindInput() {
-    this.input.on('wipers', () => {
-      const next = ((settings.get().wipers + 1) % 3) as 0 | 1 | 2;
-      settings.update({ wipers: next });
-      toast(`Wipers: ${['off', 'slow', 'fast'][next]}`);
-    });
-    this.input.on('lights', () => {
-      const m = this.vehicle.model;
-      m.setLightPod(!m.lightPodOn);
-      toast(`Light pod ${m.lightPodOn ? 'on' : 'off'}`);
-    });
     this.input.on('reset', () => this.resetVehicle());
     this.input.on('pause', () => (this.paused ? this.closeOverlay() : this.openPause()));
   }
@@ -215,8 +227,19 @@ export class Game {
   private bindNet() {
     this.unsubs.push(
       net.on('race', (s) => this.applyRaceState(s)),
+      net.on('telemetry', (p) => this.onRemoteTelemetry(p)),
+      net.on('switch', (e) => {
+        if (import.meta.env.DEV) console.debug('[switch]', e.id, e.down, e.from);
+        if (!(SHARED_SWITCHES as readonly string[]).includes(e.id)) return;
+        this.sw = applySharedSwitch(this.sw, e.id, e.down);
+        if (e.id === 'horn') audio.horn(e.down);
+        else {
+          audio.click();
+          this.hud.warn(`${e.from.toUpperCase()}: ${e.id.toUpperCase()}`, 1.2);
+        }
+      }),
       net.on('checkpoint', (e) => {
-        if (e.runId !== this.raceState?.runId) return;
+        if (e.runId !== this.raceState?.runId || e.playerId !== this.myId) return;
         this.world.scenery.markCheckpoint(e.index, true);
         this.hud.center(`CP ${e.index + 1}`);
         audio.chime();
@@ -228,7 +251,10 @@ export class Game {
           this.hud.warn('POSITION REJECTED BY SERVER', 2);
         }
       }),
-      net.on('finished', (r) => this.onFinished(r)),
+      net.on('finished', (r) => {
+        if (r.playerId === this.myId) this.onFinished(r);
+        else if (r.name) toast(`${r.name} finished · ${formatMs(r.timeMs)}`, 'ok');
+      }),
       net.on('room', () => this.updateConnectionChips()),
       net.on('status', () => this.updateConnectionChips()),
       net.on('closed', (p) => {
@@ -246,7 +272,7 @@ export class Game {
   private updateConnectionChips() {
     if (!this.hud) return;
     const server = net.status === 'connected' ? 'ok' : net.status === 'reconnecting' || net.status === 'connecting' ? 'warn' : 'bad';
-    const nav = net.room?.navigator;
+    const nav = net.room?.members.find((m) => m.role === 'navigator' && m.navFor === this.myId);
     const navState = !nav ? 'none' : nav.connected ? 'ok' : 'warn';
     const label = !nav ? 'NO NAVIGATOR' : nav.connected ? `NAV: ${nav.name}` : 'NAVIGATOR RECONNECTING';
     this.hud.setConnection(server, navState, label);
@@ -265,11 +291,15 @@ export class Game {
       else if (sp && Number.isFinite(Number(sp))) spawnD = Number(sp);
       devDamage = Number(q.get('devdamage') ?? 0) || 0;
     }
+    const me = this.myRace();
+    const grid = gridSpot(this.stage, me?.slot ?? 0, Math.max(1, this.raceState?.drivers.length ?? net.room?.race.drivers.length ?? 1));
+    if (spawnD === this.stage.spawnDistance) spawnD = grid.distance;
     const s = sampleAt(this.stage.samples, spawnD);
-    this.vehicle.place(s.x, s.y + 0.9, s.z, s.h);
+    // +lateral = left of the road: left of heading h is (cos h, 0, -sin h)
+    this.vehicle.place(s.x + Math.cos(s.h) * grid.lateral, s.y + 0.9, s.z - Math.sin(s.h) * grid.lateral, s.h);
     this.vehicle.resetDamage();
     if (this.ctx.kind === 'championship' && !this.carryApplied) {
-      this.vehicle.setDamage(this.ctx.carry.zones, this.ctx.carry.wheels);
+      this.vehicle.setDamage(this.ctx.carry.zones);
       this.carryApplied = true;
     }
     if (devDamage) {
@@ -285,49 +315,170 @@ export class Game {
       a.resetToGrid();
       a.vehicle.syncVisuals();
     });
-    this.clearLooseWheels();
     this.prize = null;
+    // every stage starts with the car switched off: pre-stage checks are part of the job
+    this.sw = defaultSwitches();
+    this.cranking = 0;
+    audio.crank(false);
+    audio.horn(false);
+    this.trip = { start: this.stage.spawnDistance, watchStart: 0, watchAcc: 0, running: false, mapLight: this.trip.mapLight };
+    if (import.meta.env.DEV && new URLSearchParams(location.search).has('devstart')) this.sw = { ...this.sw, ignition: true, engine: true, headlights: true };
+    this.remotes.forEach((r) => {
+      r.clear();
+      r.finishMs = null;
+      r.active = true;
+    });
   }
 
-  /** A wheel that broke off becomes its own physics object and bounces away. */
-  private spawnLooseWheel(car: Vehicle, i: number) {
-    const R = this.physics.R;
-    const src = car.model.wheels[i];
-    const mesh = src.clone(true);
-    mesh.visible = true;
-    mesh.traverse((o) => (o.visible = true));
-    src.updateWorldMatrix(true, false);
-    const p = new THREE.Vector3().setFromMatrixPosition(src.matrixWorld);
-    const q = new THREE.Quaternion().setFromRotationMatrix(src.matrixWorld);
-    this.scene.add(mesh);
-    const lv = car.body.linvel();
-    const side = new THREE.Vector3(i % 2 === 0 ? 1 : -1, 0, 0).applyQuaternion(car.model.root.quaternion);
-    const body = this.physics.world.createRigidBody(
-      R.RigidBodyDesc.dynamic()
-        .setTranslation(p.x, p.y + 0.1, p.z)
-        .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
-        .setLinvel(lv.x + side.x * 4, lv.y + 2.5, lv.z + side.z * 4)
-        .setAngvel({ x: 12, y: 2, z: 0 }),
-    );
-    const col = R.ColliderDesc.cylinder(0.12, 0.34).setRestitution(0.45).setFriction(0.8).setDensity(60);
-    col.setRotation(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2));
-    this.physics.world.createCollider(col, body);
-    this.looseWheels.push({ body, mesh, age: 0 });
-  }
-
-  private clearLooseWheels() {
-    for (const w of this.looseWheels) {
-      this.scene.remove(w.mesh);
-      this.physics.world.removeRigidBody(w.body);
+  // ---------------------------------------------------------------- cockpit switches
+  private pressControl(id: ControlId) {
+    this.held.add(id);
+    const sw = this.sw;
+    switch (id) {
+      case 'ignition':
+        this.sw = { ...sw, ignition: !sw.ignition, engine: sw.ignition ? false : sw.engine };
+        audio.click(true);
+        break;
+      case 'start':
+        audio.click(true);
+        if (sw.ignition && !sw.engine) {
+          this.cranking = performance.now();
+          // a battered engine takes longer to fire
+          this.crankNeed = 0.55 + Math.random() * 0.45 + this.vehicle.damage.engine * 1.6;
+          audio.crank(true);
+        } else if (!sw.ignition) this.hud.warn('IGNITION FIRST', 1.2);
+        break;
+      case 'horn':
+        this.sw = { ...sw, horn: true };
+        audio.horn(true);
+        break;
+      case 'trip':
+        this.trip.start = this.race.distance;
+        audio.click();
+        break;
+      case 'watch': {
+        const now = performance.now();
+        if (this.trip.running) this.trip.watchAcc += now - this.trip.watchStart;
+        else this.trip.watchStart = now;
+        this.trip.running = !this.trip.running;
+        audio.click();
+        break;
+      }
+      case 'watchReset':
+        this.trip.watchAcc = 0;
+        this.trip.watchStart = performance.now();
+        audio.click();
+        break;
+      case 'mapLight':
+        this.trip.mapLight = !this.trip.mapLight;
+        audio.click();
+        break;
+      default:
+        this.sw = applySharedSwitch(sw, id as SharedSwitch);
+        audio.click();
     }
-    this.looseWheels = [];
   }
 
-  private potholesNear(d: number): NearbyPothole[] {
-    const out: NearbyPothole[] = [];
-    for (const p of this.stage.potholes) if (Math.abs(p.distance - d) < 30) out.push(p);
-    return out;
+  private releaseControl(id: ControlId) {
+    this.held.delete(id);
+    if (id === 'start') {
+      this.cranking = 0;
+      audio.crank(false);
+    }
+    if (id === 'horn') {
+      this.sw = { ...this.sw, horn: false };
+      audio.horn(false);
+    }
   }
+
+  /** Starter motor, engine state, lights – once per frame. */
+  private updateSwitches(dt: number) {
+    if (this.cranking > 0) {
+      const held = (performance.now() - this.cranking) / 1000;
+      if (!this.sw.ignition) {
+        this.cranking = 0;
+        audio.crank(false);
+      } else if (held >= this.crankNeed) {
+        this.cranking = 0;
+        this.sw = { ...this.sw, engine: true };
+        audio.crank(false);
+        audio.engineCatch();
+      }
+    }
+    const v = this.vehicle;
+    v.engineOn = this.sw.engine;
+    const m = v.model;
+    m.setHeadlights(this.sw.headlights);
+    m.setLightPod(this.sw.pod);
+    m.setHazards(this.sw.hazards);
+    m.tick(this.clock);
+
+    // pre-stage checklist until everything that matters is done
+    const phase = this.raceState?.phase;
+    const items = [
+      { label: 'Ignition on', done: this.sw.ignition },
+      { label: this.cranking > 0 ? 'Starting…' : 'Hold START', done: this.sw.engine },
+    ];
+    if (this.weather.headlights) items.push({ label: 'Headlights', done: this.sw.headlights });
+    if (this.weather.rain > 0 || this.weather.snow > 0) items.push({ label: 'Wipers', done: this.sw.wipers > 0 });
+    const allDone = items.every((i) => i.done);
+    const show = !this.myRace()?.result && (phase === 'countdown' || (phase === 'racing' && !allDone));
+    this.hud.setChecklist(phase === 'countdown' ? 'PRE-STAGE CHECKS' : 'CAR NOT READY', show ? items : null);
+  }
+
+  private watchMs() {
+    return this.trip.watchAcc + (this.trip.running ? performance.now() - this.trip.watchStart : 0);
+  }
+
+  // ---------------------------------------------------------------- other players
+  private myRace(state: RaceState | null = this.raceState ?? net.room?.race ?? null): DriverRace | null {
+    return state?.drivers.find((d) => d.playerId === this.myId) ?? null;
+  }
+
+  private remote(id: string, name: string, paintIndex: number, carIndex = 0) {
+    let r = this.remotes.get(id);
+    if (!r) {
+      r = new RemoteCar(this.scene, this.physics, id, name, fallbackPaint(paintIndex), carIndex);
+      if (id.startsWith('ai:')) {
+        const crew = AI_CREWS[Number(id.slice(3)) % AI_CREWS.length];
+        r.model.setPaint(crew.paint);
+      }
+      this.remotes.set(id, r);
+    }
+    return r;
+  }
+
+  private onRemoteTelemetry(p: RelayedTelemetry) {
+    if (!this.physics || p.pid === this.myId || p.runId !== this.raceState?.runId) return;
+    const d = this.raceState.drivers.find((x) => x.playerId === p.pid);
+    if (!d) return;
+    const car = this.remote(p.pid, d.name, d.slot);
+    if (p.look) car.setLook(p.look[0], p.look[1], p.look[2]);
+    car.push({ t: p.serverTime, x: p.x, y: p.y, z: p.z, h: p.h, p: p.p, r: p.r });
+    car.distance = p.dist;
+    car.model.setBrakeLights(p.brake > 0.1 || p.handbrake); // so you can see them stop in the dark
+    if (p.sw !== undefined) {
+      const rs = decodeSwitches(p.sw);
+      car.model.setHeadlights(rs.headlights);
+      car.model.setLightPod(rs.pod);
+      car.model.setHazards(rs.hazards);
+    }
+    car.active = !d.result && !d.retired; // finished cars leave the road so nobody piles into them
+    // AI cars simulated by the AI host
+    if (!this.aiLocal && p.pid === this.raceState.aiHost && p.ai) {
+      for (let i = 0; i < p.ai.length / 6; i++) {
+        const a = p.ai.slice(i * 6, i * 6 + 6);
+        const crew = AI_CREWS[i % AI_CREWS.length];
+        const ai = this.remote(`ai:${i}`, crew.name, i);
+        ai.push({ t: p.serverTime, x: a[0], y: a[1], z: a[2], h: a[3], p: 0, r: 0 });
+        ai.distance = a[4];
+        ai.finishMs = a[5] >= 0 ? a[5] : null;
+        ai.active = ai.finishMs === null;
+      }
+    }
+  }
+
+
 
   private resetVehicle() {
     if (!this.vehicle || this.raceState?.phase === 'finished') return;
@@ -342,6 +493,11 @@ export class Game {
   private applyRaceState(state: RaceState) {
     const prev = this.raceState;
     this.raceState = state;
+    for (const d of state.drivers) {
+      const r = this.remotes.get(d.playerId);
+      if (r && (d.result || d.retired)) r.active = false;
+    }
+    const mine = this.myRace(state);
     if (state.phase === 'lobby') {
       this.onExit('lobby');
       return;
@@ -353,12 +509,12 @@ export class Game {
       this.spawn();
       this.lastCountdownShown = -1;
     }
-    this.vehicle.frozen = state.phase !== 'racing';
+    this.vehicle.frozen = state.phase !== 'racing' || !!mine?.result || !!mine?.retired;
     if (state.phase === 'racing' && prev?.phase === 'countdown') {
       this.hud.center('GO!');
       audio.countdown(0);
     }
-    if (state.phase === 'finished' && state.result && !this.resultShown) this.onFinished(state.result);
+    if (mine?.result && !this.resultShown) this.onFinished(mine.result);
   }
 
   private onFinished(r: RaceResult) {
@@ -382,7 +538,6 @@ export class Game {
       position,
       fieldSize: standings.length,
       zones: DAMAGE_KEYS.map((k) => v.damage[k]),
-      wheels: [...v.wheelDamage],
       resets: r.resets,
     });
     this.prize = { runId: state.runId, total: prize.total };
@@ -400,14 +555,17 @@ export class Game {
     );
 
     setTimeout(() => {
-      if (this.disposed || this.raceState?.phase !== 'finished') return;
-      this.showOverlay(
-        resultsOverlay(r, this.stage, [
-          { label: 'Restart stage', primary: true, onClick: () => this.restart() },
-          { label: 'Back to lobby', onClick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) },
-          { label: 'Main menu', onClick: () => this.leave() },
-        ], () => this.standings(r.timeMs), rewards),
-      );
+      if (this.disposed || this.myRace()?.result?.finishedAt !== r.finishedAt) return;
+      const multi = (this.raceState?.drivers.length ?? 1) > 1;
+      const actions = net.isHost
+        ? [
+            { label: multi ? 'Restart for everyone' : 'Restart stage', primary: true, onClick: () => this.restart() },
+            { label: 'Back to lobby', onClick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) },
+            { label: 'Main menu', onClick: () => this.leave() },
+          ]
+        : [{ label: 'Leave rally', onClick: () => this.leave() }];
+      if (!net.isHost) rewards.prepend(h('div', { class: 'setup-desc' }, `${net.member(net.room?.hostId)?.name ?? 'The host'} decides when to restart or go back to the lobby.`));
+      this.showOverlay(resultsOverlay(r, this.stage, actions, () => this.standings(r.timeMs), rewards));
     }, 1200);
   }
 
@@ -422,9 +580,25 @@ export class Game {
       const remaining = Math.max(0, this.stage.finishDistance - a.distance);
       return Math.round(elapsed + remaining / (covered / elapsed));
     };
+    const est = (dist: number) => {
+      const covered = Math.max(1, dist - this.stage.spawnDistance);
+      return Math.round(elapsed + Math.max(0, this.stage.finishDistance - dist) / (covered / elapsed));
+    };
+    const players: Standing[] = (this.raceState?.drivers ?? [])
+      .filter((d) => d.playerId !== this.myId)
+      .map((d) => ({
+        name: d.name,
+        timeMs: d.result?.timeMs ?? (d.retired ? null : project ? est(this.remotes.get(d.playerId)?.distance ?? this.stage.spawnDistance) : null),
+        you: false,
+      }));
+    const remoteAi: Standing[] = [...this.remotes.values()]
+      .filter((r) => r.id.startsWith('ai:'))
+      .map((r) => ({ name: r.name, timeMs: r.finishMs ?? (project ? est(r.distance) : null), you: false }));
     return [
-      { name: net.room?.driver?.name ?? 'You', timeMs: playerMs, you: true },
+      { name: this.myRace()?.name ?? 'You', timeMs: playerMs, you: true },
+      ...players,
       ...this.ai.map((a) => ({ name: a.name, timeMs: a.finishTimeMs ?? (project ? estimate(a) : null), you: false })),
+      ...remoteAi,
     ];
   }
 
@@ -433,7 +607,7 @@ export class Game {
 
   private damageNow() {
     const v = this.vehicle;
-    return { zones: DAMAGE_KEYS.map((k) => v.damage[k]), wheels: v.wheelLost.map((lost, i) => (lost ? 1 : v.wheelDamage[i])) };
+    return { zones: DAMAGE_KEYS.map((k) => v.damage[k]), wheels: [0, 0, 0, 0] };
   }
 
   /** Times of the AI that raced you; any still on the stage get a projected time. */
@@ -485,6 +659,7 @@ export class Game {
   private retire() {
     if (this.retired || this.resultShown) return;
     this.retired = true;
+    void net.retire().catch(() => undefined);
     this.resultShown = true;
     this.vehicle.frozen = true;
     this.finishChampionship(null);
@@ -573,14 +748,14 @@ export class Game {
         'div',
         { class: 'card' },
         h('h2', {}, 'Paused'),
-        h('div', { class: 'sub' }, champRound ? 'Championship round – no restarts. The clock keeps running.' : 'The stage clock keeps running – this is rally.'),
+        h('div', { class: 'sub' }, champRound ? 'Championship round – no restarts. The clock keeps running.' : (this.raceState?.drivers.length ?? 1) > 1 ? 'The stage clock keeps running and the others keep driving.' : 'The stage clock keeps running – this is rally.'),
         h(
           'div',
           { class: 'actions' },
           h('button', { class: 'btn primary', onclick: () => this.closeOverlay() }, 'Resume'),
-          champRound ? null : h('button', { class: 'btn', onclick: () => this.restart() }, 'Restart stage'),
+          champRound || !net.isHost ? null : h('button', { class: 'btn', onclick: () => this.restart() }, (this.raceState?.drivers.length ?? 1) > 1 ? 'Restart for everyone' : 'Restart stage'),
           h('button', { class: 'btn', onclick: () => { this.closeOverlay(); this.resetVehicle(); } }, 'Reset car'),
-          this.ctx.kind === 'quick' ? h('button', { class: 'btn', onclick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) }, 'Back to lobby') : null,
+          this.ctx.kind === 'quick' && net.isHost ? h('button', { class: 'btn', onclick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) }, 'Back to lobby') : null,
           champRound
             ? h('button', { class: 'btn danger', onclick: () => this.retire() }, 'Retire from round (0 pts)')
             : h('button', { class: 'btn danger', onclick: () => void (this.ctx.kind === 'daily' ? this.leaveTo('daily') : this.leave()) }, 'Quit rally'),
@@ -601,6 +776,8 @@ export class Game {
     const v = this.vehicle;
 
     this.input.update(dt, v.telemetry.speed);
+    this.clock += dt;
+    this.updateSwitches(dt);
     const phase = this.raceState?.phase;
 
     // Surface under the car: road surface at this point of the stage, the
@@ -611,54 +788,46 @@ export class Game {
     const river = this.world.terrain.waterAt(p0.x, p0.z);
     v.inWater = !!river && p0.y < river.waterY + 0.6;
 
-    // potholes near each car, and where everyone is (AI overtaking / not ramming)
-    v.nearbyPotholes = this.potholesNear(this.race.distance);
+    // where everyone is (AI overtaking / not ramming)
     const others = [
       { x: p0.x, z: p0.z, speed: Math.abs(v.telemetry.speed) },
+      ...[...this.remotes.values()].filter((r) => r.active).map((r) => {
+        const rp = r.body.translation();
+        return { x: rp.x, z: rp.z, speed: 15 };
+      }),
       ...this.ai.map((a) => {
         const ap = a.vehicle.position;
         return { x: ap.x, z: ap.z, speed: Math.abs(a.vehicle.telemetry.speed) };
       }),
     ];
     this.ai.forEach((a, i) => {
-      a.vehicle.nearbyPotholes = this.potholesNear(a.distance);
-      a.others = others.map((o, j) => ({ ...o, self: j === i + 1 }));
+      const selfIdx = others.length - this.ai.length + i;
+      a.others = others.map((o, j) => ({ ...o, self: j === selfIdx }));
     });
 
     const aiRacing = phase === 'racing' || phase === 'finished';
     const raceMs = this.raceTimeMs();
+    let netT = net.serverNow();
     this.physics.step(dt, (fixed) => {
+      netT += fixed * 1000;
+      for (const r of this.remotes.values()) r.stepBody(netT);
       v.step(fixed, this.input.state);
       for (const a of this.ai) a.step(fixed, aiRacing, phase === 'racing' ? Math.max(0, net.serverNow() - (this.raceState?.startAt ?? 0)) : raceMs);
     });
     v.afterStep();
-    v.syncVisuals();
+    const alpha = this.physics.alpha;
+    v.syncVisuals(alpha);
     for (const a of this.ai) {
       a.afterStep();
-      a.vehicle.syncVisuals();
+      a.vehicle.syncVisuals(alpha);
     }
     v.model.setHeadlightDamage(v.damage.front);
-    // loose wheels bounce away; hubs dragging on the ground throw sparks
-    for (const w of this.looseWheels) {
-      const t = w.body.translation();
-      const r = w.body.rotation();
-      w.mesh.position.set(t.x, t.y, t.z);
-      w.mesh.quaternion.set(r.x, r.y, r.z, r.w);
-      w.age += dt;
+    for (const r of this.remotes.values()) {
+      r.syncVisual(p0);
+      r.model.tick(this.clock);
     }
-    for (const car of [v, ...this.ai.map((a) => a.vehicle)]) {
-      if (Math.abs(car.telemetry.speed) < 3) continue;
-      car.wheelLost.forEach((lost, i) => {
-        if (!lost) return;
-        car.model.wheels[i].updateWorldMatrix(true, false);
-        const hp = new THREE.Vector3().setFromMatrixPosition(car.model.wheels[i].matrixWorld);
-        const lvv = car.body.linvel();
-        for (let k = 0; k < 3; k++) this.sparks.emit(hp.x, hp.y - 0.2, hp.z, -lvv.x * 0.6, -lvv.z * 0.6, 0.35);
-      });
-    }
-    this.sparks.update(dt);
 
-    const pos = v.position.clone();
+    const pos = v.model.root.position.clone();
     this.race.update(pos.x, pos.z, v.telemetry.speed, false);
 
     // Countdown display
@@ -717,8 +886,12 @@ export class Game {
       gear: t.gear,
       handbrake: this.input.state.handbrake && !v.frozen,
       brake: t.brake,
-      wipers: st.wipers,
-      wheelShake: Math.max(v.wheelDamage[0], v.wheelDamage[1], v.wheelLost[0] || v.wheelLost[1] ? 1 : 0) * Math.min(1, Math.abs(t.speed) / 15),
+      sw: this.sw,
+      held: this.held,
+      tripKm: (this.race.distance - this.trip.start) / 1000,
+      watchMs: this.watchMs(),
+      watchRunning: this.trip.running,
+      mapLight: this.trip.mapLight,
       rain: this.weather.rain,
       snow: this.weather.snow,
       speedUnit: st.units,
@@ -731,10 +904,10 @@ export class Game {
     // HUD
     const timeMs = this.raceTimeMs();
     this.hud.updateDash(t.speed, t.gear, t.rpm, v.def.maxRpm, t.damage);
-    this.hud.updateRace(timeMs, this.race.distance, this.race.remaining, this.race.progress01, this.raceState?.checkpointsPassed ?? 0);
+    this.hud.updateRace(timeMs, this.race.distance, this.race.remaining, this.race.progress01, this.myRace()?.checkpointsPassed ?? 0);
     this.hud.tick(dt);
 
-    this.hud.setDamage(v.damage, v.surfaceName.name, v.wheelDamage, v.wheelLost);
+    this.hud.setDamage(v.damage, v.surfaceName.name);
     audio.update(t.rpm, phase === 'racing' ? t.throttle : 0, t.speed, t.slip, v.surfaceName.sound, t.grounded);
 
     // Telemetry at ~20 Hz
@@ -750,7 +923,8 @@ export class Game {
   private raceTimeMs() {
     const s = this.raceState;
     if (!s || !s.startAt) return 0;
-    if (s.phase === 'finished' && s.result) return s.result.timeMs;
+    const mine = this.myRace();
+    if (mine?.result) return mine.result.timeMs;
     if (s.phase !== 'racing') return 0;
     return Math.max(0, net.serverNow() - s.startAt);
   }
@@ -781,13 +955,15 @@ export class Game {
       rpm: Math.round(t.rpm),
       dist: r2(this.race.distance),
       remain: r2(this.race.remaining),
-      cp: this.raceState.checkpointsPassed,
+      cp: this.myRace()?.checkpointsPassed ?? 0,
       nextNote: this.race.nextNote ? this.race.nextNoteIndex : -1,
       toNote: r2(this.race.distanceToNext),
       dmg: r2(t.damage),
       resets: this.resets,
-      dz: [...DAMAGE_KEYS.map((k) => r2(v.damage[k])), ...v.wheelDamage.map((w, i) => (v.wheelLost[i] ? 1 : r2(Math.min(0.99, w))))],
+      dz: DAMAGE_KEYS.map((k) => r2(v.damage[k])),
       prize: this.prize && this.prize.runId === this.raceState.runId ? this.prize.total : undefined,
+      look: this.look,
+      sw: encodeSwitches(this.sw),
       ai: this.ai.flatMap((a) => {
         const ap = a.vehicle.position;
         return [r2(ap.x), r2(ap.y), r2(ap.z), Math.round(a.vehicle.heading * 1000) / 1000, Math.round(a.distance), a.finishTimeMs ?? -1];
@@ -811,7 +987,10 @@ export class Game {
     this.input.dispose();
     audio.stopDriving();
     this.vehicle?.model.dispose();
-    this.clearLooseWheels();
+    this.remotes.forEach((r) => r.dispose());
+    this.picker?.dispose();
+    audio.crank(false);
+    audio.horn(false);
     this.ai.forEach((a) => {
       a.vehicle.model.dispose();
       a.dispose();

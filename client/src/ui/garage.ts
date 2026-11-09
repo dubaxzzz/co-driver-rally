@@ -33,12 +33,12 @@ export function garageScreen(back: () => void): { el: HTMLElement; dispose: () =
   scene.add(rim);
   const floor = new THREE.Mesh(new THREE.CircleGeometry(5, 48), new THREE.MeshStandardMaterial({ color: 0x15181c, roughness: 0.6, metalness: 0.2 }));
   floor.rotation.x = -Math.PI / 2;
-  floor.position.y = -0.47;
+  floor.position.y = -0.69;
   floor.receiveShadow = true;
   scene.add(floor);
   const ring = new THREE.Mesh(new THREE.RingGeometry(4.6, 4.75, 64), new THREE.MeshBasicMaterial({ color: 0xff4b1f }));
   ring.rotation.x = -Math.PI / 2;
-  ring.position.y = -0.46;
+  ring.position.y = -0.68;
   scene.add(ring);
   let car: CarModel | null = null;
   const showCar = (def: VehicleDef) => {

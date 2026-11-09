@@ -11,7 +11,7 @@ export const UPGRADES: Array<{ kind: UpgradeKind; name: string; effect: string; 
   { kind: 'engine', name: 'Engine', effect: '+8% power per level', baseCost: 6000 },
   { kind: 'gearbox', name: 'Gearbox', effect: 'Quicker, shorter gear changes', baseCost: 4000 },
   { kind: 'tyres', name: 'Tyres', effect: '+5% grip per level', baseCost: 3000 },
-  { kind: 'suspension', name: 'Suspension', effect: 'Steadier over bumps; wheels take less damage', baseCost: 4500 },
+  { kind: 'suspension', name: 'Suspension', effect: 'Steadier over bumps and landings', baseCost: 4500 },
   { kind: 'brakes', name: 'Brakes', effect: '+12% stopping power per level', baseCost: 3000 },
   { kind: 'armour', name: 'Armour', effect: 'Less crash damage – smaller repair bills', baseCost: 3500 },
 ];
@@ -53,9 +53,10 @@ export interface PrizeInput {
   /** 1-based finishing position and size of the field (1 = no opponents). */
   position: number;
   fieldSize: number;
-  /** Damage 0..1 by zone (front, left, right, rear, windscreen, engine) and by wheel. */
+  /** Damage 0..1 by zone (front, left, right, rear, windscreen, engine). */
   zones: number[];
-  wheels: number[];
+  /** @deprecated wheels no longer take damage – ignored. */
+  wheels?: number[];
   resets: number;
   /** Championship rounds pay repairs at the service park instead. */
   includeRepairs?: boolean;
@@ -67,7 +68,7 @@ export interface PrizeLine {
 }
 
 /** Damage repair cost – also used by the service park. */
-export function repairCost(zones: number[], wheels: number[]): number {
+export function repairCost(zones: number[], wheels: number[] = []): number {
   const z = zones.reduce((a, b) => a + b, 0) * 1200;
   const w = wheels.reduce((a, b) => a + Math.min(1, b), 0) * 700 + wheels.filter((b) => b >= 1).length * 1200;
   return Math.round((z + w) / 10) * 10;
@@ -86,9 +87,9 @@ export function computePrize(p: PrizeInput): { lines: PrizeLine[]; total: number
     const amount = Math.round((base * bonus * SKILL_PAY[p.aiSkill]) / 10) * 10;
     lines.push({ label: `${ORDINAL[p.position - 1] ?? `${p.position}th`} of ${p.fieldSize} (${p.aiSkill} field)`, amount });
   }
-  const damageTotal = p.zones.reduce((a, b) => a + b, 0) + p.wheels.reduce((a, b) => a + b, 0);
+  const damageTotal = p.zones.reduce((a, b) => a + b, 0);
   if (p.resets === 0 && damageTotal < 0.1) lines.push({ label: 'Clean run', amount: 1500 });
-  const repairs = p.includeRepairs === false ? 0 : repairCost(p.zones, p.wheels);
+  const repairs = p.includeRepairs === false ? 0 : repairCost(p.zones);
   if (repairs > 0) lines.push({ label: 'Repair bill', amount: -repairs });
   const total = Math.max(0, lines.reduce((a, l) => a + l.amount, 0));
   return { lines, total };

@@ -1,6 +1,8 @@
 import * as THREE from 'three';
-import type { PaintOption } from '@cdr/shared';
+import { type CarModelId, type CarSwitches, type PaintOption } from '@cdr/shared';
 import { noDamage, type DamageZones } from './Vehicle';
+import { buildDashboard, type Dashboard } from './Dashboards';
+import type { Control, ControlId } from './Controls';
 
 export type Seat = 'driver' | 'navigator';
 
@@ -18,7 +20,15 @@ export interface CockpitState {
   gear: number;
   handbrake: boolean;
   brake: number;
-  wipers: 0 | 1 | 2;
+  /** The car's switches (wipers, lights, ignition…). */
+  sw: CarSwitches;
+  /** Controls being held down right now (push buttons show pressed). */
+  held?: ReadonlySet<ControlId>;
+  /** Navigator-side trip computer + map light (local to whoever is looking). */
+  tripKm?: number;
+  watchMs?: number;
+  watchRunning?: boolean;
+  mapLight?: boolean;
   rain: number; // 0..1
   snow: number; // 0..1 (flakes settle on the glass)
   speedUnit: 'kmh' | 'mph';
@@ -60,9 +70,6 @@ export class Cockpit {
   private wsCanvas: HTMLCanvasElement;
   private wsCtx: CanvasRenderingContext2D;
   private wsTex: THREE.CanvasTexture;
-  private clusterCanvas: HTMLCanvasElement;
-  private clusterTex: THREE.CanvasTexture;
-  private clusterTimer = 0;
   private gearLever = new THREE.Group();
   private gearKick = 0;
   private gearKickVel = 0;
@@ -82,8 +89,18 @@ export class Cockpit {
   private crackTex: THREE.CanvasTexture;
   private cracksDrawn = 0;
   private lastDamage: DamageZones = noDamage();
+  private dash: Dashboard;
+  /** Every clickable control (dashboard switches, horn on the wheel hub). */
+  readonly controls: Control[] = [];
+  private mistCanvas: HTMLCanvasElement;
+  private mistTex: THREE.CanvasTexture;
+  private mist = 0;
+  private mistDrawn = -1;
+  private glareMat: THREE.MeshBasicMaterial;
+  private cabinLight: THREE.PointLight;
+  private mapLight: THREE.PointLight;
 
-  constructor(paint: PaintOption, readonly seat: Seat) {
+  constructor(paint: PaintOption, readonly seat: Seat, readonly model: CarModelId = 'kestrel') {
     const mat = (o: THREE.MeshStandardMaterialParameters) => this.track(new THREE.MeshStandardMaterial(o));
     const paintMat = mat({ color: paint.body, metalness: 0.4, roughness: 0.4 });
     const plastic = mat({ color: 0x3a3d43, roughness: 0.8 });
@@ -121,30 +138,14 @@ export class Cockpit {
     this.bonnetCrease = box(1.5, 0.05, 0.5, paintMat, 0, 0.06, 1.0, this.bonnetPivot);
     this.bonnetCrease.rotation.x = -0.5;
     this.bonnetCrease.visible = false;
-    // ---- Dashboard ----
-    box(1.62, 0.18, 0.38, plastic, 0, 0.34, 0.62);
-    const dashTop = box(1.62, 0.04, 0.32, darkPlastic, 0, 0.44, 0.6);
-    dashTop.rotation.x = -0.12;
-    box(0.44, 0.09, 0.16, darkPlastic, this.dx, 0.48, 0.5); // cluster hood
-    box(0.3, 0.2, 0.25, plastic, 0, 0.24, 0.42); // centre console
+    // ---- Dashboard (different for every car, with clickable switches) ----
+    this.dash = buildDashboard(model, this.group, (o) => this.track(o));
+    this.controls.push(...this.dash.controls);
     // floor, firewall and transmission tunnel (no seeing the road through the footwell)
     box(1.7, 0.04, 2.1, darkPlastic, 0, -0.12, -0.15);
     box(1.7, 0.6, 0.04, darkPlastic, 0, 0.14, 0.82);
     box(0.28, 0.18, 1.6, plastic, 0, -0.03, -0.1);
-    // switch panel lights (little glowing dots)
-    const ledMat = this.track(new THREE.MeshBasicMaterial({ color: 0xff7a1a }));
-    for (let i = 0; i < 5; i++) box(0.025, 0.012, 0.01, ledMat, -0.1 + i * 0.05, 0.31, 0.295);
-
-    // Instrument cluster (live canvas texture)
-    this.clusterCanvas = document.createElement('canvas');
-    this.clusterCanvas.width = 256;
-    this.clusterCanvas.height = 96;
-    this.clusterTex = this.track(new THREE.CanvasTexture(this.clusterCanvas));
-    this.clusterTex.colorSpace = THREE.SRGBColorSpace;
-    const cluster = new THREE.Mesh(this.track(new THREE.PlaneGeometry(0.36, 0.135)), this.track(new THREE.MeshBasicMaterial({ map: this.clusterTex })));
-    cluster.position.set(this.dx, 0.455, 0.44);
-    cluster.rotation.set(0.35, Math.PI, 0); // face the driver, tilted up
-    this.group.add(cluster);
+    box(0.3, 0.16, 0.25, plastic, 0, 0.18, 0.42); // centre console
 
     // ---- Body shell: pillars, roof, doors ----
     for (const sx of [-1, 1]) {
@@ -157,8 +158,6 @@ export class Cockpit {
     }
     box(1.48, 0.06, 0.08, darkPlastic, 0, 0.87, 0.45); // header above windscreen
     box(1.46, 0.025, 1.4, plastic, 0, 0.9, -0.22); // headliner
-    box(0.24, 0.07, 0.025, darkPlastic, 0, 0.8, 0.42); // rear-view mirror
-    box(0.22, 0.055, 0.005, this.track(new THREE.MeshStandardMaterial({ color: 0x223040, metalness: 0.9, roughness: 0.15 })), 0, 0.8, 0.405);
 
     // ---- Roll cage ----
     for (const sx of [-1, 1]) {
@@ -187,28 +186,69 @@ export class Cockpit {
     wheelTilt.rotation.x = WHEEL_TILT;
     wheelTilt.add(this.wheelSpin);
     this.group.add(wheelTilt);
-    const rim = new THREE.Mesh(this.track(new THREE.TorusGeometry(WHEEL_RADIUS, 0.017, 8, 28)), glove);
-    this.wheelSpin.add(rim);
-    for (const a of [0, Math.PI * 0.75, Math.PI * 1.25]) {
-      const spoke = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.03, WHEEL_RADIUS, 0.012)), plastic);
-      spoke.position.set(Math.sin(a) * WHEEL_RADIUS * 0.5, Math.cos(a) * WHEEL_RADIUS * 0.5, 0);
+    const ws = this.dash.wheelStyle;
+    const rimMat = model === 'sparrow' ? mat({ color: 0x5a3a22, roughness: 0.55 }) : glove; // wood rim on the classic
+    const rimR = ws === 'two' ? WHEEL_RADIUS * 1.1 : WHEEL_RADIUS;
+    if (ws === 'flat') {
+      // flat-bottomed competition wheel (D-shape)
+      const shape = new THREE.Shape();
+      shape.absarc(0, 0, rimR, -0.55, Math.PI + 0.55, false);
+      const path = new THREE.Path(shape.getPoints(30));
+      const pts = path.getPoints(40).map((p) => new THREE.Vector3(p.x, p.y, 0));
+      pts.push(pts[0].clone());
+      const curve = new THREE.CatmullRomCurve3(pts, true);
+      this.wheelSpin.add(new THREE.Mesh(this.track(new THREE.TubeGeometry(curve, 60, 0.018, 8, true)), rimMat));
+    } else {
+      this.wheelSpin.add(new THREE.Mesh(this.track(new THREE.TorusGeometry(rimR, ws === 'two' ? 0.02 : 0.017, 8, 28)), rimMat));
+    }
+    const spokeAngles = ws === 'two' ? [Math.PI / 2, -Math.PI / 2] : ws === 'four' ? [Math.PI * 0.3, -Math.PI * 0.3, Math.PI * 0.7, -Math.PI * 0.7] : [Math.PI / 2, -Math.PI / 2, Math.PI];
+    for (const a of spokeAngles) {
+      const spoke = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.03, rimR, 0.012)), model === 'sparrow' ? mat({ color: 0xc0c6cc, metalness: 0.9, roughness: 0.25 }) : plastic);
+      spoke.position.set(Math.sin(a) * rimR * 0.5, Math.cos(a) * rimR * 0.5, 0);
       spoke.rotation.z = -a;
       this.wheelSpin.add(spoke);
     }
     const marker = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.03, 0.035, 0.022)), this.track(new THREE.MeshStandardMaterial({ color: 0xffc400 })));
-    marker.position.set(0, WHEEL_RADIUS, 0);
+    marker.position.set(0, rimR, 0);
     this.wheelSpin.add(marker);
-    const hub = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.045, 0.045, 0.04, 14)), plastic);
+    // hub = HORN (press and hold)
+    const hubMat = mat({ color: model === 'vortex' ? 0x0a0c0e : 0x2a2c30, roughness: 0.5, metalness: 0.2 });
+    const hub = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.05, 0.05, 0.035, 18)), hubMat);
     hub.rotation.x = Math.PI / 2;
+    hub.position.z = -0.012;
     this.wheelSpin.add(hub);
+    const hornIcon = new THREE.Mesh(this.track(new THREE.CircleGeometry(0.02, 16)), this.track(new THREE.MeshBasicMaterial({ color: 0x666a70 })));
+    hornIcon.position.z = -0.031;
+    hornIcon.rotation.y = Math.PI;
+    this.wheelSpin.add(hornIcon);
+    if (model === 'vortex') {
+      // mini display + coloured buttons on the wheel
+      const disp = new THREE.Mesh(this.track(new THREE.PlaneGeometry(0.07, 0.03)), this.track(new THREE.MeshBasicMaterial({ color: 0x0a3a50 })));
+      disp.position.set(0, 0.075, -0.012);
+      disp.rotation.y = Math.PI;
+      this.wheelSpin.add(disp);
+      [0xff3a3a, 0x37ff8b, 0xffc400, 0x00c8ff].forEach((c, i) => {
+        const b = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.009, 0.009, 0.01, 10)), mat({ color: c, emissive: c, emissiveIntensity: 0.3 }));
+        b.rotation.x = Math.PI / 2;
+        b.position.set((i < 2 ? 1 : -1) * 0.085, i % 2 ? -0.02 : 0.02, -0.012);
+        this.wheelSpin.add(b);
+      });
+    }
+    this.controls.push({
+      id: 'horn',
+      label: 'HORN',
+      hit: [hub, hornIcon],
+      set: (_v, held) => (hub.position.z = held ? -0.004 : -0.012),
+      hover: (on) => hubMat.emissive.setHex(on ? 0x553311 : 0x000000),
+    });
     tube(v(this.dx, 0.36, 0.6), v(this.dx, WHEEL_CENTER_Y - 0.01, WHEEL_CENTER_Z + 0.03), 0.03, darkPlastic); // column
 
     // ---- Gear lever (sequential) & hydraulic handbrake ----
-    this.gearLever.position.set(0.1, 0.32, 0.12);
+    this.gearLever.position.set(0.13, 0.2, -0.02);
     this.group.add(this.gearLever);
-    tube(v(0, 0, 0), v(0, 0.26, -0.05), 0.012, cage, this.gearLever);
-    const knob = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.03, 10, 8)), darkPlastic);
-    knob.position.set(0, 0.27, -0.055);
+    tube(v(0, 0, 0), v(0, 0.2, -0.04), 0.011, cage, this.gearLever);
+    const knob = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.026, 10, 8)), darkPlastic);
+    knob.position.set(0, 0.21, -0.045);
     this.gearLever.add(knob);
     this.handbrakeLever.position.set(0.15, 0.16, 0.0);
     this.group.add(this.handbrakeLever);
@@ -296,6 +336,21 @@ export class Cockpit {
     crackGlass.position.z = 0.004;
     crackGlass.renderOrder = 11;
     wsInner.add(crackGlass);
+    // condensation on the inside of the glass – the DEMISTER clears it
+    this.mistCanvas = document.createElement('canvas');
+    this.mistCanvas.width = 256;
+    this.mistCanvas.height = Math.round((256 * WS_HEIGHT) / WS_WIDTH);
+    this.mistTex = this.track(new THREE.CanvasTexture(this.mistCanvas));
+    const mistGlass = new THREE.Mesh(this.track(new THREE.PlaneGeometry(WS_WIDTH, WS_HEIGHT)), this.track(new THREE.MeshBasicMaterial({ map: this.mistTex, transparent: true, depthWrite: false })));
+    mistGlass.position.z = 0.008;
+    mistGlass.renderOrder = 12;
+    wsInner.add(mistGlass);
+    // cabin-light reflection: a warm haze on the glass when the interior light is on
+    this.glareMat = this.track(new THREE.MeshBasicMaterial({ color: 0xffe2b8, transparent: true, opacity: 0, depthWrite: false }));
+    const glare = new THREE.Mesh(this.track(new THREE.PlaneGeometry(WS_WIDTH, WS_HEIGHT)), this.glareMat);
+    glare.position.z = 0.01;
+    glare.renderOrder = 13;
+    wsInner.add(glare);
     const scale = WS_WIDTH / CANVAS_W;
     for (const px of WIPER_PIVOTS) {
       const arm = new THREE.Group();
@@ -314,9 +369,12 @@ export class Cockpit {
     const glow = new THREE.PointLight(0xffc49a, 2.4, 2.6, 1.1);
     glow.position.set(0, 0.62, 0.2);
     this.group.add(glow);
-    const cabin = new THREE.PointLight(0x9fb4d8, 0.9, 2.4, 1.2); // faint map light
-    cabin.position.set(0, 0.74, -0.2); // low enough to light the roof lining too
-    this.group.add(cabin);
+    this.cabinLight = new THREE.PointLight(0xffe6c4, 0.9, 2.4, 1.2); // CABIN switch brightens it
+    this.cabinLight.position.set(0, 0.74, -0.2); // low enough to light the roof lining too
+    this.group.add(this.cabinLight);
+    this.mapLight = new THREE.PointLight(0xfff0d0, 0, 1.2, 1.4); // navigator's map light
+    this.mapLight.position.set(-this.dx, 0.8, 0.0);
+    this.group.add(this.mapLight);
   }
 
   private track<T extends { dispose(): void }>(o: T) {
@@ -363,22 +421,72 @@ export class Cockpit {
 
     this.updateDamage(s.damage);
     this.updateWindscreen(dt, s);
-    this.clusterTimer -= dt;
-    if (this.clusterTimer <= 0) {
-      this.clusterTimer = 1 / 15;
-      this.drawCluster(s);
+    this.updateMist(dt, s);
+    const sw = s.sw;
+    this.dash.update({
+      speed: s.speed,
+      rpm: sw.engine ? s.rpm : 0,
+      maxRpm: s.maxRpm,
+      gear: s.gear,
+      unit: s.speedUnit,
+      sw,
+      engineDamage: s.damage.engine,
+      tripKm: s.tripKm ?? 0,
+      watchMs: s.watchMs ?? 0,
+      watchRunning: !!s.watchRunning,
+      time: this.time,
+    });
+    const held = s.held;
+    for (const c of this.controls) {
+      const v: number | boolean =
+        c.id === 'wipers' ? sw.wipers
+        : c.id === 'start' ? sw.engine
+        : c.id === 'horn' ? sw.horn
+        : c.id === 'watch' ? !!s.watchRunning
+        : c.id === 'mapLight' ? !!s.mapLight
+        : c.id === 'trip' || c.id === 'watchReset' ? false
+        : !!sw[c.id as keyof CarSwitches];
+      c.set(v, held?.has(c.id) || (c.id === 'horn' && sw.horn));
     }
+    // cabin light: bright interior, warm reflection on the glass (harder to see out at night)
+    this.cabinLight.intensity = sw.interior ? 4.5 : 0.9;
+    this.glareMat.opacity += ((sw.interior ? 0.13 : 0) - this.glareMat.opacity) * Math.min(1, dt * 6);
+    this.mapLight.intensity = s.mapLight ? 3 : 0;
+  }
+
+  /** Inside condensation builds up in wet/cold weather; the demister clears it from the bottom up. */
+  private updateMist(dt: number, s: CockpitState) {
+    const wet = Math.max(s.rain, s.snow);
+    const target = s.sw.demister ? 0 : 0.15 + wet * 0.55;
+    const rate = s.sw.demister ? 0.18 : 0.012 + wet * 0.01;
+    this.mist += Math.sign(target - this.mist) * Math.min(Math.abs(target - this.mist), rate * dt);
+    const q = Math.round(this.mist * 60);
+    if (q === this.mistDrawn) return;
+    this.mistDrawn = q;
+    const g = this.mistCanvas.getContext('2d')!;
+    const W = this.mistCanvas.width, H = this.mistCanvas.height;
+    g.clearRect(0, 0, W, H);
+    if (this.mist < 0.01) return void (this.mistTex.needsUpdate = true);
+    // fogged glass, clearer at the bottom where the demister vents blow
+    const grad = g.createLinearGradient(0, H, 0, 0);
+    grad.addColorStop(0, `rgba(205,212,220,${this.mist * 0.55})`);
+    grad.addColorStop(0.5, `rgba(210,216,224,${this.mist * 0.85})`);
+    grad.addColorStop(1, `rgba(215,220,228,${this.mist})`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, W, H);
+    this.mistTex.needsUpdate = true;
   }
 
   private updateWindscreen(dt: number, s: CockpitState) {
     const g = this.wsCtx;
     const W = CANVAS_W, H = CANVAS_H;
     // Wipers: off finishes its stroke and parks
-    const period = s.wipers === 2 ? 0.85 : 1.5;
+    const wipers = s.sw.wipers;
+    const period = wipers === 2 ? 0.85 : 1.5;
     const prevAngle = this.wiperAngle;
-    if (s.wipers > 0 || this.wiperPhase % 1 > 0.001) {
+    if (wipers > 0 || this.wiperPhase % 1 > 0.001) {
       const next = this.wiperPhase + dt / period;
-      this.wiperPhase = s.wipers === 0 && Math.floor(next) > Math.floor(this.wiperPhase) ? Math.floor(next) : next;
+      this.wiperPhase = wipers === 0 && Math.floor(next) > Math.floor(this.wiperPhase) ? Math.floor(next) : next;
     }
     this.wiperAngle = (WIPER_SWEEP * (1 - Math.cos(this.wiperPhase * Math.PI * 2))) / 2;
     this.wiperArms.forEach((a) => (a.rotation.z = this.wiperAngle));
@@ -454,38 +562,6 @@ export class Cockpit {
       this.cracksDrawn = target;
     }
     this.lastDamage = { ...d };
-  }
-
-  private drawCluster(s: CockpitState) {
-    const g = this.clusterCanvas.getContext('2d')!;
-    const W = 256, H = 96;
-    g.fillStyle = '#050608';
-    g.fillRect(0, 0, W, H);
-    // shift-light bar
-    const n = 20;
-    const lit = Math.round((s.rpm / s.maxRpm) * n);
-    for (let i = 0; i < n; i++) {
-      g.fillStyle = i < lit ? (i >= 17 ? '#ff2a3a' : i >= 13 ? '#ffc400' : '#2fd27a') : '#1a1d22';
-      g.fillRect(8 + i * 12, 8, 9, 12);
-    }
-    g.textAlign = 'center';
-    g.fillStyle = '#ff8a2a';
-    g.font = 'bold 52px sans-serif';
-    g.fillText(s.gear === -1 ? 'R' : s.gear === 0 ? 'N' : String(s.gear), 50, 82);
-    const sp = Math.abs(s.speed) * 3.6 * (s.speedUnit === 'mph' ? 0.621371 : 1);
-    g.fillStyle = '#e8eef4';
-    g.font = 'bold 44px monospace';
-    g.fillText(String(Math.round(sp)), 170, 78);
-    g.font = 'bold 12px sans-serif';
-    g.fillStyle = '#7c8794';
-    g.fillText(s.speedUnit === 'mph' ? 'MPH' : 'KM/H', 230, 86);
-    g.fillText(`${Math.round(s.rpm / 100) * 100} RPM`, 170, 34);
-    if (s.damage.engine > 0.4) {
-      g.fillStyle = Math.floor(performance.now() / 400) % 2 ? '#ff2a3a' : '#7a1018';
-      g.font = 'bold 13px sans-serif';
-      g.fillText('ENGINE', 50, 34);
-    }
-    this.clusterTex.needsUpdate = true;
   }
 
   dispose() {

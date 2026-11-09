@@ -13,7 +13,14 @@ export const TELEMETRY_MAX_PER_SECOND = 40;
 /** Navigator renders this far in the past so it can interpolate between packets. */
 export const INTERPOLATION_DELAY_MS = 120;
 
-export const COUNTDOWN_MS = 3000;
+/** Pre-stage: time to do the cockpit checks (ignition, start, lights) before GO. */
+export const COUNTDOWN_MS = 10000;
+/** Up to four people per lobby: any mix of drivers and navigators. */
+export const MAX_MEMBERS = 4;
+export const MAX_DRIVERS = 4;
+/** Grid: two cars side by side, rows this far apart (metres). */
+export const GRID_ROW_GAP_M = 10;
+export const GRID_SIDE_OFFSET_M = 2.1;
 export const NAV_CALL_MAX_PER_SECOND = 4;
 export const CUSTOM_MESSAGE_MAX_LENGTH = 40;
 export const PLAYER_NAME_MAX_LENGTH = 16;

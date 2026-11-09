@@ -31,6 +31,10 @@ export function validateConfig(p: unknown): Partial<RallyConfig> | null {
     if (typeof p.daily !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(p.daily)) return null;
     out.daily = p.daily;
   }
+  if (p.soloEvent !== undefined) {
+    if (typeof p.soloEvent !== 'boolean') return null;
+    out.soloEvent = p.soloEvent;
+  }
   if (p.aiSkill !== undefined) {
     if (!AI_SKILLS.includes(p.aiSkill as AiSkill)) return null;
     out.aiSkill = p.aiSkill as AiSkill;
@@ -105,6 +109,15 @@ export function validateTelemetry(p: unknown): TelemetryPacket | null {
     const dz = p.dz;
     if (!Array.isArray(dz) || (dz.length !== 6 && dz.length !== 10) || !dz.every((n) => isNum(n, 0, 1))) return null;
     out.dz = dz;
+  }
+  if (p.sw !== undefined) {
+    if (!isNum(p.sw, 0, 1023) || !Number.isInteger(p.sw)) return null;
+    out.sw = p.sw;
+  }
+  if (p.look !== undefined) {
+    const look = p.look;
+    if (!Array.isArray(look) || look.length !== 3 || !look.every((n) => isNum(n, 0, 0xffffff) && Number.isInteger(n))) return null;
+    out.look = look;
   }
   if (p.prize !== undefined) {
     if (!isNum(p.prize, 0, 1e7)) return null;

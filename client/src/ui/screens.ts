@@ -1,5 +1,4 @@
 import {
-  DEFAULT_STAGE_ID,
   MAX_AI,
   ROOM_CODE_LENGTH,
   STAGE_DEFS,
@@ -14,7 +13,7 @@ import { net, type NetError } from '../multiplayer/NetClient';
 import { MapView } from '../navigator/MapView';
 import { formatTime, settings, type Settings } from '../settings';
 import { career, money } from '../career';
-import { bestKey, TEAMS, dailyChallenge, dailyKey } from '@cdr/shared';
+import { bestKey, TEAMS, dailyChallenge, dailyKey, vehicleById } from '@cdr/shared';
 import { champ } from '../championship/state';
 import { h, toast } from './dom';
 
@@ -34,8 +33,7 @@ function serverStatusLine() {
   const update = () => {
     const s = net.status;
     dot.className = `status-dot ${s === 'connected' ? 'ok' : s === 'disconnected' ? 'bad' : 'warn'}`;
-    const what = net.mode === 'p2p' ? 'Online' : 'Server online';
-    text.textContent = s === 'connected' ? what : s === 'disconnected' ? (net.mode === 'p2p' ? 'Not connected – retrying…' : 'Server offline') : 'Connecting…';
+    text.textContent = s === 'connected' ? 'Server online' : s === 'disconnected' ? 'Server offline' : 'Connecting…';
     text.title = net.lastError ?? '';
     detail.textContent = s !== 'connected' && net.lastError ? net.lastError : '';
   };
@@ -51,58 +49,84 @@ function playerName(fallback: string) {
 // ------------------------------------------------------------------ menu
 export function menuScreen(nav: Nav): Screen {
   const status = serverStatusLine();
-  const stage = getStage(settings.get().rally.stageId) ?? getStage(DEFAULT_STAGE_ID)!;
-  const preview = new MapView(stage);
-  preview.mode = 'full';
-  let raf = 0;
-  const draw = () => {
-    preview.draw(null, 0);
-    raf = requestAnimationFrame(draw);
-  };
+  const car = career.activeDef();
+  const save = career.get();
+  const ch = dailyChallenge(dailyKey());
+  const dStage = getStage(ch.stageId);
+  const myDaily = save.daily.date === ch.date ? save.daily : null;
+  const cs = champ.get();
 
-  const btn = (label: string, sub: string, onClick: (b: HTMLButtonElement) => void, primary = false, delay = 0) => {
-    const b = h('button', { class: `menu-btn ${primary ? 'primary' : ''}` }, h('span', {}, label), h('small', {}, sub));
-    b.style.animationDelay = `${delay}ms`;
-    b.onclick = () => onClick(b);
+  const navBtn = (label: string, sub: string, route: string, primary = false, i = 0, id = '') => {
+    const b = h('button', { class: `mm-btn ${primary ? 'primary' : ''}`, 'data-testid': id, style: `animation-delay:${120 + i * 70}ms` },
+      h('span', { class: 'mm-btn-label' }, label),
+      h('span', { class: 'mm-btn-sub' }, sub),
+      h('span', { class: 'mm-btn-arrow' }, '→'),
+    );
+    b.onclick = () => nav.go(route);
     return b;
   };
+  const stat = (name: string, v: number) =>
+    h('div', { class: 'mm-stat' }, h('span', {}, name), h('div', { class: 'mm-bar' }, h('i', { style: `width:${v * 10}%` })));
+  const card = (k: string, title: string, body: Array<Node | string | null>, route: string, i: number, id: string) => {
+    const c = h('button', { class: 'mm-card', 'data-testid': id, style: `animation-delay:${360 + i * 90}ms` }, h('div', { class: 'mm-card-k' }, k), h('div', { class: 'mm-card-t' }, title), ...body);
+    c.onclick = () => nav.go(route);
+    return c;
+  };
 
+  // quick join with a code
+  const code = h('input', { class: 'mm-code', maxlength: ROOM_CODE_LENGTH, placeholder: 'CODE', autocomplete: 'off', spellcheck: 'false', 'data-testid': 'menu-code' }) as HTMLInputElement;
+  code.addEventListener('input', () => (code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, '')));
+  const join = () => code.value.length === ROOM_CODE_LENGTH ? nav.go(`join/${code.value}`) : code.focus();
+  code.addEventListener('keydown', (e) => e.key === 'Enter' && join());
+  const joinBtn = h('button', { class: 'mm-join-btn', onclick: join }, 'Join');
+
+  const medal = myDaily?.medal && myDaily.medal !== 'none' ? `${myDaily.medal === 'gold' ? '🥇' : myDaily.medal === 'silver' ? '🥈' : '🥉'} ${myDaily.medal}` : myDaily?.finished ? 'No medal yet' : 'Not driven yet';
   const el = h(
     'div',
-    { class: 'screen' },
-    h(
-      'div',
-      { class: 'menu' },
-      h(
-        'div',
-        { class: 'menu-left' },
-        h('div', { class: 'brand' }, h('span', { class: 'co' }, 'CO-'), 'DRIVER', h('br'), 'RALLY'),
-        h('div', { class: 'tagline' }, 'One drives · One navigates'),
-        btn('Play', 'Solo · create a lobby · join a lobby', () => nav.go('play'), true, 0),
-        btn('Garage', 'Your cars, dealership, upgrades', () => nav.go('garage'), false, 80),
-        btn('Settings', 'Audio, graphics, controls', () => nav.go('settings'), false, 160),
-        h('div', { class: 'menu-bank' }, h('span', {}, 'BANK'), h('span', { class: 'money-chip', 'data-testid': 'menu-money' }, money(career.get().money))),
-        h('div', { style: 'margin-top:18px;color:var(--muted);font-size:13px;letter-spacing:.08em', 'data-testid': 'conn-status' }, status.el),
-      ),
-      h(
-        'div',
-        { class: 'menu-right' },
-        h('div', { class: 'menu-hero' }, h('div', { class: 'stripe', style: 'top:38%;left:0;width:60%' }), h('div', { class: 'stripe', style: 'top:41%;left:10%;width:40%;animation-delay:1.2s' })),
-        h(
-          'div',
-          { class: 'menu-stage-card' },
-          h('div', { class: 'label' }, `${STAGE_DEFS.length} STAGES · ${WEATHER[settings.get().rally.weather].name.toUpperCase()}`),
-          h('h3', {}, stage.def.name),
-          h('div', { class: 'meta' }, `${stage.def.location} · ${stage.def.surface} · ${((stage.finishDistance - stage.startDistance) / 1000).toFixed(2)} km`, h('br'), `${stage.def.description}`),
-          preview.canvas,
-        ),
+    { class: 'screen mm' },
+    h('div', { class: 'mm-vignette' }),
+    h('header', { class: 'mm-top' },
+      h('div', { class: 'mm-logo' }, h('b', {}, 'CO-'), 'DRIVER'),
+      h('div', { class: 'mm-top-right' },
+        h('span', { class: 'mm-status', 'data-testid': 'conn-status' }, status.el),
+        h('span', { class: 'mm-bank', 'data-testid': 'menu-money' }, money(save.money)),
       ),
     ),
+    h('main', { class: 'mm-main' },
+      h('div', { class: 'mm-hero' },
+        h('div', { class: 'mm-kicker' }, 'Night stage · Rain · Zero visibility'),
+        h('h1', { class: 'mm-title' }, h('span', {}, 'CO-DRIVER'), h('span', { class: 'outline' }, 'RALLY')),
+        h('p', { class: 'mm-tag' }, 'You can barely see the road. Your navigator can. Drive blind, trust their voice.'),
+      ),
+      h('nav', { class: 'mm-nav' },
+        navBtn('Play', 'Championship · daily · lobbies', 'play', true, 0, 'menu-play'),
+        navBtn('Garage', 'Cars · upgrades · paint', 'garage', false, 1, 'menu-garage'),
+        navBtn('Settings', 'Audio · graphics · controls', 'settings', false, 2, 'menu-settings'),
+      ),
+      h('div', { class: 'mm-join', style: 'animation-delay:330ms' }, h('span', { class: 'mm-join-k' }, 'Got a code?'), code, joinBtn),
+    ),
+    h('aside', { class: 'mm-cards' },
+      card('YOUR CAR', car.name, [stat('Power', car.stats.power), stat('Handling', car.stats.handling), stat('Braking', car.stats.braking)], 'garage', 0, 'menu-car'),
+      card(`DAILY · ${ch.date}`, dStage?.def.name ?? 'Daily challenge', [h('div', { class: 'mm-card-m' }, `${WEATHER[ch.weather].name} · ${vehicleById(ch.carId).name}`), h('div', { class: 'mm-card-m strong' }, medal)], 'daily', 1, 'menu-daily'),
+      card('CHAMPIONSHIP', cs ? `Season ${cs.season}` : 'Start your career', [h('div', { class: 'mm-card-m' }, cs ? (cs.round >= cs.schedule.length ? 'Season complete' : `Round ${cs.round + 1}/${cs.schedule.length} · ${TEAMS[cs.team].name}`) : 'Six rounds · teams · contracts'), cs ? h('div', { class: 'mm-card-m strong' }, `P${champ.standingsPosition()} · ${cs.points.player ?? 0} pts`) : null], 'championship', 2, 'menu-champ'),
+    ),
   );
-  raf = requestAnimationFrame(draw);
-  // draw once a second is plenty for a static preview
-  const stopper = setTimeout(() => cancelAnimationFrame(raf), 1500);
-  return { el, dispose: () => { status.dispose(); cancelAnimationFrame(raf); clearTimeout(stopper); } };
+
+  // 3D backdrop loads after the menu is on screen (Three.js is a big download)
+  let scene: { dispose(): void } | null = null;
+  let disposed = false;
+  requestAnimationFrame(() =>
+    void import('./menuScene').then(({ MenuScene }) => {
+      if (disposed) return;
+      try {
+        scene = new MenuScene(el);
+        el.classList.add('has-3d');
+      } catch (e) {
+        console.warn('menu 3D unavailable', e);
+      }
+    }),
+  );
+  return { el, dispose: () => { disposed = true; status.dispose(); scene?.dispose(); } };
 }
 
 // ------------------------------------------------------------------ create / lobby
@@ -114,7 +138,11 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
   const hint = h('div', { class: 'join-hint' }, 'Creating rally…');
   const players = h('div', {});
   const startBtn = h('button', { class: 'btn primary big', disabled: true, 'data-testid': 'start-stage' }, 'Start stage') as HTMLButtonElement;
-  const leaveBtn = h('button', { class: 'btn danger' }, 'Close rally');
+  const leaveBtn = h('button', { class: 'btn danger', 'data-testid': 'leave-rally' }, 'Leave rally');
+  const readyBtn = h('button', { class: 'btn', 'data-testid': 'ready-btn' }, 'Ready') as HTMLButtonElement;
+  const seatCtl = h('div', { class: 'seat-ctl' });
+  const startNote = h('div', { class: 'setup-desc', 'data-testid': 'start-note' }, '');
+  const setupPanel = h('div', { class: 'panel setup' });
   const unsubs: Array<() => void> = [status.dispose];
   let current: RallyConfig = { ...settings.get().rally };
 
@@ -198,37 +226,85 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
   };
   showConfig(current);
 
+  const goRace = (room: RoomSnapshot) => {
+    const phase = room.race.phase;
+    if (phase !== 'countdown' && phase !== 'racing' && phase !== 'finished') return false;
+    const me = net.me();
+    if (me?.role === 'navigator') nav.go('navigator');
+    else if (me && room.race.drivers.some((d) => d.playerId === me.playerId)) nav.go('drive');
+    else return false;
+    return true;
+  };
+
   const render = (room: RoomSnapshot) => {
     codeEl.textContent = room.code;
     const url = `${location.origin}${location.pathname}#/join/${room.code}`;
     hint.innerHTML = '';
-    hint.append(
-      'On the navigator\'s tablet or phone, open ',
-      h('code', {}, url),
-      ' or choose ',
-      h('b', {}, 'JOIN RALLY'),
-      ' and enter the code above.',
-    );
-    if (net.mode === 'p2p' && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
-      hint.append(h('br'), h('br'), 'This page is only on this computer. Open a second browser window here to test, or put the game online (see README).');
-    }
+    hint.append('Up to 4 players. Friends open ', h('code', {}, url), ' or choose ', h('b', {}, 'JOIN LOBBY'), ' and enter the code above. Each driver can bring a navigator.');
+    const me = net.me();
+    const host = net.isHost;
+    const inLobby = room.race.phase === 'lobby';
+
+    // ---- players
     players.innerHTML = '';
-    const row = (role: string, name: string, state: string, cls: string) =>
-      h('div', { class: 'player-row' }, h('span', { class: `status-dot ${cls}` }), h('div', {}, h('div', { class: 'role' }, role), h('div', { class: 'name' }, name)), h('div', { class: 'state', 'data-testid': `${role.toLowerCase()}-state` }, state));
-    const d = room.driver;
-    players.append(row('DRIVER', d?.name ?? '—', d?.connected ? 'Connected' : 'Disconnected', d?.connected ? 'ok' : 'bad'));
-    const n = room.navigator;
-    players.append(
-      n
-        ? row('NAVIGATOR', n.name, n.connected ? 'Connected' : 'Reconnecting…', n.connected ? 'ok' : 'warn')
-        : row('NAVIGATOR', 'Waiting for navigator…', 'Not connected', ''),
-    );
+    const drivers = room.members.filter((m) => m.role === 'driver');
+    for (const m of room.members) {
+      const isMe = m.playerId === me?.playerId;
+      const forName = m.role === 'navigator' ? room.members.find((d) => d.playerId === m.navFor)?.name : null;
+      const roleText = m.role === 'driver' ? 'DRIVER' : forName ? `NAVIGATOR · FOR ${forName.toUpperCase()}` : 'NAVIGATOR';
+      const state = !m.connected ? 'Reconnecting…' : room.hostId === m.playerId ? 'Host' : m.ready ? 'Ready ✓' : 'Not ready';
+      players.append(
+        h('div', { class: `player-row ${isMe ? 'me' : ''}`, 'data-testid': `member-${m.name}` },
+          h('span', { class: `status-dot ${!m.connected ? 'warn' : room.hostId === m.playerId || m.ready ? 'ok' : ''}` }),
+          h('div', {}, h('div', { class: 'role' }, `${room.hostId === m.playerId ? '★ ' : ''}${roleText}`), h('div', { class: 'name' }, `${m.name}${isMe ? ' (you)' : ''}`)),
+          h('div', { class: 'state' }, state),
+        ),
+      );
+    }
+    for (let i = room.members.length; i < 4; i++) players.append(h('div', { class: 'player-row empty' }, h('span', { class: 'status-dot' }), h('div', {}, h('div', { class: 'role' }, 'OPEN SEAT'), h('div', { class: 'name' }, 'Waiting for a player…'))));
+
+    // ---- my seat
+    seatCtl.innerHTML = '';
+    if (me && inLobby && !room.race.soloEvent) {
+      const driveBtn = h('button', { class: `chip-btn ${me.role === 'driver' ? 'sel' : ''}`, 'data-testid': 'seat-driver' }, '🏎 Drive');
+      driveBtn.onclick = () => void net.setRole('driver').catch((e) => toast((e as NetError).message, 'bad'));
+      const navBtns = drivers
+        .filter((d) => d.playerId !== me.playerId)
+        .map((d) => {
+          const b = h('button', { class: `chip-btn ${me.role === 'navigator' && me.navFor === d.playerId ? 'sel' : ''}`, 'data-testid': `seat-nav-${d.name}` }, `🗺 Navigate for ${d.name}`);
+          b.onclick = () => void net.setRole('navigator', d.playerId).catch((e) => toast((e as NetError).message, 'bad'));
+          return b;
+        });
+      seatCtl.append(h('div', { class: 'panel-title', style: 'margin-top:14px' }, 'Your seat'), h('div', { class: 'chip-row' }, driveBtn, ...navBtns));
+    }
+    readyBtn.style.display = host || !inLobby ? 'none' : '';
+    readyBtn.textContent = me?.ready ? 'Ready ✓ (tap to undo)' : 'Tick ready';
+    readyBtn.classList.toggle('primary', !me?.ready);
+
+    // ---- start
+    const waiting = room.members.filter((m) => m.connected && m.playerId !== room.hostId && !m.ready);
+    startBtn.style.display = host ? '' : 'none';
+    startBtn.disabled = !inLobby || !drivers.some((d) => d.connected) || waiting.length > 0;
+    startBtn.textContent = drivers.length > 1 ? `Start rally (${drivers.length} cars)` : 'Start stage';
+    startNote.textContent = !inLobby
+      ? 'A stage is running – you will join the next one.'
+      : host
+        ? !drivers.length
+          ? 'Someone needs to drive.'
+          : waiting.length
+            ? `Waiting for ${waiting.map((w) => w.name).join(', ')} to tick ready.`
+            : drivers.some((d) => !room.members.some((m) => m.navFor === d.playerId))
+              ? 'Everyone is ready. Drivers without a navigator will drive blind!'
+              : 'Everyone is ready.'
+        : `${room.members.find((m) => m.playerId === room.hostId)?.name ?? 'The host'} picks the stage and starts the rally.`;
+
+    // only the host changes the stage
+    setupPanel.classList.toggle('readonly', !host);
     showConfig(room.race);
-    startBtn.disabled = false;
-    startBtn.textContent = solo ? 'Start stage' : n?.connected ? 'Start stage' : 'Start without navigator';
-    if (room.race.phase === 'countdown' || room.race.phase === 'racing') nav.go('drive');
+    goRace(room);
   };
 
+  readyBtn.onclick = () => void net.setReady(!net.me()?.ready).catch((e) => toast((e as NetError).message, 'bad'));
   startBtn.onclick = async () => {
     startBtn.disabled = true;
     try {
@@ -247,15 +323,15 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
     net.on('room', render),
     net.on('race', (s) => {
       showConfig(s);
-      if (s.phase === 'countdown' || s.phase === 'racing') nav.go('drive');
+      if (net.room) render({ ...net.room, race: s });
     }),
     net.on('closed', (p) => { toast(p.reason, 'bad'); nav.go('menu'); }),
   );
 
   (async () => {
     try {
-      if (net.session?.role === 'driver' && net.room) render(net.room);
-      else render((await net.createRoom(playerName('Driver'), current)).room);
+      if (net.room) render(net.room);
+      else render((await net.createRoom(playerName('Driver'), solo ? { ...current, soloEvent: true } : current)).room);
     } catch (e) {
       hint.textContent = (e as NetError).message;
       toast((e as NetError).message, 'bad');
@@ -281,21 +357,21 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
         h(
           'div',
           { class: 'panel' },
-          h('div', { class: 'panel-title' }, 'Crew'),
+          h('div', { class: 'panel-title' }, 'Players'),
           players,
-          h('div', { style: 'display:flex;gap:10px;margin-top:18px;flex-wrap:wrap' }, startBtn, leaveBtn),
+          seatCtl,
+          h('div', { style: 'display:flex;gap:10px;margin-top:18px;flex-wrap:wrap' }, startBtn, readyBtn, leaveBtn),
+          startNote,
         ),
       ),
-      h(
-        'div',
-        { class: 'panel setup' },
+      (setupPanel.append(
         h('div', { class: 'panel-title' }, 'Stage'),
         stageGrid,
         h('div', { class: 'setup-cols' },
           h('div', {}, h('div', { class: 'panel-title' }, 'Weather'), weatherRow, weatherDesc),
           h('div', {}, h('div', { class: 'panel-title' }, 'AI opponents'), aiRow, h('div', { style: 'height:8px' }), skillRow),
         ),
-      ),
+      ), setupPanel),
     ),
   );
   // draw the stage previews once they are in the document
@@ -338,8 +414,8 @@ export function playScreen(nav: Nav): Screen {
       h(
         'div',
         { class: 'play-grid two' },
-        card('MULTIPLAYER', 'Create lobby', 'Host a rally and share the 4-character code. Your navigator joins from a tablet or phone.', 'create', false, 'play-create'),
-        card('MULTIPLAYER', 'Join lobby', 'Enter a code to join a rally as the navigator. You earn a 40% share of your driver\'s prize.', 'join', false, 'play-join'),
+        card('MULTIPLAYER', 'Create lobby', 'Host a rally for up to 4 players – race each other with real collisions, each driver with their own navigator.', 'create', false, 'play-create'),
+        card('MULTIPLAYER', 'Join lobby', 'Enter a code to join as a driver or a navigator. Navigators earn a 40% share of their driver\'s prize.', 'join', false, 'play-join'),
       ),
     ),
   );
@@ -359,10 +435,10 @@ export function joinScreen(nav: Nav, prefill = ''): Screen {
     'data-testid': 'join-code',
   }) as HTMLInputElement;
   code.value = prefill.toUpperCase().slice(0, ROOM_CODE_LENGTH);
-  const name = h('input', { class: 'input', maxlength: 16, placeholder: 'Navigator', 'data-testid': 'join-name' }) as HTMLInputElement;
+  const name = h('input', { class: 'input', maxlength: 16, placeholder: 'Your name', 'data-testid': 'join-name' }) as HTMLInputElement;
   name.value = settings.get().playerName;
   const error = h('div', { class: 'error-text', 'data-testid': 'join-error' }, '');
-  const joinBtn = h('button', { class: 'btn primary big', style: 'width:100%', 'data-testid': 'join-btn' }, 'Join as navigator') as HTMLButtonElement;
+  const joinBtn = h('button', { class: 'btn primary big', style: 'width:100%', 'data-testid': 'join-btn' }, 'Join rally') as HTMLButtonElement;
   code.addEventListener('input', () => {
     code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
     error.textContent = '';
@@ -370,14 +446,14 @@ export function joinScreen(nav: Nav, prefill = ''): Screen {
   const submit = async () => {
     error.textContent = '';
     if (code.value.length !== ROOM_CODE_LENGTH) {
-      error.textContent = 'Enter the 4-character code shown on the driver\'s screen.';
+      error.textContent = 'Enter the 4-character code shown on the host\'s screen.';
       return;
     }
     joinBtn.disabled = true;
     try {
       if (name.value.trim()) settings.update({ playerName: name.value.trim() });
-      await net.joinRoom(code.value, name.value.trim() || 'Navigator');
-      nav.go('navigator');
+      await net.joinRoom(code.value, name.value.trim() || 'Player');
+      nav.go('lobby');
     } catch (e) {
       error.textContent = (e as NetError).message;
     } finally {
@@ -398,7 +474,8 @@ export function joinScreen(nav: Nav, prefill = ''): Screen {
       h(
         'div',
         { class: 'panel', style: 'width:min(520px,100%)' },
-        h('div', { class: 'panel-title' }, 'Navigator · Room code'),
+        h('div', { class: 'panel-title' }, 'Room code'),
+        h('div', { class: 'setup-desc' }, 'Join as a driver (your own car) or a navigator (ride along with a driver) – you can switch seats in the lobby.'),
         h('div', { class: 'field' }, code),
         h('div', { class: 'field' }, h('label', {}, 'Your name'), name),
         error,
@@ -474,8 +551,9 @@ export function settingsScreen(nav: Nav): Screen {
         h(
           'div',
           { class: 'desc', style: 'margin-top:18px;line-height:1.8;color:var(--muted)' },
-          'Driver: W/↑ throttle · S/↓ brake & reverse · A/D steer · Space handbrake · E wipers · L light pod · R reset · Esc pause', h('br'),
-          'Gamepad: RT throttle · LT brake · left stick steer · A/B handbrake · RB wipers · Y light pod · X reset · Start pause', h('br'),
+          'Driver: W/↑ throttle · S/↓ brake & reverse · A/D steer · Space handbrake · R reset · Esc pause', h('br'),
+          'Switches (ignition, start, lights, wipers, demister…): click them in the car with the mouse', h('br'),
+          'Gamepad: RT throttle · LT brake · left stick steer · A/B handbrake · X reset · Start pause', h('br'),
           'Navigator: ↑ look at the road · ↓ look at the tablet (or tap the button) · drag to look around · call the stage out loud',
         ),
       ),

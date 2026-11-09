@@ -3,6 +3,9 @@ import type {
   JoinResult,
   NavCall,
   NavCallRequest,
+  SharedSwitch,
+  PlayerInfo,
+  Role,
   RaceResult,
   RaceState,
   RaceWarning,
@@ -27,6 +30,8 @@ export interface NetEvents {
   closed: { reason: string };
   resumed: JoinResult;
   resumeFailed: { message: string };
+  /** A navigator flipped one of my car's switches. */
+  switch: { id: SharedSwitch; down: boolean; from: string };
 }
 
 type Handler<T> = (payload: T) => void;
@@ -37,14 +42,8 @@ export class NetError extends Error {
   }
 }
 
-/**
- * What every screen uses to talk to the other player. Two implementations:
- * - SocketNetClient: Node.js server with Socket.IO (npm run dev / npm start)
- * - P2PNetClient: no server – the driver's browser hosts the room and the
- *   navigator connects to it directly (the Live Server build in /play)
- */
+/** What every screen uses to talk to the rally server (implemented by SocketNetClient). */
 export abstract class NetBase {
-  abstract readonly mode: 'online' | 'p2p';
   status: ConnStatus = 'connecting';
   session: SessionInfo | null = null;
   room: RoomSnapshot | null = null;
@@ -69,13 +68,35 @@ export abstract class NetBase {
     this.emit('status', s);
   }
 
-  /** Current time on the authoritative clock (server, or the driver's browser in P2P). */
+  /** My seat in the current room. */
+  me(): PlayerInfo | null {
+    const id = this.session?.playerId;
+    return this.room?.members.find((m) => m.playerId === id) ?? null;
+  }
+  get isHost() {
+    return !!this.session && this.room?.hostId === this.session.playerId;
+  }
+  /** The driver whose car I see: myself when driving, or the driver I navigate for. */
+  followedDriverId(): string | null {
+    const me = this.me();
+    if (!me) return null;
+    if (me.role === 'driver') return me.playerId;
+    return me.navFor ?? this.room?.members.find((m) => m.role === 'driver')?.playerId ?? null;
+  }
+  member(playerId: string | null | undefined): PlayerInfo | null {
+    return this.room?.members.find((m) => m.playerId === playerId) ?? null;
+  }
+
+  /** Current time on the server's clock. */
   abstract serverNow(): number;
   abstract get latencyMs(): number | null;
   abstract createRoom(name: string, config?: Partial<RallyConfig>): Promise<JoinResult>;
   /** Driver only, in the lobby: change stage / weather / AI. */
   abstract configure(config: Partial<RallyConfig>): Promise<RaceState>;
-  abstract joinRoom(code: string, name: string): Promise<JoinResult>;
+  abstract joinRoom(code: string, name: string, role?: Role): Promise<JoinResult>;
+  abstract setRole(role: Role, navFor?: string | null): Promise<RoomSnapshot>;
+  abstract setReady(ready: boolean): Promise<RoomSnapshot>;
+  abstract retire(): Promise<RaceState>;
   abstract resume(): Promise<JoinResult | null>;
   abstract leave(): Promise<void>;
   abstract clearSession(): void;
@@ -84,4 +105,6 @@ export abstract class NetBase {
   abstract toLobby(): Promise<RaceState>;
   abstract sendCall(req: NavCallRequest): Promise<NavCall>;
   abstract sendTelemetry(p: TelemetryPacket): void;
+  /** Navigator: flip a shared switch in my driver's car. */
+  abstract sendSwitch(id: SharedSwitch, down?: boolean): void;
 }

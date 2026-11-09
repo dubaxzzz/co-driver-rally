@@ -30,10 +30,13 @@ export interface VehicleDef {
   /** Suspension stiffness multiplier (stiffer = steadier, harsher). */
   suspension: number;
   /** Looks */
-  body: { style: BodyStyle; length: number; width: number; height: number; wing: boolean };
+  body: { style: BodyStyle; model: CarModelId; length: number; width: number; height: number; wing: boolean };
   /** Display stats 0..10 */
   stats: { power: number; handling: number; braking: number; weight: number };
 }
+
+/** Which detailed 3D body + dashboard a car uses. */
+export type CarModelId = 'kestrel' | 'sparrow' | 'dune' | 'bruno' | 'vortex';
 
 export interface PaintOption {
   id: string;
@@ -75,7 +78,7 @@ export const VEHICLES: VehicleDef[] = [
     armour: 0.1,
     shiftTime: 0.28,
     suspension: 1,
-    body: { style: 'hatch', length: 1, width: 1, height: 1, wing: true },
+    body: { model: 'kestrel', style: 'hatch', length: 1, width: 1, height: 1, wing: true },
     stats: { power: 7, handling: 8, braking: 7, weight: 6 },
   },
   {
@@ -98,7 +101,7 @@ export const VEHICLES: VehicleDef[] = [
     armour: 0.05,
     shiftTime: 0.3,
     suspension: 0.95,
-    body: { style: 'hatch', length: 0.9, width: 0.95, height: 1.02, wing: false },
+    body: { model: 'sparrow', style: 'hatch', length: 0.9, width: 0.95, height: 1.02, wing: false },
     stats: { power: 4, handling: 9, braking: 6, weight: 9 },
   },
   {
@@ -121,7 +124,7 @@ export const VEHICLES: VehicleDef[] = [
     armour: 0.35,
     shiftTime: 0.32,
     suspension: 1.15,
-    body: { style: 'truck', length: 1.12, width: 1.08, height: 1.15, wing: false },
+    body: { model: 'dune', style: 'truck', length: 1.12, width: 1.08, height: 1.15, wing: false },
     stats: { power: 7, handling: 5, braking: 6, weight: 3 },
   },
   {
@@ -144,7 +147,7 @@ export const VEHICLES: VehicleDef[] = [
     armour: 0.08,
     shiftTime: 0.26,
     suspension: 1,
-    body: { style: 'coupe', length: 1.0, width: 1.04, height: 0.92, wing: true },
+    body: { model: 'bruno', style: 'coupe', length: 1.0, width: 1.04, height: 0.92, wing: true },
     stats: { power: 9, handling: 6, braking: 7, weight: 7 },
   },
   {
@@ -167,7 +170,7 @@ export const VEHICLES: VehicleDef[] = [
     armour: 0.12,
     shiftTime: 0.18,
     suspension: 1.05,
-    body: { style: 'hatch', length: 1.05, width: 1.06, height: 0.97, wing: true },
+    body: { model: 'vortex', style: 'hatch', length: 1.05, width: 1.06, height: 0.97, wing: true },
     stats: { power: 10, handling: 9, braking: 9, weight: 6 },
   },
 ];

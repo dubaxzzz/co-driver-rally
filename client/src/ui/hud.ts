@@ -59,7 +59,7 @@ export class Hud {
           'div',
           { class: 'hud-controls-help' },
           h('div', { html: '<b>W/↑</b> Throttle &nbsp; <b>S/↓</b> Brake/Reverse &nbsp; <b>A D</b> Steer' }),
-          h('div', { html: '<b>Space</b> Handbrake &nbsp; <b>E</b> Wipers &nbsp; <b>L</b> Light pod &nbsp; <b>R</b> Reset &nbsp; <b>Esc</b> Menu' }),
+          h('div', { html: '<b>Space</b> Handbrake &nbsp; <b>R</b> Reset &nbsp; <b>Esc</b> Menu &nbsp; <b>Mouse</b> click the switches in the car' }),
         )
       : null;
 
@@ -71,16 +71,33 @@ export class Hud {
       h('div', { class: 'hud-progress' }, track, h('div', { class: 'labels' }, this.progLeft, this.progRight)),
       this.centerEl,
       this.warnEl,
+      this.checkEl,
       h('div', { class: 'hud-dash' }, h('div', {}, this.gearEl, h('span', { class: 'hud-speed' }, this.speedEl, this.unitEl)), rpm, this.dmgEl),
       help,
     );
   }
 
+  private checkEl = h('div', { class: 'hud-checklist', 'data-testid': 'checklist' });
+  private lastCheck = '';
+  /** Pre-stage checklist (ignition, start, lights…). `null` hides it. */
+  setChecklist(title: string, items: Array<{ label: string; done: boolean }> | null) {
+    const key = items ? title + items.map((i) => `${i.label}${i.done}`).join() : '';
+    if (key === this.lastCheck) return;
+    this.lastCheck = key;
+    this.checkEl.innerHTML = '';
+    this.checkEl.style.display = items ? 'block' : 'none';
+    if (!items) return;
+    this.checkEl.append(
+      h('div', { class: 'cl-title' }, title),
+      ...items.map((i) => h('div', { class: `cl-item ${i.done ? 'done' : ''}` }, h('span', { class: 'cl-box' }, i.done ? '✓' : ''), i.label)),
+    );
+  }
+
   private lastDamageKey = '';
   /** Damage per zone (green → amber → red) plus the surface you're on. */
-  setDamage(d: DamageZones, surface: string, wheels: number[] = [0, 0, 0, 0], lost: boolean[] = [false, false, false, false]) {
+  setDamage(d: DamageZones, surface: string) {
     const zones: Array<[string, number]> = [['FRONT', d.front], ['L', d.left], ['R', d.right], ['REAR', d.rear], ['GLASS', d.windscreen], ['ENGINE', d.engine]];
-    const key = surface + zones.map(([, v]) => Math.round(v * 10)).join() + wheels.map((w) => Math.round(w * 10)).join() + lost.join();
+    const key = surface + zones.map(([, v]) => Math.round(v * 10)).join();
     if (key === this.lastDamageKey) return;
     this.lastDamageKey = key;
     this.dmgEl.innerHTML = '';
@@ -91,13 +108,6 @@ export class Hud {
       row.append(h('i', { class: v > 0.6 ? 'b' : 'w' }, `${label} ${Math.round(v * 100)}%`));
     }
     this.dmgEl.append(row);
-    // tyre status: FL FR / RL RR
-    const tyres = h('div', { class: 'tyres', title: 'Wheels' });
-    wheels.forEach((w, i) => {
-      const cls = lost[i] ? 'gone' : w > 0.6 ? 'b' : w > 0.15 ? 'w' : '';
-      tyres.append(h('i', { class: cls }, lost[i] ? '✕' : ''));
-    });
-    this.dmgEl.append(tyres);
   }
 
   setRoom(code: string) {

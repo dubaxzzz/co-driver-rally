@@ -8,6 +8,9 @@ import {
   type NavCallRequest,
   type RaceState,
   type RallyConfig,
+  type Role,
+  type SharedSwitch,
+  type RoomSnapshot,
   type ServerToClientEvents,
   type TelemetryPacket,
 } from '@cdr/shared';
@@ -19,7 +22,6 @@ import { NetBase, NetError } from './types';
  * and server clock synchronisation.
  */
 export class SocketNetClient extends NetBase {
-  readonly mode = 'online' as const;
   readonly socket: Socket<ServerToClientEvents, ClientToServerEvents>;
   private clockOffset = 0;
   private bestRtt = Infinity;
@@ -67,6 +69,7 @@ export class SocketNetClient extends NetBase {
     s.on('race:checkpoint', (e) => this.emit('checkpoint', e));
     s.on('race:warning', (w) => this.emit('warning', w));
     s.on('race:finished', (r) => this.emit('finished', r));
+    s.on('car:switch', (e) => this.emit('switch', e));
     s.on('room:closed', (p) => {
       this.clearSession();
       this.emit('closed', p);
@@ -153,8 +156,8 @@ export class SocketNetClient extends NetBase {
     return res;
   }
 
-  async joinRoom(code: string, name: string): Promise<JoinResult> {
-    const res = await this.request<JoinResult>((ack) => this.socket.emit('room:join', { code, name }, ack));
+  async joinRoom(code: string, name: string, role?: Role): Promise<JoinResult> {
+    const res = await this.request<JoinResult>((ack) => this.socket.emit('room:join', { code, name, role }, ack));
     this.storeSession(res);
     return res;
   }
@@ -189,6 +192,21 @@ export class SocketNetClient extends NetBase {
   configure(config: Partial<RallyConfig>) {
     return this.request<RaceState>((ack) => this.socket.emit('room:configure', config, ack));
   }
+  async setRole(role: Role, navFor?: string | null) {
+    const room = await this.request<RoomSnapshot>((ack) => this.socket.emit('room:role', { role, navFor }, ack));
+    this.room = room;
+    this.emit('room', room);
+    return room;
+  }
+  async setReady(ready: boolean) {
+    const room = await this.request<RoomSnapshot>((ack) => this.socket.emit('room:ready', ready, ack));
+    this.room = room;
+    this.emit('room', room);
+    return room;
+  }
+  retire() {
+    return this.request<RaceState>((ack) => this.socket.emit('race:retire', ack));
+  }
   startRace() {
     return this.request<RaceState>((ack) => this.socket.emit('race:start', ack));
   }
@@ -200,6 +218,10 @@ export class SocketNetClient extends NetBase {
   }
   sendCall(req: NavCallRequest) {
     return this.request<NavCall>((ack) => this.socket.emit('nav:call', req, ack));
+  }
+  sendSwitch(id: SharedSwitch, down = true) {
+    // socket.io buffers this during a brief reconnect, so a click isn't lost
+    this.socket.emit('car:switch', { id, down });
   }
   sendTelemetry(p: TelemetryPacket) {
     if (this.socket.connected) this.socket.volatile.emit('telemetry', p);

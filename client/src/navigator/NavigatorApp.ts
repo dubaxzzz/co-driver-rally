@@ -32,6 +32,9 @@ export class NavigatorApp {
   private stage: BuiltStage;
   private map: MapView;
   private interp = new Interpolator();
+  /** Every other driver (and the AI host's AI cars) for the map and the windscreen. */
+  private others = new Map<string, Interpolator>();
+  private followed: string | null = net.followedDriverId();
   private raf = 0;
   private unsubs: Array<() => void> = [];
   private race: RaceState | null = null;
@@ -47,7 +50,6 @@ export class NavigatorApp {
   private disposed = false;
   private rewardsEl: HTMLElement | null = null;
   private paidRun = -1;
-  private wheelsGone = [false, false, false, false];
 
   private readonly weatherId: string;
 
@@ -146,6 +148,7 @@ export class NavigatorApp {
           if (this.disposed) return;
           this.view = new CockpitView(view3d, this.stage, this.weatherId as keyof typeof WEATHER);
           this.view.setLookDown(this.lookingDown);
+          this.view.onSwitch = (id, down) => net.sendSwitch(id, down);
           view3d.querySelector('.nav-3d-loading')?.remove();
         })
         .catch((e) => {
@@ -156,7 +159,7 @@ export class NavigatorApp {
         });
     }, 60);
 
-    if (net.lastJoin?.lastTelemetry) this.pushTelemetry(net.lastJoin.lastTelemetry);
+    for (const p of net.lastJoin?.lastTelemetry ?? []) this.route(p);
     this.race = net.room?.race ?? null;
     this.bind();
     this.updateConnection();
@@ -164,14 +167,32 @@ export class NavigatorApp {
     this.raf = requestAnimationFrame(this.frame);
   }
 
+  /** Sends a packet to the followed driver's view, or to the "other cars" buffers. */
+  private route(p: RelayedTelemetry) {
+    if (this.race && p.runId !== this.race.runId) return;
+    if (p.pid === this.followed) return this.pushTelemetry(p);
+    let it = this.others.get(p.pid);
+    if (!it) this.others.set(p.pid, (it = new Interpolator()));
+    it.push(p);
+  }
+
+  private driverRace() {
+    return this.race?.drivers.find((d) => d.playerId === this.followed) ?? null;
+  }
+
+  private driverName() {
+    return net.member(this.followed)?.name ?? this.driverRace()?.name ?? 'Driver';
+  }
+
   private pushTelemetry(p: RelayedTelemetry) {
     this.interp.push(p);
     this.lastPacketAt = performance.now();
     // co-driver's share of the prize (paid on top – the driver keeps all of theirs)
-    if (p.prize !== undefined && this.race?.phase === 'finished' && this.paidRun !== p.runId) {
+    const dr = this.driverRace();
+    if (p.prize !== undefined && dr?.result && this.paidRun !== p.runId) {
       this.paidRun = p.runId;
       const share = Math.round(p.prize * NAVIGATOR_SHARE);
-      const paid = career.credit(`nav:${net.room?.code}:${p.runId}:${this.race.finishedAt}`, share);
+      const paid = career.credit(`nav:${net.room?.code}:${p.runId}:${dr.result.finishedAt}`, share);
       if (this.rewardsEl) {
         this.rewardsEl.innerHTML = '';
         this.rewardsEl.append(
@@ -182,31 +203,20 @@ export class NavigatorApp {
         );
       }
     }
-    // warn the co-driver when a wheel comes off
-    if (p.dz && p.dz.length === 10) {
-      const names = ['front-left', 'front-right', 'rear-left', 'rear-right'];
-      for (let i = 0; i < 4; i++) {
-        const gone = p.dz[6 + i] >= 1;
-        if (gone && !this.wheelsGone[i]) toast(`Your driver lost the ${names[i]} wheel!`, 'bad', 4000);
-        this.wheelsGone[i] = gone;
-      }
-    }
   }
 
   private bind() {
     this.unsubs.push(
-      net.on('telemetry', (p) => {
-        if (this.race && p.runId !== this.race.runId) return;
-        this.pushTelemetry(p);
-      }),
+      net.on('telemetry', (p) => this.route(p)),
       net.on('race', (s) => {
         if (s.stageId !== this.stage.def.id || s.weather !== this.weatherId) return this.onReload();
         const newRun = !this.race || this.race.runId !== s.runId;
         this.race = s;
         if (newRun) {
-          this.wheelsGone = [false, false, false, false];
           this.interp.clear();
+          this.others.clear();
           this.map.clearTrail();
+          this.view?.resetTrip();
         }
         this.applyRace();
       }),
@@ -214,17 +224,31 @@ export class NavigatorApp {
         if (r.race.stageId !== this.stage.def.id || r.race.weather !== this.weatherId) return this.onReload();
         this.race = r.race;
         this.els.code.textContent = r.code;
+        const f = net.followedDriverId();
+        if (f !== this.followed) {
+          this.followed = f;
+          this.interp.clear();
+          this.others.clear();
+          this.map.clearTrail();
+          toast(`Now navigating for ${this.driverName()}`, 'ok');
+        }
         this.updateConnection();
         this.applyRace();
       }),
       net.on('status', () => this.updateConnection()),
-      net.on('checkpoint', (e) => toast(`Checkpoint ${e.index + 1} · ${formatTime(e.timeMs)}`, 'ok')),
+      net.on('checkpoint', (e) => {
+        if (e.playerId === this.followed) toast(`Checkpoint ${e.index + 1} · ${formatTime(e.timeMs)}`, 'ok');
+      }),
+      net.on('finished', (r) => {
+        if (r.playerId !== this.followed) toast(`${r.name} finished · ${formatTime(r.timeMs)}`, 'ok');
+      }),
       net.on('warning', (w) => {
         if (w.type === 'missed-checkpoint') toast(`Driver missed checkpoint ${w.checkpoint + 1}!`, 'bad');
       }),
       net.on('resumed', (r) => {
         this.race = r.room.race;
-        if (r.lastTelemetry) this.pushTelemetry(r.lastTelemetry);
+        this.followed = net.followedDriverId();
+        r.lastTelemetry.forEach((p) => this.route(p));
         this.applyRace();
         toast('Reconnected – race data restored', 'ok');
       }),
@@ -255,7 +279,7 @@ export class NavigatorApp {
   private updateConnection() {
     const sDot = this.els.server.firstChild as HTMLElement;
     sDot.className = `status-dot ${net.status === 'connected' ? 'ok' : net.status === 'disconnected' ? 'bad' : 'warn'}`;
-    const d = net.room?.driver;
+    const d = net.member(this.followed);
     const dDot = this.els.driver.firstChild as HTMLElement;
     dDot.className = `status-dot ${d?.connected ? 'ok' : 'bad'}`;
     this.els.driver.lastChild!.textContent = d ? (d.connected ? `DRIVER: ${d.name}` : 'DRIVER DISCONNECTED') : 'NO DRIVER';
@@ -266,25 +290,36 @@ export class NavigatorApp {
     if (!s) return;
     const labels = { lobby: 'LOBBY', countdown: 'COUNTDOWN', racing: 'RACING', finished: 'FINISHED' } as const;
     this.els.phase.textContent = labels[s.phase];
-    this.waitingEl.style.display = s.phase === 'lobby' ? 'flex' : 'none';
-    this.els.cps.textContent = `${s.checkpointsPassed}/${this.stage.checkpoints.length}`;
-    if (s.phase === 'finished' && s.result && this.resultRun !== s.runId) {
+    if (s.phase === 'lobby') return void setTimeout(() => !this.disposed && this.onReload(), 0); // back to the lobby screen
+    this.waitingEl.style.display = 'none';
+    const dr = this.driverRace();
+    this.els.cps.textContent = `${dr?.checkpointsPassed ?? 0}/${this.stage.checkpoints.length}`;
+    const result = dr?.result;
+    if (result && this.resultRun !== s.runId) {
       this.resultRun = s.runId;
       audio.chime();
+      const multi = s.drivers.length > 1;
+      const actions = net.isHost
+        ? [
+            { label: multi ? 'Restart for everyone' : 'Restart stage', primary: true, onClick: () => void net.restartRace().catch((e) => toast(e.message, 'bad')) },
+            { label: 'Back to lobby', onClick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) },
+            { label: 'Close', onClick: () => this.closeOverlay() },
+          ]
+        : [{ label: 'Close', onClick: () => this.closeOverlay() }];
       this.showOverlay(
-        resultsOverlay(s.result, this.stage, [
-          { label: 'Restart stage', primary: true, onClick: () => void net.restartRace().catch((e) => toast(e.message, 'bad')) },
-          { label: 'Back to lobby', onClick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) },
-          { label: 'Close', onClick: () => this.closeOverlay() },
-        ], () => this.standings(s.result!.timeMs), (this.rewardsEl = h('div', { class: 'rewards', 'data-testid': 'nav-rewards' }, h('div', { class: 'setup-desc' }, 'Waiting for the prize…')))),
+        resultsOverlay(result, this.stage, actions, () => this.standings(result.timeMs), (this.rewardsEl = h('div', { class: 'rewards', 'data-testid': 'nav-rewards' }, h('div', { class: 'setup-desc' }, 'Waiting for the prize…')))),
       );
     }
-    if (s.phase !== 'finished') this.closeOverlay();
+    if (s.phase === 'countdown') this.closeOverlay();
   }
 
   private standings(playerMs: number): Standing[] {
-    const ai = this.interp.latest?.ai ?? [];
-    const list: Standing[] = [{ name: net.room?.driver?.name ?? 'Driver', timeMs: playerMs, you: true }];
+    const hostT = this.race?.aiHost === this.followed ? this.interp.latest : this.others.get(this.race?.aiHost ?? '')?.latest;
+    const ai = hostT?.ai ?? [];
+    const list: Standing[] = [{ name: this.driverName(), timeMs: playerMs, you: true }];
+    for (const d of this.race?.drivers ?? []) {
+      if (d.playerId !== this.followed) list.push({ name: d.name, timeMs: d.result?.timeMs ?? null, you: false });
+    }
     for (let i = 0; i < ai.length / 6; i++) {
       const ms = ai[i * 6 + 5];
       list.push({ name: AI_CREWS[i % AI_CREWS.length].name, timeMs: ms >= 0 ? ms : null, you: false });
@@ -305,24 +340,39 @@ export class NavigatorApp {
   private frame = () => {
     this.raf = requestAnimationFrame(this.frame);
     const now = net.serverNow();
-    const t = this.interp.sample(now);
+    const t0 = this.interp.sample(now);
     const s = this.race;
+    // merge AI cars (from the AI host) and the other players into one list of cars to draw
+    let t = t0;
+    if (t0) {
+      const extra: number[] = [];
+      for (const [pid, it] of this.others) {
+        const o = it.sample(now);
+        if (!o) continue;
+        const d = s?.drivers.find((x) => x.playerId === pid);
+        if (d && !d.result && !d.retired) extra.push(o.x, o.y, o.z, o.h, o.dist, -1);
+        if (pid === s?.aiHost && o.ai) extra.push(...o.ai);
+      }
+      const ownAi = s?.aiHost === this.followed ? t0.ai ?? [] : [];
+      t = { ...t0, ai: [...ownAi, ...extra] };
+    }
     const pnow = performance.now();
     const dt = Math.min(0.1, (pnow - this.lastFrame) / 1000);
     this.lastFrame = pnow;
     this.view?.update(dt, t);
-    this.map.draw(t, s?.checkpointsPassed ?? 0);
+    this.map.draw(t, this.driverRace()?.checkpointsPassed ?? 0);
 
     // timer from the authoritative race state
     let ms = 0;
     if (s?.phase === 'racing' && s.startAt) ms = Math.max(0, now - s.startAt);
-    else if (s?.phase === 'finished' && s.result) ms = s.result.timeMs;
+    const res = this.driverRace()?.result;
+    if (res) ms = res.timeMs;
     if (s?.phase === 'countdown' && s.startAt) this.els.timer.textContent = `GO IN ${Math.max(0, Math.ceil((s.startAt - now) / 1000))}`;
     else this.els.timer.textContent = formatTime(ms);
 
     const age = performance.now() - this.lastPacketAt;
     if (!t) {
-      this.els.mapStatus.textContent = net.room?.driver?.connected ? 'Waiting for telemetry…' : 'Driver offline';
+      this.els.mapStatus.textContent = net.member(this.followed)?.connected ? 'Waiting for telemetry…' : 'Driver offline';
       return;
     }
     this.els.mapStatus.textContent = age > 1500 ? `Telemetry stalled (${(age / 1000).toFixed(1)}s)` : `Live · ${net.latencyMs ?? '–'} ms`;

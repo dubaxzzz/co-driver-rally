@@ -1,5 +1,8 @@
 import * as THREE from 'three';
-import { WEATHER, WHEELS, sampleAt, type BuiltStage, type RelayedTelemetry, type WeatherDef, type WeatherId } from '@cdr/shared';
+import { WEATHER, WHEELS, VEHICLES, sampleAt, decodeSwitches, defaultSwitches, SHARED_SWITCHES, type BuiltStage, type CarModelId, type CarSwitches, type RelayedTelemetry, type SharedSwitch, type WeatherDef, type WeatherId } from '@cdr/shared';
+import { CockpitPicker } from '../game/vehicle/CockpitPicker';
+import type { ControlId } from '../game/vehicle/Controls';
+import { audio } from '../audio/AudioEngine';
 import { AI_CREWS } from '../game/ai/AIDriver';
 import { DustSystem } from '../game/environment/Atmosphere';
 import { DAMAGE_KEYS, noDamage, type DamageZones } from '../game/vehicle/Vehicle';
@@ -38,6 +41,14 @@ export class CockpitView {
   private damage: DamageZones = noDamage();
   private aiCars: CarModel[] = [];
   private smoke = new DustSystem(200, 'rgba(70,70,74,', -0.8, 2.6);
+  private modelId: CarModelId = 'kestrel';
+  private sw: CarSwitches = defaultSwitches();
+  private held = new Set<ControlId>();
+  private picker: CockpitPicker;
+  private trip = { start: 0, watchStart: 0, watchAcc: 0, running: false, mapLight: false };
+  private lastDist = 0;
+  /** Sends a shared switch press to the driver's car. */
+  onSwitch: (id: SharedSwitch, down: boolean) => void = () => {};
 
   constructor(private container: HTMLElement, private stage: BuiltStage, weatherId: WeatherId) {
     this.weather = WEATHER[weatherId] ?? WEATHER.storm;
@@ -51,22 +62,20 @@ export class CockpitView {
     this.world = buildStageWorld(this.scene, stage, { quality: 'low', physics: null, fogMultiplier: fogMultiplier(), weather: this.weather.id });
     this.scene.add(this.smoke.points);
     this.unsub = settings.subscribe(() => this.world.atmosphere.setFogMultiplier(fogMultiplier()));
-    const sel = garageStore.resolve();
-    this.car = createCarModel(sel.paint, sel.wheel);
-    this.car.setExteriorVisible(false);
-    if (this.weather.headlights) this.car.enableHeadlights();
-    this.cockpit = new Cockpit(sel.paint, 'navigator');
-    this.car.root.add(this.cockpit.group);
-    this.scene.add(this.car.root);
     this.fp = new FirstPersonCamera(1, 'navigator');
+    const built = this.buildCar('kestrel');
+    this.car = built.car;
+    this.cockpit = built.cockpit;
+    this.picker = new CockpitPicker(container, () => this.fp.camera, this.cockpit.controls, (id) => this.press(id), (id) => this.release(id), (id) => id !== 'ignition' && id !== 'start');
     this.fp.pitch = this.fp.targetPitch = LOOK_DOWN_PITCH;
     this.placeAtStart();
     this.resize();
+    if (import.meta.env.DEV) (window as unknown as { __cdrNavView: CockpitView }).__cdrNavView = this;
 
     // Drag to look around while looking up at the road
     this.canvas.style.touchAction = 'none';
     this.canvas.addEventListener('pointerdown', (e) => {
-      if (this.lookingDown) return;
+      if (this.lookingDown || this.picker.busy) return;
       this.drag = { x: e.clientX, y: e.clientY, yaw: this.fp.targetYaw, pitch: this.fp.targetPitch };
       this.canvas.setPointerCapture(e.pointerId);
     });
@@ -81,6 +90,63 @@ export class CockpitView {
     };
     this.canvas.addEventListener('pointerup', end);
     this.canvas.addEventListener('pointercancel', end);
+  }
+
+  /** The driver's car: interior + dashboard of whatever they drive. */
+  private buildCar(id: CarModelId) {
+    const sel = garageStore.resolve();
+    const def = VEHICLES.find((v) => v.body.model === id) ?? VEHICLES[0];
+    const car = createCarModel(sel.paint, sel.wheel, def.body);
+    car.setExteriorVisible(false);
+    if (this.weather.headlights) car.enableHeadlights();
+    const cockpit = new Cockpit(sel.paint, 'navigator', id);
+    car.root.add(cockpit.group);
+    this.scene.add(car.root);
+    this.modelId = id;
+    return { car, cockpit };
+  }
+
+  private swapCar(id: CarModelId) {
+    const pos = this.car.root.position.clone();
+    const q = this.car.root.quaternion.clone();
+    this.scene.remove(this.car.root);
+    this.cockpit.dispose();
+    this.car.dispose();
+    const built = this.buildCar(id);
+    this.car = built.car;
+    this.cockpit = built.cockpit;
+    this.car.root.position.copy(pos);
+    this.car.root.quaternion.copy(q);
+    this.picker.setControls(this.cockpit.controls);
+  }
+
+  private press(id: ControlId) {
+    this.held.add(id);
+    audio.click();
+    if ((SHARED_SWITCHES as readonly string[]).includes(id)) {
+      this.onSwitch(id as SharedSwitch, true);
+      return;
+    }
+    if (id === 'trip') this.trip.start = this.lastDist;
+    else if (id === 'watch') {
+      const now = performance.now();
+      if (this.trip.running) this.trip.watchAcc += now - this.trip.watchStart;
+      else this.trip.watchStart = now;
+      this.trip.running = !this.trip.running;
+    } else if (id === 'watchReset') {
+      this.trip.watchAcc = 0;
+      this.trip.watchStart = performance.now();
+    } else if (id === 'mapLight') this.trip.mapLight = !this.trip.mapLight;
+  }
+
+  private release(id: ControlId) {
+    this.held.delete(id);
+    if (id === 'horn') this.onSwitch('horn', false);
+  }
+
+  /** Called when a new run starts: trip back to zero. */
+  resetTrip() {
+    this.trip = { ...this.trip, start: this.stage.spawnDistance, watchAcc: 0, running: false };
   }
 
   private placeAtStart() {
@@ -106,6 +172,11 @@ export class CockpitView {
     if (dt <= 0) return;
     const root = this.car.root;
     if (t) {
+      // follow what the driver drives and how their switches are set
+      const want = t.look ? VEHICLES[t.look[0]]?.body.model : undefined;
+      if (want && want !== this.modelId) this.swapCar(want);
+      if (t.sw !== undefined) this.sw = decodeSwitches(t.sw);
+      this.lastDist = t.dist;
       root.position.set(t.x, t.y, t.z);
       root.quaternion.setFromEuler(new THREE.Euler(t.p, t.h, t.r, 'YXZ'));
       // estimate acceleration from the interpolated motion for head movement
@@ -137,7 +208,12 @@ export class CockpitView {
       gear: t?.gear ?? 1,
       handbrake: t?.handbrake ?? false,
       brake: t?.brake ?? 0,
-      wipers: st.wipers,
+      sw: this.sw,
+      held: this.held,
+      tripKm: (this.lastDist - this.trip.start) / 1000,
+      watchMs: this.trip.watchAcc + (this.trip.running ? performance.now() - this.trip.watchStart : 0),
+      watchRunning: this.trip.running,
+      mapLight: this.trip.mapLight,
       wheelShake: t?.dz && t.dz.length === 10 ? Math.max(t.dz[6], t.dz[7]) * Math.min(1, Math.abs(t.v) / 15) : 0,
       rain: this.weather.rain,
       snow: this.weather.snow,
@@ -145,11 +221,16 @@ export class CockpitView {
       damage: this.damage,
     });
     this.car.setBrakeLights((t?.brake ?? 0) > 0.1);
+    this.car.setHeadlights(this.sw.headlights);
+    this.car.setLightPod(this.sw.pod);
+    this.car.setHazards(this.sw.hazards);
+    this.car.tick(performance.now() / 1000);
     this.fp.update(dt, root, this.accel, Math.min(1, Math.abs(this.accel.y) * 0.04));
     this.world.update(dt, this.fp.camera.position, this.vel);
 
     // While the tablet covers the screen, render at half rate to save battery
     if (this.lookingDown && Math.abs(this.fp.pitch - LOOK_DOWN_PITCH) < 0.02 && this.frameSkip++ % 2) return;
+    this.picker.enabled = !this.lookingDown;
     this.renderer.render(this.scene, this.fp.camera);
   }
 
@@ -169,12 +250,13 @@ export class CockpitView {
       const o = i * 6;
       m.root.position.set(ai[o], ai[o + 1], ai[o + 2]);
       m.root.rotation.set(0, ai[o + 3], 0);
-      // hidden while it overlaps our car (AI cars pass through, they never collide)
-      if (m.root.position.distanceTo(this.car.root.position) < 4.2) m.root.visible = false;
+      // hidden while it overlaps our car (interpolation lag)
+      if (m.root.position.distanceTo(this.car.root.position) < 3.0) m.root.visible = false;
     }
   }
 
   dispose() {
+    this.picker.dispose();
     this.aiCars.forEach((m) => m.dispose());
     this.unsub();
     this.cockpit.dispose();

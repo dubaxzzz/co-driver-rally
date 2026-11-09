@@ -10,6 +10,8 @@ export interface Seat {
   socketId: string | null;
   connected: boolean;
   disconnectedAt: number | null;
+  ready: boolean;
+  navFor: string | null;
 }
 
 export function createSeat(role: Role, name: string, socketId: string): Seat {
@@ -21,10 +23,11 @@ export function createSeat(role: Role, name: string, socketId: string): Seat {
     socketId,
     connected: true,
     disconnectedAt: null,
+    ready: false,
+    navFor: null,
   };
 }
 
-export function seatInfo(seat: Seat | null): PlayerInfo | null {
-  if (!seat) return null;
-  return { playerId: seat.playerId, name: seat.name, role: seat.role, connected: seat.connected };
+export function seatInfo(seat: Seat): PlayerInfo {
+  return { playerId: seat.playerId, name: seat.name, role: seat.role, connected: seat.connected, ready: seat.ready, navFor: seat.role === 'navigator' ? seat.navFor : null };
 }

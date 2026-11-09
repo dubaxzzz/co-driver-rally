@@ -9,3 +9,4 @@ export * from './weather';
 export * from './surfaces';
 export * from './career';
 export * from './championship';
+export * from './switches';

@@ -14,6 +14,8 @@ export class PhysicsWorld {
   readonly world: RAPIER.World;
   readonly fixedDt = 1 / 60;
   private acc = 0;
+  /** How far we are between the last physics step and the next one (0..1) – for smooth drawing. */
+  alpha = 0;
 
   constructor(readonly R: Rapier) {
     this.world = new R.World({ x: 0, y: -9.81, z: 0 });
@@ -31,6 +33,7 @@ export class PhysicsWorld {
       steps++;
     }
     if (steps === 6) this.acc = 0; // avoid spiral of death on slow devices
+    this.alpha = Math.min(1, this.acc / this.fixedDt);
     return steps;
   }
 

@@ -6,14 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:play": "vite build --mode play",
-    "dev:play": "vite --mode play",
     "preview": "vite preview"
   },
   "dependencies": {
     "@cdr/shared": "1.0.0",
     "@dimforge/rapier3d-compat": "^0.14.0",
-    "peerjs": "^1.5.5",
     "socket.io-client": "^4.8.1",
     "three": "^0.170.0"
   },

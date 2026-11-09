@@ -14,7 +14,7 @@ const app = document.getElementById('app')!;
 let current: Screen | null = null;
 let routeToken = 0;
 /** Which lobby to go back to after a stage ('create' or 'solo'). */
-let lastLobby: 'create' | 'solo' = 'create';
+let lastLobby: 'lobby' | 'solo' = 'lobby';
 
 function go(route: string) {
   const target = `#/${route === 'menu' ? '' : route}`;
@@ -42,11 +42,16 @@ async function render() {
       current = dailyScreen(nav);
       break;
     case 'create':
+    case 'lobby':
+      if (route === 'lobby' && !net.room) return go('play');
+      if (route === 'create' && net.room?.race.soloEvent) await net.leave(); // leave a solo/championship room first
+      if (token !== routeToken) return;
       eventCtx.clear();
-      lastLobby = 'create';
+      lastLobby = 'lobby';
       current = lobbyScreen(nav, 'crew');
       break;
     case 'solo':
+      if (net.room && !net.room.race.soloEvent) void net.leave();
       eventCtx.clear();
       lastLobby = 'solo';
       current = lobbyScreen(nav, 'solo');
@@ -65,7 +70,7 @@ async function render() {
       current = settingsScreen(nav);
       break;
     case 'drive': {
-      if (net.session?.role !== 'driver') return go('menu');
+      if (net.me()?.role !== 'driver') return go(net.room ? 'lobby' : 'menu');
       const root = h('div', { class: 'game-root' });
       app.append(root);
       // Load Three.js/Rapier only for the driver (keeps the navigator page light)
@@ -77,7 +82,8 @@ async function render() {
       return;
     }
     case 'navigator': {
-      if (net.session?.role !== 'navigator') return go('join');
+      if (net.me()?.role !== 'navigator') return go(net.room ? 'lobby' : 'join');
+      if (net.room?.race.phase === 'lobby') return go('lobby');
       const { NavigatorApp } = await import('./navigator/NavigatorApp');
       if (token !== routeToken) return;
       const navApp = new NavigatorApp(() => go('menu'), () => void render());
@@ -105,17 +111,17 @@ async function boot() {
     toast('Your previous rally session has ended.', 'info');
     return go('menu');
   }
-  const role = net.session.role;
+  const role = net.me()?.role;
   const phase = net.room?.race.phase;
   if (role === 'navigator') {
-    go('navigator');
+    go(phase === 'lobby' ? 'lobby' : 'navigator');
   } else {
     const racing = phase === 'countdown' || phase === 'racing' || phase === 'finished';
     const kind = eventCtx.get().kind;
     if (racing) go('drive');
     else if (kind === 'championship') { await net.leave().catch(() => undefined); go('championship'); }
     else if (kind === 'daily') { await net.leave().catch(() => undefined); go('daily'); }
-    else go('create');
+    else go(lastLobby);
   }
 }
 

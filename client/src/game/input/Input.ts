@@ -6,7 +6,7 @@ export interface DriveInput {
   handbrake: boolean;
 }
 
-type Action = 'wipers' | 'lights' | 'reset' | 'pause';
+type Action = 'reset' | 'pause';
 
 export class Input {
   private keys = new Set<string>();
@@ -21,8 +21,6 @@ export class Input {
     const code = e.code;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(code)) e.preventDefault();
     if (!e.repeat) {
-      if (code === 'KeyE') this.fire('wipers');
-      if (code === 'KeyL') this.fire('lights');
       if (code === 'KeyR') this.fire('reset');
       if (code === 'Escape' || code === 'KeyP') this.fire('pause');
     }
@@ -58,7 +56,7 @@ export class Input {
     for (const pad of pads) {
       if (!pad || !pad.connected) continue;
       const ax = pad.axes[0] ?? 0;
-      if (Math.abs(ax) > 0.08) analogSteer = -Math.sign(ax) * ((Math.abs(ax) - 0.08) / 0.92);
+      if (Math.abs(ax) > 0.15) analogSteer = -Math.sign(ax) * ((Math.abs(ax) - 0.15) / 0.85); // wide deadzone: worn sticks drift
       const rt = pad.buttons[7]?.value ?? 0;
       const lt = pad.buttons[6]?.value ?? 0;
       if (rt > 0.05) throttle = Math.max(throttle, rt);
@@ -68,8 +66,6 @@ export class Input {
       const edge = (i: number, a: Action) => {
         if (pressed(i) && !this.padPrev[i]) this.fire(a);
       };
-      edge(3, 'lights'); // Y
-      edge(5, 'wipers'); // RB
       edge(2, 'reset'); // X
       edge(9, 'pause'); // Start
       this.padPrev = pad.buttons.map((b) => b.pressed);

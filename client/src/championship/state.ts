@@ -247,8 +247,8 @@ export const champ = {
 
     save = { ...s, points, round: roundIdx + 1, team: newTeam, misses, inProgress: false };
     save.results = [...s.results, { round: roundIdx, stageId: round.stageId, weather: round.weather, classification, playerPosition: position }];
-    // damage carries to the service park (a wheel that came off must be replaced)
-    save.carry = { zones: [...damage.zones], wheels: damage.wheels.map((w) => Math.min(1, w)) };
+    // body damage carries to the service park
+    save.carry = { zones: [...damage.zones], wheels: [0, 0, 0, 0] };
     const standingsPos = champ.standingsPosition();
     save.offer = dropped || position === null ? null : bestOffer(newTeam, position, standingsPos, roundIdx + 1);
 
@@ -276,15 +276,15 @@ export const champ = {
   /** Repair cost for the carried damage (free when a team pays). */
   repairQuote(): { cost: number; teamPays: boolean } {
     if (!save) return { cost: 0, teamPays: false };
-    return { cost: repairCost(save.carry.zones, save.carry.wheels), teamPays: save.team !== 'privateer' };
+    return { cost: repairCost(save.carry.zones), teamPays: save.team !== 'privateer' };
   },
 
-  /** Repairs part of the car: 'body' (zones), 'wheels', or 'all'. */
-  repair(what: 'body' | 'wheels' | 'all'): { ok: boolean; reason?: string } {
+  /** Repairs the bodywork ('body' and 'all' do the same now that wheels can't be damaged). */
+  repair(_what: 'body' | 'all'): { ok: boolean; reason?: string } {
     if (!save) return { ok: false };
-    const zones = what === 'wheels' ? save.carry.zones : [0, 0, 0, 0, 0, 0];
-    const wheels = what === 'body' ? save.carry.wheels : [0, 0, 0, 0];
-    const cost = repairCost(save.carry.zones, save.carry.wheels) - repairCost(zones, wheels);
+    const zones = [0, 0, 0, 0, 0, 0];
+    const wheels = [0, 0, 0, 0];
+    const cost = repairCost(save.carry.zones);
     const teamPays = save.team !== 'privateer';
     if (!teamPays && cost > 0) {
       if (career.get().money < cost) return { ok: false, reason: `Repairs cost $${cost.toLocaleString()} – not enough in the bank.` };

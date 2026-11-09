@@ -47,7 +47,7 @@ for (let i = 0; i < 6; i++) {
   if (i === 0) {
     const q = champ.repairQuote();
     check(q.cost > 0 && !q.teamPays, `privateer pays for repairs ($${q.cost})`);
-    check(champ.get()!.carry.wheels[0] === 1, 'a lost wheel is carried to the service park');
+    check(champ.get()!.carry.zones[0] === 0.5, 'body damage is carried to the service park');
     const before = career.get().money;
     check(champ.repair('all').ok && career.get().money === before - q.cost && champ.repairQuote().cost === 0, 'repairing everything clears the damage and charges the bank');
   }
