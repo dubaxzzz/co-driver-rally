@@ -90,6 +90,10 @@ export class MenuScene {
     const fill = new THREE.PointLight(0x7f9cff, 22, 14, 1.5);
     fill.position.set(-2.5, 3, 5);
     s.add(fill);
+    // soft key light on the side the camera sees, so the paint reads
+    const key = new THREE.PointLight(0xfff0e0, 38, 16, 1.4);
+    key.position.set(5, 3.2, 5.5);
+    s.add(key);
 
     // rain
     const n = high ? 2600 : 1200;
@@ -115,7 +119,7 @@ export class MenuScene {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / Math.max(1, h);
     // on narrow screens pull back so the car still fits
-    this.camera.fov = this.camera.aspect < 1 ? 48 : 32;
+    this.camera.fov = this.camera.aspect < 1 ? 46 : 30;
     this.camera.updateProjectionMatrix();
   };
 
@@ -124,13 +128,13 @@ export class MenuScene {
     this.raf = requestAnimationFrame(this.loop);
     const t = (now - this.t0) / 1000;
     // slow orbit around the front three-quarter of the car, offset so the car sits right of the menu
-    // front three-quarter view, swinging slowly from one headlight to the other
-    const a = -0.35 + Math.sin(t * 0.07) * 0.5;
-    const r = this.camera.aspect < 1 ? 9.5 : 9;
-    this.camera.position.set(Math.sin(a) * r, 1.35 + Math.sin(t * 0.11) * 0.25, Math.cos(a) * r);
-    const look = new THREE.Vector3(0, 0.15, 0);
+    // low front three-quarter from the side, the beams cutting away across the road
+    const a = 0.55 + Math.sin(t * 0.06) * 0.3;
+    const r = this.camera.aspect < 1 ? 11.5 : 10.5;
+    this.camera.position.set(Math.sin(a) * r, 1.15 + Math.sin(t * 0.09) * 0.15, Math.cos(a) * r);
+    const look = new THREE.Vector3(0, 0.1, 0);
     const right = new THREE.Vector3().subVectors(look, this.camera.position).cross(new THREE.Vector3(0, 1, 0)).normalize();
-    if (this.camera.aspect > 1.2) look.addScaledVector(right, -1.0); // car on the right-hand side of the screen
+    if (this.camera.aspect > 1.2) look.addScaledVector(right, -2.1); // car sits right of the menu // car on the right-hand side of the screen
     this.camera.lookAt(look);
     const p = this.rain.geometry.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < p.count; i++) {

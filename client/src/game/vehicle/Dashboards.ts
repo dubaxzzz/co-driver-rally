@@ -319,15 +319,16 @@ export function buildDashboard(model: CarModelId, group: THREE.Group, track: Tra
     });
     const st: ControlStyle = { plate: 0x222428, cap: 0xc9ced3, led: 0xff7a1a, text: '#e8eef4' };
     const sp = swPanel(-0.05, 0.37, 0.46, 0.4, 0.13, 0.45, mat({ color: 0x2b2e33, roughness: 0.6, metalness: 0.4 }));
-    controls.push(f.toggle(sp, 'ignition', 'IGN', -0.15, 0.025, { ...st, led: 0xff3030 }, true));
-    controls.push(f.toggle(sp, 'headlights', 'LIGHTS', -0.09, 0.025, st));
-    controls.push(f.toggle(sp, 'pod', 'POD', -0.03, 0.025, st));
-    controls.push(f.toggle(sp, 'hazards', 'HAZ', 0.03, 0.025, st));
-    controls.push(f.toggle(sp, 'demister', 'DEMIST', 0.09, 0.025, st));
-    controls.push(f.toggle(sp, 'interior', 'CABIN', 0.15, 0.025, st));
-    controls.push(f.rotary(sp, 'wipers', 'WIPE', -0.06, -0.035, st));
-    controls.push(f.push(sp, 'start', 'START', 0.06, -0.035, { ...st, cap: 0xd0141c, led: 0xff3030 }, true));
-    hazardLamp(sp, 0.15, -0.035);
+    // ignition + START on the right of the panel, clear of the steering wheel
+    controls.push(f.toggle(sp, 'headlights', 'LIGHTS', -0.15, 0.025, st));
+    controls.push(f.toggle(sp, 'pod', 'POD', -0.09, 0.025, st));
+    controls.push(f.toggle(sp, 'hazards', 'HAZ', -0.03, 0.025, st));
+    controls.push(f.toggle(sp, 'demister', 'DEMIST', 0.03, 0.025, st));
+    controls.push(f.toggle(sp, 'interior', 'CABIN', 0.09, 0.025, st));
+    controls.push(f.toggle(sp, 'ignition', 'IGN', 0.15, 0.025, { ...st, led: 0xff3030 }, true));
+    controls.push(f.rotary(sp, 'wipers', 'WIPE', -0.12, -0.035, st));
+    hazardLamp(sp, -0.03, -0.035);
+    controls.push(f.push(sp, 'start', 'START', 0.12, -0.035, { ...st, cap: 0xd0141c, led: 0xff3030 }, true));
     tripComputer(group, { ...st, cap: 0x333333 }, { bg: '#020a12', fg: '#5fd2ff', font: 'monospace' }, mat({ color: 0x2b2e33, roughness: 0.6 }));
   } else if (model === 'dune') {
     // ---------------- rugged truck: tall boxy dash, 4 dials, rockers, grab handle

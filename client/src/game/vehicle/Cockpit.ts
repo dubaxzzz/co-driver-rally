@@ -382,6 +382,88 @@ export class Cockpit {
     return o;
   }
 
+  // ---------------------------------------------------------------- switch guide
+  private guide: { ring: THREE.Sprite; label: THREE.Sprite; labelTex: THREE.CanvasTexture; labelCanvas: HTMLCanvasElement } | null = null;
+  private guideId: ControlId | null = null;
+  private guideText = '';
+
+  /**
+   * Points at the switch the crew should use next: a pulsing glow ring on the
+   * switch and a floating label above it, drawn on top of everything (you can
+   * see it through the steering wheel).
+   */
+  setGuide(id: ControlId | null, text = '') {
+    if (!this.guide) {
+      const ringCanvas = document.createElement('canvas');
+      ringCanvas.width = ringCanvas.height = 128;
+      const g = ringCanvas.getContext('2d')!;
+      const grd = g.createRadialGradient(64, 64, 24, 64, 64, 62);
+      grd.addColorStop(0, 'rgba(255,190,60,0)');
+      grd.addColorStop(0.55, 'rgba(255,170,40,0.95)');
+      grd.addColorStop(0.7, 'rgba(255,120,20,0.6)');
+      grd.addColorStop(1, 'rgba(255,90,0,0)');
+      g.fillStyle = grd;
+      g.fillRect(0, 0, 128, 128);
+      const ringTex = this.track(new THREE.CanvasTexture(ringCanvas));
+      const ring = new THREE.Sprite(this.track(new THREE.SpriteMaterial({ map: ringTex, depthTest: false, depthWrite: false, transparent: true, blending: THREE.AdditiveBlending })));
+      ring.renderOrder = 999;
+      const labelCanvas = document.createElement('canvas');
+      labelCanvas.width = 512;
+      labelCanvas.height = 96;
+      const labelTex = this.track(new THREE.CanvasTexture(labelCanvas));
+      labelTex.colorSpace = THREE.SRGBColorSpace;
+      const label = new THREE.Sprite(this.track(new THREE.SpriteMaterial({ map: labelTex, depthTest: false, depthWrite: false, transparent: true })));
+      label.renderOrder = 1000;
+      label.scale.set(0.3, 0.056, 1);
+      this.group.add(ring, label);
+      this.guide = { ring, label, labelTex, labelCanvas };
+    }
+    const gd = this.guide;
+    this.guideId = id;
+    gd.ring.visible = gd.label.visible = !!id;
+    if (!id || text === this.guideText) return;
+    this.guideText = text;
+    const g = gd.labelCanvas.getContext('2d')!;
+    g.clearRect(0, 0, 512, 96);
+    g.font = 'bold 40px sans-serif';
+    const w = Math.min(500, g.measureText(text).width + 56);
+    g.fillStyle = 'rgba(12,14,18,0.92)';
+    g.beginPath();
+    g.roundRect((512 - w) / 2, 10, w, 64, 12);
+    g.fill();
+    g.strokeStyle = '#ffae2a';
+    g.lineWidth = 4;
+    g.stroke();
+    // little pointer under the box
+    g.fillStyle = '#ffae2a';
+    g.beginPath();
+    g.moveTo(256 - 14, 74);
+    g.lineTo(256 + 14, 74);
+    g.lineTo(256, 92);
+    g.fill();
+    g.fillStyle = '#fff';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(text, 256, 43);
+    gd.labelTex.needsUpdate = true;
+  }
+
+  private tmpV = new THREE.Vector3();
+  private updateGuide() {
+    const gd = this.guide;
+    if (!gd || !this.guideId) return;
+    const c = this.controls.find((x) => x.id === this.guideId);
+    if (!c) return;
+    this.group.updateWorldMatrix(true, true);
+    const p = c.hit[0].getWorldPosition(this.tmpV);
+    this.group.worldToLocal(p);
+    const pulse = 0.5 + 0.5 * Math.sin(this.time * 6);
+    gd.ring.position.copy(p);
+    gd.ring.scale.setScalar(0.1 + pulse * 0.05);
+    (gd.ring.material as THREE.SpriteMaterial).opacity = 0.55 + pulse * 0.45;
+    gd.label.position.set(p.x, p.y + 0.1 + pulse * 0.008, p.z - 0.02);
+  }
+
   update(dt: number, s: CockpitState) {
     this.time += dt;
 
@@ -452,6 +534,7 @@ export class Cockpit {
     this.cabinLight.intensity = sw.interior ? 4.5 : 0.9;
     this.glareMat.opacity += ((sw.interior ? 0.13 : 0) - this.glareMat.opacity) * Math.min(1, dt * 6);
     this.mapLight.intensity = s.mapLight ? 3 : 0;
+    this.updateGuide();
   }
 
   /** Inside condensation builds up in wet/cold weather; the demister clears it from the bottom up. */

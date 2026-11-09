@@ -44,3 +44,14 @@ export function escapeHtml(s: string) {
 export function loadingOverlay(text: string) {
   return h('div', { class: 'loading' }, h('div', { class: 'spinner' }), h('div', { class: 'panel-title' }, text));
 }
+
+/** The same header on every screen: back button, title, and an optional item on the right. */
+export function screenHeader(backLabel: string, onBack: () => void, title: string, right?: Node | null) {
+  return h(
+    'header',
+    { class: 'screen-header' },
+    h('button', { class: 'back-btn', onclick: () => onBack(), 'aria-label': backLabel, 'data-testid': 'back-btn' }, h('span', { class: 'back-ico' }, '‹'), h('span', { class: 'back-txt' }, backLabel)),
+    h('h2', {}, title),
+    h('div', { class: 'screen-header-right' }, right ?? null),
+  );
+}

@@ -416,12 +416,24 @@ export class Game {
     // pre-stage checklist until everything that matters is done
     const phase = this.raceState?.phase;
     const items = [
-      { label: 'Ignition on', done: this.sw.ignition },
-      { label: this.cranking > 0 ? 'Starting…' : 'Hold START', done: this.sw.engine },
+      { label: 'Ignition on (glowing switch)', done: this.sw.ignition },
+      { label: this.cranking > 0 ? 'Starting… keep holding' : 'Hold START until it fires', done: this.sw.engine },
     ];
     if (this.weather.headlights) items.push({ label: 'Headlights', done: this.sw.headlights });
     if (this.weather.rain > 0 || this.weather.snow > 0) items.push({ label: 'Wipers', done: this.sw.wipers > 0 });
     const allDone = items.every((i) => i.done);
+
+    // point at the next switch to use (glowing ring + label in the car)
+    const raceOn = phase === 'countdown' || phase === 'racing';
+    let next: ControlId | null = null;
+    let text = '';
+    if (raceOn && !this.myRace()?.result) {
+      if (!this.sw.ignition) [next, text] = ['ignition', 'CLICK: IGNITION'];
+      else if (!this.sw.engine) [next, text] = ['start', this.cranking > 0 ? 'KEEP HOLDING…' : 'HOLD: START'];
+      else if (this.weather.headlights && !this.sw.headlights) [next, text] = ['headlights', 'CLICK: LIGHTS'];
+      else if ((this.weather.rain > 0 || this.weather.snow > 0) && this.sw.wipers === 0) [next, text] = ['wipers', 'CLICK: WIPERS'];
+    }
+    this.cockpit.setGuide(next, text);
     const show = !this.myRace()?.result && (phase === 'countdown' || (phase === 'racing' && !allDone));
     this.hud.setChecklist(phase === 'countdown' ? 'PRE-STAGE CHECKS' : 'CAR NOT READY', show ? items : null);
   }

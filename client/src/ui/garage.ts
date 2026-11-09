@@ -3,7 +3,7 @@ import { MAX_UPGRADE_LEVEL, PAINTS, UPGRADES, VEHICLES, WHEELS, applyUpgrades, v
 import { career, money } from '../career';
 import { garageStore } from '../settings';
 import { createCarModel, type CarModel } from '../game/vehicle/CarModel';
-import { h, toast } from './dom';
+import { h, screenHeader, toast } from './dom';
 
 type Tab = 'cars' | 'dealer' | 'upgrades' | 'paint';
 
@@ -71,7 +71,7 @@ export function garageScreen(back: () => void): { el: HTMLElement; dispose: () =
   const moneyEl = h('div', { class: 'money-chip garage-money', 'data-testid': 'money' });
   const tabsEl = h('div', { class: 'seg garage-tabs' });
   const body = h('div', { class: 'garage-body' });
-  const tabs: Array<[Tab, string]> = [['cars', 'My cars'], ['dealer', 'Dealership'], ['upgrades', 'Upgrades'], ['paint', 'Paint & wheels']];
+  const tabs: Array<[Tab, string]> = [['cars', 'My cars'], ['dealer', 'Dealership'], ['upgrades', 'Upgrades'], ['paint', 'Paint']];
   for (const [id, label] of tabs) {
     const b = h('button', { 'data-testid': `tab-${id}` }, label);
     b.onclick = () => {
@@ -208,7 +208,7 @@ export function garageScreen(back: () => void): { el: HTMLElement; dispose: () =
   const el = h(
     'div',
     { class: 'screen' },
-    h('div', { class: 'screen-header' }, h('button', { class: 'back-btn', onclick: back }, '← Back'), h('h2', {}, 'Garage'), h('div', { style: 'margin-left:auto' }, moneyEl)),
+    screenHeader('Back', back, 'Garage', moneyEl),
     h('div', { class: 'garage' }, preview, h('div', { class: 'garage-side' }, tabsEl, body)),
   );
   return {

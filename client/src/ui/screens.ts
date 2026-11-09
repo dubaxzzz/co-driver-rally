@@ -15,7 +15,7 @@ import { formatTime, settings, type Settings } from '../settings';
 import { career, money } from '../career';
 import { bestKey, TEAMS, dailyChallenge, dailyKey, vehicleById } from '@cdr/shared';
 import { champ } from '../championship/state';
-import { h, toast } from './dom';
+import { h, screenHeader, toast } from './dom';
 
 export interface Screen {
   el: HTMLElement;
@@ -73,20 +73,12 @@ export function menuScreen(nav: Nav): Screen {
     return c;
   };
 
-  // quick join with a code
-  const code = h('input', { class: 'mm-code', maxlength: ROOM_CODE_LENGTH, placeholder: 'CODE', autocomplete: 'off', spellcheck: 'false', 'data-testid': 'menu-code' }) as HTMLInputElement;
-  code.addEventListener('input', () => (code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, '')));
-  const join = () => code.value.length === ROOM_CODE_LENGTH ? nav.go(`join/${code.value}`) : code.focus();
-  code.addEventListener('keydown', (e) => e.key === 'Enter' && join());
-  const joinBtn = h('button', { class: 'mm-join-btn', onclick: join }, 'Join');
-
   const medal = myDaily?.medal && myDaily.medal !== 'none' ? `${myDaily.medal === 'gold' ? '🥇' : myDaily.medal === 'silver' ? '🥈' : '🥉'} ${myDaily.medal}` : myDaily?.finished ? 'No medal yet' : 'Not driven yet';
   const el = h(
     'div',
     { class: 'screen mm' },
     h('div', { class: 'mm-vignette' }),
     h('header', { class: 'mm-top' },
-      h('div', { class: 'mm-logo' }, h('b', {}, 'CO-'), 'DRIVER'),
       h('div', { class: 'mm-top-right' },
         h('span', { class: 'mm-status', 'data-testid': 'conn-status' }, status.el),
         h('span', { class: 'mm-bank', 'data-testid': 'menu-money' }, money(save.money)),
@@ -94,7 +86,7 @@ export function menuScreen(nav: Nav): Screen {
     ),
     h('main', { class: 'mm-main' },
       h('div', { class: 'mm-hero' },
-        h('div', { class: 'mm-kicker' }, 'Night stage · Rain · Zero visibility'),
+        h('div', { class: 'mm-kicker' }, h('i', {}), 'Night stage · Rain · Zero visibility'),
         h('h1', { class: 'mm-title' }, h('span', {}, 'CO-DRIVER'), h('span', { class: 'outline' }, 'RALLY')),
         h('p', { class: 'mm-tag' }, 'You can barely see the road. Your navigator can. Drive blind, trust their voice.'),
       ),
@@ -103,7 +95,6 @@ export function menuScreen(nav: Nav): Screen {
         navBtn('Garage', 'Cars · upgrades · paint', 'garage', false, 1, 'menu-garage'),
         navBtn('Settings', 'Audio · graphics · controls', 'settings', false, 2, 'menu-settings'),
       ),
-      h('div', { class: 'mm-join', style: 'animation-delay:330ms' }, h('span', { class: 'mm-join-k' }, 'Got a code?'), code, joinBtn),
     ),
     h('aside', { class: 'mm-cards' },
       card('YOUR CAR', car.name, [stat('Power', car.stats.power), stat('Handling', car.stats.handling), stat('Braking', car.stats.braking)], 'garage', 0, 'menu-car'),
@@ -155,6 +146,7 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
     const stage = getStage(def.id)!;
     const mv = new MapView(stage);
     mv.mode = 'full';
+    mv.labels = false;
     previews.push(mv);
     const surfaces = [...new Set(stage.surfaceSpans.map((x) => SURFACES[x.surface].name))].join(' · ');
     const card = h(
@@ -240,7 +232,9 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
     codeEl.textContent = room.code;
     const url = `${location.origin}${location.pathname}#/join/${room.code}`;
     hint.innerHTML = '';
-    hint.append('Up to 4 players. Friends open ', h('code', {}, url), ' or choose ', h('b', {}, 'JOIN LOBBY'), ' and enter the code above. Each driver can bring a navigator.');
+    const copy = h('button', { class: 'copy-link', title: url }, 'Copy invite link');
+    copy.onclick = () => void navigator.clipboard?.writeText(url).then(() => toast('Invite link copied', 'ok'), () => toast(url));
+    hint.append(h('p', {}, 'Friends choose ', h('b', {}, 'Play → Join lobby'), ' and type this code. Up to 4 players – each driver can bring a navigator.'), copy);
     const me = net.me();
     const host = net.isHost;
     const inLobby = room.race.phase === 'lobby';
@@ -341,28 +335,35 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
   const el = h(
     'div',
     { class: 'screen' },
-    h('div', { class: 'screen-header' }, h('button', { class: 'back-btn', onclick: () => leaveBtn.click() }, '← Back'), h('h2', {}, solo ? 'Solo stage' : 'Rally lobby'), h('div', { style: 'margin-left:auto;color:var(--muted);font-size:13px' }, status.el)),
+    screenHeader('Back', () => leaveBtn.click(), solo ? 'Quick stage' : 'Rally lobby', status.el),
     h(
       'div',
-      { class: 'lobby-wrap' },
-      solo
-        ? h('div', { class: 'panel', style: 'width:min(1100px,100%);display:flex;align-items:center;gap:16px;flex-wrap:wrap' },
-            h('div', { style: 'flex:1;min-width:220px' }, h('div', { class: 'panel-title' }, 'Solo'), h('div', { class: 'setup-desc', style: 'margin:0' }, `Driving the ${career.activeDef().name}. Pick a stage, weather and AI opponents, then go. Every finish earns prize money.`)),
-            startBtn,
-          )
-        : h(
-        'div',
-        { class: 'lobby' },
-        h('div', { class: 'panel' }, h('div', { class: 'panel-title' }, 'Room code'), codeEl, hint),
-        h(
-          'div',
-          { class: 'panel' },
-          h('div', { class: 'panel-title' }, 'Players'),
-          players,
-          seatCtl,
-          h('div', { style: 'display:flex;gap:10px;margin-top:18px;flex-wrap:wrap' }, startBtn, readyBtn, leaveBtn),
-          startNote,
-        ),
+      { class: 'lobby-layout' },
+      // side column: who's here and the big buttons (first on phones)
+      h(
+        'aside',
+        { class: 'lobby-side' },
+        solo
+          ? h('div', { class: 'panel lobby-card' },
+              h('div', { class: 'panel-title' }, 'Quick stage'),
+              h('div', { class: 'lobby-car' }, career.activeDef().name),
+              h('p', { class: 'setup-desc' }, 'Pick a stage, the weather and AI rivals, then go. Every finish earns prize money.'),
+              startBtn,
+            )
+          : h('div', { class: 'panel lobby-card' },
+              h('div', { class: 'panel-title' }, 'Room code'),
+              codeEl,
+              hint,
+            ),
+        solo
+          ? null
+          : h('div', { class: 'panel lobby-card' },
+              h('div', { class: 'panel-title' }, 'Players'),
+              players,
+              seatCtl,
+              h('div', { class: 'lobby-actions' }, startBtn, readyBtn, leaveBtn),
+              startNote,
+            ),
       ),
       (setupPanel.append(
         h('div', { class: 'panel-title' }, 'Stage'),
@@ -398,7 +399,7 @@ export function playScreen(nav: Nav): Screen {
   const el = h(
     'div',
     { class: 'screen' },
-    h('div', { class: 'screen-header' }, h('button', { class: 'back-btn', onclick: () => nav.go('menu') }, '← Menu'), h('h2', {}, 'Play'), h('div', { style: 'margin-left:auto' }, h('span', { class: 'money-chip' }, money(career.get().money)))),
+    screenHeader('Menu', () => nav.go('menu'), 'Play', h('span', { class: 'money-chip' }, money(career.get().money))),
     h(
       'div',
       { class: 'center-wrap play-wrap' },
@@ -467,15 +468,15 @@ export function joinScreen(nav: Nav, prefill = ''): Screen {
   const el = h(
     'div',
     { class: 'screen' },
-    h('div', { class: 'screen-header' }, h('button', { class: 'back-btn', onclick: () => nav.go('menu') }, '← Menu'), h('h2', {}, 'Join rally'), h('div', { style: 'margin-left:auto;color:var(--muted);font-size:13px' }, status.el)),
+    screenHeader('Play', () => nav.go('play'), 'Join a rally', status.el),
     h(
       'div',
       { class: 'center-wrap' },
       h(
         'div',
-        { class: 'panel', style: 'width:min(520px,100%)' },
+        { class: 'panel join-card' },
         h('div', { class: 'panel-title' }, 'Room code'),
-        h('div', { class: 'setup-desc' }, 'Join as a driver (your own car) or a navigator (ride along with a driver) – you can switch seats in the lobby.'),
+        h('p', { class: 'setup-desc' }, 'Type the 4-character code from the host\'s screen. You can pick driver or navigator in the lobby.'),
         h('div', { class: 'field' }, code),
         h('div', { class: 'field' }, h('label', {}, 'Your name'), name),
         error,
@@ -502,8 +503,10 @@ export function settingsScreen(nav: Nav): Screen {
     });
     return wrap;
   };
+  const section = (title: string, ...rows: HTMLElement[]) => h('section', { class: 'panel settings-section' }, h('div', { class: 'panel-title' }, title), ...rows);
+  const keyRow = (k: string, v: string) => h('div', { class: 'key-row' }, h('span', { class: 'key-k' }, k), h('span', { class: 'key-v' }, v));
   const row = (title: string, desc: string, control: HTMLElement) =>
-    h('div', { class: 'setting-row' }, h('div', {}, h('div', { style: 'font-weight:700' }, title), h('div', { class: 'desc' }, desc)), control);
+    h('div', { class: 'setting-row' }, h('div', { class: 'setting-text' }, h('div', { class: 'setting-title' }, title), desc ? h('div', { class: 'desc' }, desc) : null), control);
 
   const name = h('input', { class: 'input', maxlength: 16, placeholder: 'Your name', style: 'width:220px;font-size:16px' }) as HTMLInputElement;
   name.value = s.playerName;
@@ -532,29 +535,34 @@ export function settingsScreen(nav: Nav): Screen {
   const el = h(
     'div',
     { class: 'screen' },
-    h('div', { class: 'screen-header' }, h('button', { class: 'back-btn', onclick: () => nav.go('menu') }, '← Back'), h('h2', {}, 'Settings')),
+    screenHeader('Menu', () => nav.go('menu'), 'Settings'),
     h(
       'div',
-      { class: 'center-wrap', style: 'align-items:flex-start' },
+      { class: 'page' },
       h(
         'div',
-        { class: 'panel settings' },
-        row('Player name', 'Shown to your crew-mate', name),
-        row('Audio', 'Engine, gravel, effects and chimes', seg('audioEnabled', [[true, 'On'], [false, 'Off']])),
-        row('Volume', 'Master volume', vol),
-        row('Driver visibility', 'Night fog on the stage. Very low = you must trust your co-driver', seg('visibility', [['verylow', 'Very low'], ['low', 'Low'], ['normal', 'Normal']])),
-        row('Wipers (start)', 'Wiper speed – change while driving with E', seg('wipers', [[0, 'Off'], [1, 'Slow'], [2, 'Fast']])),
-        row('Graphics quality', 'Low: no shadows, fewer trees – for older laptops', seg('quality', [['high', 'High'], ['low', 'Low']])),
-        row('Speed units', '', seg('units', [['kmh', 'km/h'], ['mph', 'mph']])),
-        row('Controls help', 'Show key hints on the driving HUD', seg('showHelp', [[true, 'Show'], [false, 'Hide']])),
-        row('Career', `Bank ${money(career.get().money)} · ${Object.keys(career.get().owned).length} car(s). Resetting starts again with ${money(20000)} and the Kestrel R5.`, resetBtn),
-        h(
-          'div',
-          { class: 'desc', style: 'margin-top:18px;line-height:1.8;color:var(--muted)' },
-          'Driver: W/↑ throttle · S/↓ brake & reverse · A/D steer · Space handbrake · R reset · Esc pause', h('br'),
-          'Switches (ignition, start, lights, wipers, demister…): click them in the car with the mouse', h('br'),
-          'Gamepad: RT throttle · LT brake · left stick steer · A/B handbrake · X reset · Start pause', h('br'),
-          'Navigator: ↑ look at the road · ↓ look at the tablet (or tap the button) · drag to look around · call the stage out loud',
+        { class: 'settings' },
+        section('Profile', row('Player name', 'Shown to everyone in your lobby', name)),
+        section('Sound',
+          row('Audio', 'Engine, gravel, switches and chimes', seg('audioEnabled', [[true, 'On'], [false, 'Off']])),
+          row('Volume', 'Master volume', vol),
+        ),
+        section('Graphics',
+          row('Driver visibility', 'Night fog on the stage – Very low means you must trust your co-driver', seg('visibility', [['verylow', 'Very low'], ['low', 'Low'], ['normal', 'Normal']])),
+          row('Quality', 'Low: no shadows, fewer trees – for older laptops', seg('quality', [['high', 'High'], ['low', 'Low']])),
+          row('Speed units', 'Shown on the dashboards and HUD', seg('units', [['kmh', 'km/h'], ['mph', 'mph']])),
+          row('Controls help', 'Key hints at the bottom of the driving screen', seg('showHelp', [[true, 'Show'], [false, 'Hide']])),
+        ),
+        section('Career', row('Reset career', `Bank ${money(career.get().money)} · ${Object.keys(career.get().owned).length} car(s). Starts again with ${money(20000)} and the Kestrel R5.`, resetBtn)),
+        section('Controls',
+          h('div', { class: 'keys' },
+            keyRow('Drive', 'W / ↑ throttle · S / ↓ brake & reverse · A D / ← → steer'),
+            keyRow('Handbrake', 'Space'),
+            keyRow('Reset · Pause', 'R · Esc'),
+            keyRow('Switches', 'Click them in the car: ignition, START (hold), lights, wipers, demister…'),
+            keyRow('Gamepad', 'RT throttle · LT brake · left stick steer · A/B handbrake · X reset · Start pause'),
+            keyRow('Navigator', '↑ look at the road · ↓ look at the tablet · drag to look around · call the stage out loud'),
+          ),
         ),
       ),
     ),

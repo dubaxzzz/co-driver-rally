@@ -7,6 +7,8 @@ import type { BuiltStage, RelayedTelemetry } from '@cdr/shared';
 export class MapView {
   readonly canvas = document.createElement('canvas');
   mode: 'follow' | 'full' = 'follow';
+  /** Small thumbnails (stage picker) draw markers only – text labels would overlap. */
+  labels = true;
   private ctx = this.canvas.getContext('2d')!;
   private trail: Array<[number, number]> = [];
   private viewHeading = 0;
@@ -106,10 +108,13 @@ export class MapView {
       for (const b of st.bridges) {
         const [px, py] = toScreen(b.x, b.z);
         g.fillStyle = '#c08a4a';
-        g.fillRect(px - 5, py - 5, 10, 10);
-        g.fillStyle = '#fff';
-        g.font = '800 10px sans-serif';
-        g.fillText('BRIDGE', px + 30, py);
+        const bs = this.labels ? 5 : 3;
+        g.fillRect(px - bs, py - bs, bs * 2, bs * 2);
+        if (this.labels) {
+          g.fillStyle = '#fff';
+          g.font = '800 10px sans-serif';
+          g.fillText('BRIDGE', px + 30, py);
+        }
       }
     }
 
@@ -135,8 +140,10 @@ export class MapView {
     // start / checkpoints / finish
     const flag = (x: number, z: number, color: string, label: string) => {
       const [px, py] = toScreen(x, z);
+      const r = this.labels ? 6 : 3.5;
       g.fillStyle = color;
-      g.fillRect(px - 6, py - 6, 12, 12);
+      g.fillRect(px - r, py - r, r * 2, r * 2);
+      if (!this.labels) return;
       g.fillStyle = '#fff';
       g.font = '800 11px sans-serif';
       g.fillText(label, px, py - 14);

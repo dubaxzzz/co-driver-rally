@@ -19,7 +19,7 @@ import { eventCtx } from '../events/context';
 import { net, type NetError } from '../multiplayer/NetClient';
 import { formatTime, settings } from '../settings';
 import { classificationTable } from './classification';
-import { h, toast } from './dom';
+import { h, screenHeader, toast } from './dom';
 import type { Nav, Screen } from './screens';
 
 const DAMAGE_ZONE_NAMES = ['Front', 'Left side', 'Right side', 'Rear', 'Windscreen', 'Engine'];
@@ -72,13 +72,7 @@ async function launch(nav: Nav, rally: RallyConfig, title: string, onStart?: () 
 }
 
 function header(nav: Nav, title: string) {
-  return h(
-    'div',
-    { class: 'screen-header' },
-    h('button', { class: 'back-btn', onclick: () => nav.go('play') }, '← Play'),
-    h('h2', {}, title),
-    h('div', { style: 'margin-left:auto' }, h('span', { class: 'money-chip', 'data-testid': 'event-money' }, money(career.get().money))),
-  );
+  return screenHeader('Play', () => nav.go('play'), title, h('span', { class: 'money-chip', 'data-testid': 'event-money' }, money(career.get().money)));
 }
 
 // ------------------------------------------------------------------ championship

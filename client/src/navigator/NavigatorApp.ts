@@ -74,14 +74,11 @@ export class NavigatorApp {
       'div',
       { class: 'nav-header' },
       this.lookBtn,
-      h('span', { class: 'brand' }, h('span', { class: 'co' }, 'CO-'), 'DRIVER'),
-      h('span', { class: 'chip' }, 'ROOM'),
-      this.els.code,
-      this.els.server,
-      this.els.driver,
-      this.els.phase,
+      h('span', { class: 'brand nh-brand' }, h('span', { class: 'co' }, 'CO-'), 'DRIVER'),
+      h('span', { class: 'nh-room' }, h('span', { class: 'chip' }, 'ROOM'), this.els.code),
+      h('span', { class: 'nh-status' }, this.els.server, this.els.driver, this.els.phase),
       this.els.timer,
-      h('button', { class: 'back-btn', onclick: () => void this.leave() }, 'Leave'),
+      h('button', { class: 'back-btn nh-leave', onclick: () => void this.leave() }, 'Leave'),
     );
 
     // ---- map ----
