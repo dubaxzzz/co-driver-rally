@@ -11,6 +11,8 @@ export const FRANCE_STAGE: StageDef = {
   roadWidth: 7,
   seed: 777,
   checkpointFractions: [0.3, 0.55, 0.8],
+  // hard-AI time in clear weather – sets the Daily Challenge medal targets
+  referenceTimeMs: 70220,
   defaultWeather: 'dusk',
   scenery: {
     sunElevationDeg: 8,

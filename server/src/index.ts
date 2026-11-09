@@ -7,6 +7,8 @@ import { Server } from 'socket.io';
 import type { ClientToServerEvents, ServerToClientEvents } from '@cdr/shared';
 import { config } from './config';
 import { registerHandlers } from './networking/handlers';
+import { dailyBoard } from './daily/DailyBoard';
+import { dailyChallenge, dailyKey } from '@cdr/shared';
 
 const app = express();
 const httpServer = createServer(app);
@@ -20,6 +22,11 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
 });
 
 const rooms = registerHandlers(io);
+
+app.get('/api/daily', (_req, res) => {
+  const date = dailyKey();
+  res.json({ challenge: dailyChallenge(date), board: dailyBoard.top(date) });
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, rooms: rooms.size, uptime: process.uptime() });

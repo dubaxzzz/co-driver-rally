@@ -64,6 +64,8 @@ export interface StageDef {
   checkpointFractions: number[];
   /** Seed for deterministic scenery. */
   seed: number;
+  /** Hard-AI time in clear weather (ms) – used for medal targets. */
+  referenceTimeMs: number;
   /** Weather picked when this stage is selected (players can change it). */
   defaultWeather: WeatherId;
   scenery: StageScenery;

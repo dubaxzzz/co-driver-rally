@@ -27,6 +27,10 @@ export function validateConfig(p: unknown): Partial<RallyConfig> | null {
     if (!isNum(p.aiCount, 0, MAX_AI) || !Number.isInteger(p.aiCount)) return null;
     out.aiCount = p.aiCount;
   }
+  if (p.daily !== undefined) {
+    if (typeof p.daily !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(p.daily)) return null;
+    out.daily = p.daily;
+  }
   if (p.aiSkill !== undefined) {
     if (!AI_SKILLS.includes(p.aiSkill as AiSkill)) return null;
     out.aiSkill = p.aiSkill as AiSkill;

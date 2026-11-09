@@ -10,6 +10,8 @@ export interface RallyConfig {
   /** Number of AI opponents (0–3). */
   aiCount: number;
   aiSkill: AiSkill;
+  /** Set for the Daily Challenge (UTC date) – the server fixes stage/weather and records the time. */
+  daily?: string;
 }
 
 export type Role = 'driver' | 'navigator';

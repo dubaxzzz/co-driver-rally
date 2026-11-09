@@ -11,6 +11,8 @@ export const AUSTRALIA_STAGE: StageDef = {
   roadWidth: 9,
   seed: 909,
   checkpointFractions: [0.25, 0.5, 0.75],
+  // hard-AI time in clear weather – sets the Daily Challenge medal targets
+  referenceTimeMs: 75870,
   defaultWeather: 'clear',
   scenery: {
     sunElevationDeg: 55,

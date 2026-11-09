@@ -63,6 +63,18 @@ check(!badAi.ok, 'too many AI opponents rejected');
 const created3 = await call<JoinResult>((a) => driver2.emit('room:create', { config: { stageId: 'tarmac-turini', weather: 'dusk' } }, a));
 check(created3.ok && created3.data.room.race.stageId === 'tarmac-turini' && created3.data.room.race.weather === 'dusk', 'room can be created with a chosen stage and weather');
 
+// daily challenge: the server forces today's stage + weather and no AI, and refuses other dates
+{
+  const { dailyChallenge, dailyKey } = await import('../shared/src/index');
+  const today = dailyChallenge(dailyKey());
+  const d = await call<{ stageId: string; weather: string; aiCount: number; daily?: string }>((a) => driver2.emit('room:configure', { daily: today.date, stageId: 'forest-kallio', aiCount: 3 }, a as never));
+  check(d.ok && d.data.stageId === today.stageId && d.data.weather === today.weather && d.data.aiCount === 0, `daily config is forced by the server (${today.stageId}, ${today.weather}, no AI)`);
+  const old = await call((a) => driver2.emit('room:create', { config: { daily: '2020-01-01' } }, a));
+  check(!old.ok, "an old day's challenge is rejected");
+  const res = await fetch('http://localhost:3001/api/daily').then((r) => r.json());
+  check(res.challenge?.date === today.date && Array.isArray(res.board), '/api/daily returns today\'s challenge and leaderboard');
+}
+
 // navigator cannot start / send telemetry; driver can't send calls
 const navCfg = await call((a) => nav.emit('room:configure', { weather: 'clear' }, a as never));
 check(!navCfg.ok, 'navigator cannot change the stage or weather');

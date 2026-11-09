@@ -149,7 +149,7 @@ Set `CLIENT_ORIGIN` if the page is served from a different origin than the serve
 
 ## Career: money, cars and upgrades
 
-- **PLAY** → *Solo stage*, *Create lobby* or *Join lobby*.
+- **PLAY** → Solo: *Championship*, *Daily challenge*, *Quick stage* · Multiplayer: *Create lobby*, *Join lobby*.
 - Every finished stage pays **prize money**: stage length, harder weather,
   your position against AI rivals (more for harder AI) and a clean-run bonus –
   minus the **repair bill** for any crash or wheel damage.
@@ -162,6 +162,29 @@ Set `CLIENT_ORIGIN` if the page is served from a different origin than the serve
 - **Potholes** (yellow dots on the navigator's map) and hard landings damage wheels;
   enough damage and the wheel breaks off and bounces away – you can limp on, slowly.
 - Progress is saved in this browser (Settings → Reset career to start over).
+
+## Championship career
+
+- Six-round seasons (every stage once, weather set per round) against a field of
+  **11 named drivers** in four teams. Points 25-18-15-12-10-8-6-4-2-1.
+- Three rivals closest to you in the standings race you **on the stage** as real AI cars;
+  the rest get times simulated from how fast those AI really drove.
+- **Service park** between rounds: damage carries over. Privateers pay for repairs;
+  a wheel that came off must be replaced before the next round.
+- **Team contracts:** good results bring offers – Kallio Motorsport (tier 1), Northern Lights
+  Rally (tier 2), Vortex Works (tier 3). Teams give you their car, a salary per round and
+  free repairs, but miss their goal two rounds in a row and you are dropped.
+- No restarts in a round; the pause menu has *Retire* (0 points).
+- Season-end bonus: $50,000 for the title, $20,000 for P2, $10,000 for P3.
+- A navigator can still join any round with the room code shown before the start.
+
+## Daily challenge
+
+- One stage + weather + loan car per day (UTC), the same for everybody – stock car, no AI.
+- Gold / silver / bronze target times pay $12,000 / $6,000 / $3,000 (a better medal later
+  pays the difference) plus $500 for the first finish of the day. Retry as often as you like.
+- The server forces today's stage and keeps a leaderboard from its own timing
+  (in memory, so it clears when Render restarts the server).
 
 ## Stages, weather and opponents
 
@@ -317,6 +340,7 @@ npm run test:rollover    # no roll-overs in hard cornering
 npm run test:ai          # AI drivers finish every stage
 npm run test:wheels      # potholes, landings, wheels breaking off
 npm run test:career      # prize money, repair bills, upgrades
+npm run test:championship # full simulated season, contracts, repairs, daily medals
 npm run dev:server       # then, in another terminal:
 npm run test:server      # 20 multiplayer checks incl. a full-stage finish (~50 s)
 npm run test:e2e         # with `npm run dev` running; needs Python Playwright

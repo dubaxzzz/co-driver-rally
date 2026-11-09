@@ -3,6 +3,8 @@ import { net } from './multiplayer/NetClient';
 import { h, loadingOverlay, toast } from './ui/dom';
 import { joinScreen, lobbyScreen, menuScreen, playScreen, settingsScreen, type Screen } from './ui/screens';
 import './audio/AudioEngine';
+import { championshipScreen, dailyScreen } from './ui/events';
+import { eventCtx } from './events/context';
 
 /**
  * Hash router: #/ menu · #/create lobby · #/join/CODE · #/garage ·
@@ -32,11 +34,20 @@ async function render() {
     case 'play':
       current = playScreen(nav);
       break;
+    case 'championship':
+    case 'service':
+      current = championshipScreen(nav);
+      break;
+    case 'daily':
+      current = dailyScreen(nav);
+      break;
     case 'create':
+      eventCtx.clear();
       lastLobby = 'create';
       current = lobbyScreen(nav, 'crew');
       break;
     case 'solo':
+      eventCtx.clear();
       lastLobby = 'solo';
       current = lobbyScreen(nav, 'solo');
       break;
@@ -60,7 +71,7 @@ async function render() {
       // Load Three.js/Rapier only for the driver (keeps the navigator page light)
       const { Game } = await import('./game/Game');
       if (token !== routeToken) return;
-      const game = new Game(root, (to) => go(to === 'lobby' ? lastLobby : 'menu'));
+      const game = new Game(root, (to) => go(to === 'lobby' ? lastLobby : to === 'service' ? 'championship' : to));
       current = { el: root, dispose: () => game.dispose() };
       void game.init();
       return;
@@ -99,7 +110,12 @@ async function boot() {
   if (role === 'navigator') {
     go('navigator');
   } else {
-    go(phase === 'countdown' || phase === 'racing' || phase === 'finished' ? 'drive' : 'create');
+    const racing = phase === 'countdown' || phase === 'racing' || phase === 'finished';
+    const kind = eventCtx.get().kind;
+    if (racing) go('drive');
+    else if (kind === 'championship') { await net.leave().catch(() => undefined); go('championship'); }
+    else if (kind === 'daily') { await net.leave().catch(() => undefined); go('daily'); }
+    else go('create');
   }
 }
 

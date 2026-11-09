@@ -24,6 +24,8 @@ export interface CareerSave {
   /** Runs already paid out (so a refresh can't pay twice). */
   paid: string[];
   stats: { stages: number; wins: number; earned: number };
+  /** Today's Daily Challenge progress. */
+  daily: { date: string; bestMs: number | null; medal: 'none' | 'bronze' | 'silver' | 'gold'; finished: boolean };
 }
 
 const KEY = 'cdr.career';
@@ -36,6 +38,7 @@ function fresh(): CareerSave {
     bests: {},
     paid: [],
     stats: { stages: 0, wins: 0, earned: 0 },
+    daily: { date: '', bestMs: null, medal: 'none', finished: false },
   };
 }
 
@@ -119,6 +122,14 @@ export const career = {
     commit();
     return true;
   },
+  /** Pays for something outside the garage (e.g. service-park repairs). */
+  spend(amount: number): boolean {
+    if (amount <= 0) return true;
+    if (save.money < amount) return false;
+    save = { ...save, money: save.money - Math.round(amount) };
+    commit();
+    return true;
+  },
   /** Records a stage time; returns true if it's a new personal best. */
   recordBest(key: string, ms: number): boolean {
     const prev = save.bests[key];
@@ -128,6 +139,10 @@ export const career = {
     return true;
   },
   best: (key: string): number | null => save.bests[key] ?? null,
+  setDaily(daily: CareerSave['daily']) {
+    save = { ...save, daily };
+    commit();
+  },
   /** Wipes the career (Settings). */
   reset() {
     save = fresh();

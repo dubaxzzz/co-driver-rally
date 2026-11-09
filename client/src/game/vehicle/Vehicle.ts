@@ -225,6 +225,14 @@ export class Vehicle {
     }
   }
 
+  /** Starts with damage carried over (championship). Lost wheels come back fitted but battered. */
+  setDamage(zones: number[], wheels: number[]) {
+    this.resetDamage();
+    DAMAGE_KEYS.forEach((k, i) => (this.damage[k] = Math.max(0, Math.min(1, zones[i] ?? 0))));
+    for (let i = 0; i < 4; i++) this.wheelDamage[i] = Math.max(0, Math.min(0.95, wheels[i] ?? 0));
+    this.telemetry.damage = Math.max(...DAMAGE_KEYS.map((k) => this.damage[k]));
+  }
+
   /** One fixed physics step. */
   step(dt: number, input: DriveInput) {
     const c = this.controller;

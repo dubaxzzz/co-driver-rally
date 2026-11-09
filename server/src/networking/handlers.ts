@@ -7,6 +7,9 @@ import {
   validateNavCall,
   validateTelemetry,
   validateConfig,
+  dailyChallenge,
+  dailyKey,
+  type RallyConfig,
   type Ack,
   type ClientToServerEvents,
   type ErrorCode,
@@ -15,6 +18,15 @@ import {
 } from '@cdr/shared';
 import { config } from '../config';
 import { RoomManager, type Room } from '../rooms/RoomManager';
+import { dailyBoard } from '../daily/DailyBoard';
+
+/** Daily Challenge: the server decides stage + weather (no AI) for today's date. */
+function applyDaily(cfg: Partial<RallyConfig>): Partial<RallyConfig> | string {
+  if (!cfg.daily) return cfg;
+  if (cfg.daily !== dailyKey()) return 'That Daily Challenge has ended – a new one is up.';
+  const dc = dailyChallenge(cfg.daily);
+  return { ...cfg, stageId: dc.stageId, weather: dc.weather, aiCount: 0 };
+}
 
 type IO = Server<ClientToServerEvents, ServerToClientEvents>;
 type Sock = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -40,7 +52,12 @@ export function registerHandlers(io: IO) {
     onState: (state) => io.to(code).emit('race:state', state),
     onCheckpoint: (evt) => io.to(code).emit('race:checkpoint', evt),
     onWarning: (w) => io.to(code).emit('race:warning', w),
-    onFinished: (r) => io.to(code).emit('race:finished', r),
+    onFinished: (r) => {
+      io.to(code).emit('race:finished', r);
+      const room = rooms.get(code);
+      const daily = room?.race.state.daily;
+      if (room && daily && room.driver) dailyBoard.add(daily, room.driver.name, r.timeMs);
+    },
   }));
 
   const broadcastRoom = (room: Room) => io.to(room.code).emit('room:update', rooms.snapshot(room));
@@ -75,8 +92,10 @@ export function registerHandlers(io: IO) {
     socket.on('room:create', (payload, ackFn) => {
       const ack = safeAck(ackFn);
       const name = sanitiseName(payload && (payload as { name?: unknown }).name, 'Driver');
-      const config = payload?.config === undefined ? {} : validateConfig(payload.config);
-      if (!config) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
+      const raw = payload?.config === undefined ? {} : validateConfig(payload.config);
+      if (!raw) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
+      const config = applyDaily(raw);
+      if (typeof config === 'string') return ack(err('BAD_PAYLOAD', config));
       leaveCurrent();
       const res = rooms.createRoom(socket.id, name, config);
       if (res.ok) {
@@ -158,8 +177,11 @@ export function registerHandlers(io: IO) {
       if (!ctx) return ack(err('NOT_IN_ROOM', 'You are not in a rally.'));
       if (ctx.b.role !== 'driver') return ack(err('NOT_ALLOWED', 'Only the driver can choose the stage.'));
       if (ctx.room.race.state.phase !== 'lobby') return ack(err('WRONG_PHASE', 'Return to the lobby to change the stage.'));
-      const cfg = validateConfig(payload);
-      if (!cfg) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
+      const raw = validateConfig(payload);
+      if (!raw) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
+      // a daily room stays locked to today's challenge
+      const cfg = applyDaily(ctx.room.race.state.daily ? { ...raw, daily: ctx.room.race.state.daily } : raw);
+      if (typeof cfg === 'string') return ack(err('BAD_PAYLOAD', cfg));
       ack({ ok: true, data: ctx.room.race.configure(cfg) });
     });
     socket.on('race:start', (ack) => raceAction('start', ack));

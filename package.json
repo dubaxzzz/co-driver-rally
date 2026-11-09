@@ -27,6 +27,7 @@
     "test:ai": "tsx tests/ai.test.ts",
     "test:wheels": "tsx tests/wheels.test.ts",
     "test:career": "tsx tests/career.test.ts",
+    "test:championship": "tsx tests/championship.test.ts",
     "test:e2e": "python3 tests/e2e_two_browsers.py",
     "render-build": "npm install --include=dev && npm run build"
   },

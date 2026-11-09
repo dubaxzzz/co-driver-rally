@@ -11,6 +11,8 @@ export const WALES_STAGE: StageDef = {
   roadWidth: 7,
   seed: 3141,
   checkpointFractions: [0.25, 0.5, 0.75],
+  // hard-AI time in clear weather – sets the Daily Challenge medal targets
+  referenceTimeMs: 63920,
   defaultWeather: 'rain',
   scenery: {
     sunElevationDeg: 25,

@@ -11,6 +11,8 @@ export const TASMANIA_STAGE: StageDef = {
   roadWidth: 7.5,
   seed: 7000,
   checkpointFractions: [0.25, 0.5, 0.75],
+  // hard-AI time in clear weather – sets the Daily Challenge medal targets
+  referenceTimeMs: 61250,
   defaultWeather: 'overcast',
   scenery: {
     sunElevationDeg: 35,

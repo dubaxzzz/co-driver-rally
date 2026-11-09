@@ -11,6 +11,8 @@ export const SWEDEN_STAGE: StageDef = {
   roadWidth: 7.5,
   seed: 4242,
   checkpointFractions: [0.25, 0.5, 0.75],
+  // hard-AI time in clear weather – sets the Daily Challenge medal targets
+  referenceTimeMs: 83850,
   defaultWeather: 'snow',
   scenery: {
     sunElevationDeg: 12,

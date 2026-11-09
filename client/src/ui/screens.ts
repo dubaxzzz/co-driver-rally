@@ -14,7 +14,8 @@ import { net, type NetError } from '../multiplayer/NetClient';
 import { MapView } from '../navigator/MapView';
 import { formatTime, settings, type Settings } from '../settings';
 import { career, money } from '../career';
-import { bestKey } from '@cdr/shared';
+import { bestKey, TEAMS, dailyChallenge, dailyKey } from '@cdr/shared';
+import { champ } from '../championship/state';
 import { h, toast } from './dom';
 
 export interface Screen {
@@ -303,6 +304,18 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
 }
 
 // ------------------------------------------------------------------ play
+function champSub() {
+  const s = champ.get();
+  if (!s) return 'Start a career: six-round seasons, points, team contracts, carried damage. Get picked up by a works team.';
+  if (s.round >= s.schedule.length) return `Season ${s.season} finished – start the next one.`;
+  return `Season ${s.season} · round ${s.round + 1} of ${s.schedule.length} · ${TEAMS[s.team].name} · P${champ.standingsPosition()} with ${s.points.player ?? 0} pts`;
+}
+function dailySub() {
+  const ch = dailyChallenge(dailyKey());
+  const me = career.get().daily;
+  const done = me.date === ch.date && me.finished ? ` · your best ${formatTime(me.bestMs ?? 0)}${me.medal !== 'none' ? ` (${me.medal})` : ''}` : '';
+  return `Today: ${getStage(ch.stageId)?.def.name} in ${WEATHER[ch.weather].name.toLowerCase()}, same loan car for everyone. Medals pay up to $12,000${done}.`;
+}
 export function playScreen(nav: Nav): Screen {
   const card = (k: string, title: string, desc: string, route: string, primary = false, id = '') =>
     h('button', { class: `play-card ${primary ? 'primary' : ''}`, onclick: () => nav.go(route), 'data-testid': id }, h('div', { class: 'k' }, k), h('div', { class: 't' }, title), h('div', { class: 'd' }, desc));
@@ -312,11 +325,19 @@ export function playScreen(nav: Nav): Screen {
     h('div', { class: 'screen-header' }, h('button', { class: 'back-btn', onclick: () => nav.go('menu') }, '← Menu'), h('h2', {}, 'Play'), h('div', { style: 'margin-left:auto' }, h('span', { class: 'money-chip' }, money(career.get().money)))),
     h(
       'div',
-      { class: 'center-wrap' },
+      { class: 'center-wrap play-wrap' },
+      h('div', { class: 'play-row-title' }, 'Solo'),
       h(
         'div',
         { class: 'play-grid' },
-        card('SOLO', 'Solo stage', 'Pick any stage, weather and up to 3 AI rivals. Earn prize money for every finish.', 'solo', true, 'play-solo'),
+        card('SOLO', 'Championship', champSub(), 'championship', true, 'play-championship'),
+        card('SOLO', 'Daily challenge', dailySub(), 'daily', false, 'play-daily'),
+        card('SOLO', 'Quick stage', 'Any stage, any weather, up to 3 AI rivals. Prize money for every finish.', 'solo', false, 'play-solo'),
+      ),
+      h('div', { class: 'play-row-title' }, 'Multiplayer'),
+      h(
+        'div',
+        { class: 'play-grid two' },
         card('MULTIPLAYER', 'Create lobby', 'Host a rally and share the 4-character code. Your navigator joins from a tablet or phone.', 'create', false, 'play-create'),
         card('MULTIPLAYER', 'Join lobby', 'Enter a code to join a rally as the navigator. You earn a 40% share of your driver\'s prize.', 'join', false, 'play-join'),
       ),
@@ -423,6 +444,7 @@ export function settingsScreen(nav: Nav): Screen {
       return;
     }
     career.reset();
+    champ.reset();
     toast('Career reset', 'ok');
     nav.go('settings');
   };

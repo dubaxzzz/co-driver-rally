@@ -16,6 +16,8 @@ export const FOREST_STAGE: StageDef = {
   roadWidth: 8,
   seed: 1337,
   checkpointFractions: [0.25, 0.5, 0.75],
+  // hard-AI time in clear weather – sets the Daily Challenge medal targets
+  referenceTimeMs: 108500,
   defaultWeather: 'storm',
   scenery: {
     sunElevationDeg: 30,

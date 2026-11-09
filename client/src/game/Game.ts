@@ -24,7 +24,10 @@ import { Hud } from '../ui/hud';
 import { resultsOverlay, type Standing } from '../ui/results';
 import { career, money } from '../career';
 import { AIDriver, AI_CREWS } from './ai/AIDriver';
-import { VEHICLES } from '@cdr/shared';
+import { VEHICLES, TEAMS, applyUpgrades, vehicleById, dailyChallenge, medalFor, MEDAL_PAY, MEDAL_RANK, DAILY_FINISH_PAY } from '@cdr/shared';
+import { eventCtx, type EventContext } from '../events/context';
+import { champ } from '../championship/state';
+import { classificationTable, formatMs } from '../ui/classification';
 
 const VEHICLES_BODY = VEHICLES[0].body;
 import { DustSystem } from './environment/Atmosphere';
@@ -38,7 +41,7 @@ import { DAMAGE_KEYS, Vehicle, type NearbyPothole } from './vehicle/Vehicle';
 import type { AIDriver as AIDriverT } from './ai/AIDriver';
 import { buildStageWorld, type StageWorld } from './world/StageWorld';
 
-export type GameExit = 'menu' | 'lobby';
+export type GameExit = 'menu' | 'lobby' | 'service' | 'daily';
 
 /**
  * The driver's game: owns the renderer, physics world, vehicle, stage and
@@ -77,6 +80,9 @@ export class Game {
   private unsubs: Array<() => void> = [];
   private disposed = false;
   private resultShown = false;
+  private ctx: EventContext = eventCtx.get();
+  private carryApplied = false;
+  private retired = false;
 
   constructor(
     private readonly container: HTMLElement,
@@ -116,6 +122,14 @@ export class Game {
 
       // Vehicle
       const sel = garageStore.resolve();
+      const ctx = this.ctx;
+      if (ctx.kind === 'championship') {
+        sel.vehicle = applyUpgrades(vehicleById(ctx.carId), ctx.upgrades);
+        const team = TEAMS[champ.get()?.team ?? 'privateer'];
+        if (team.carId) sel.paint = { id: team.id, name: team.name, body: team.colour, accent: team.accent };
+      } else if (ctx.kind === 'daily') {
+        sel.vehicle = vehicleById(ctx.carId); // loan car, stock – same for everyone
+      }
       const model = createCarModel(sel.paint, sel.wheel, sel.vehicle.body);
       this.scene.add(model.root);
       this.vehicle = new Vehicle(this.physics, sel.vehicle, sel.wheel, model);
@@ -141,10 +155,13 @@ export class Game {
       // AI opponents: real physics cars lined up behind you; they never collide with you.
       const aiCount = room?.race.aiCount ?? 0;
       for (let i = 0; i < aiCount; i++) {
-        const crew = AI_CREWS[i % AI_CREWS.length];
+        const entrant = this.ctx.kind === 'championship' ? this.ctx.entrants[i] : undefined;
+        const crew = entrant ?? AI_CREWS[i % AI_CREWS.length];
         const aiModel = createCarModel(crew.paint, WHEELS[0], VEHICLES_BODY);
         this.scene.add(aiModel.root);
-        const driver = new AIDriver(this.physics, stage, crew.name, aiModel, room?.race.aiSkill ?? 'medium', 9 * (i + 1), this.weather);
+        const skill = entrant?.skill ?? room?.race.aiSkill ?? 'medium';
+        const driver = new AIDriver(this.physics, stage, crew.name, aiModel, skill, 9 * (i + 1), this.weather);
+        if (entrant) this.aiEntrant.set(driver, entrant.entrantId);
         if (this.world.roadColliderHandle !== null) driver.vehicle.roadColliders.add(this.world.roadColliderHandle);
         driver.vehicle.onWheelLost = (wi) => this.spawnLooseWheel(driver.vehicle, wi);
         this.ai.push(driver);
@@ -251,6 +268,10 @@ export class Game {
     const s = sampleAt(this.stage.samples, spawnD);
     this.vehicle.place(s.x, s.y + 0.9, s.z, s.h);
     this.vehicle.resetDamage();
+    if (this.ctx.kind === 'championship' && !this.carryApplied) {
+      this.vehicle.setDamage(this.ctx.carry.zones, this.ctx.carry.wheels);
+      this.carryApplied = true;
+    }
     if (devDamage) {
       const d = this.vehicle.damage;
       d.front = d.windscreen = d.engine = devDamage;
@@ -345,6 +366,8 @@ export class Game {
     this.resultShown = true;
     this.vehicle.frozen = true;
     this.hud.center('FINISH');
+    if (this.ctx.kind === 'championship') return this.finishChampionship(r);
+    if (this.ctx.kind === 'daily') return this.finishDaily(r, this.ctx.date);
 
     // ---- prize money + personal best ----
     const state = this.raceState!;
@@ -405,6 +428,116 @@ export class Game {
     ];
   }
 
+  // ---------------------------------------------------------------- championship
+  private aiEntrant = new Map<AIDriverT, string>();
+
+  private damageNow() {
+    const v = this.vehicle;
+    return { zones: DAMAGE_KEYS.map((k) => v.damage[k]), wheels: v.wheelLost.map((lost, i) => (lost ? 1 : v.wheelDamage[i])) };
+  }
+
+  /** Times of the AI that raced you; any still on the stage get a projected time. */
+  private onTrackTimes(playerMs: number | null) {
+    const proj = this.standings(playerMs ?? this.raceTimeMs(), true);
+    const len = this.stage.finishDistance - this.stage.spawnDistance;
+    return this.ai.map((a, i) => {
+      // a projection from the first few hundred metres is meaningless – let the championship simulate it
+      const enough = a.finishTimeMs !== null || (a.distance - this.stage.spawnDistance) / len > 0.3;
+      return { entrantId: this.aiEntrant.get(a) ?? '', timeMs: enough ? proj[i + 1].timeMs : null };
+    });
+  }
+
+  private finishChampionship(r: RaceResult | null) {
+    const summary = champ.finishRound(r?.timeMs ?? null, this.onTrackTimes(r?.timeMs ?? null), this.damageNow(), r?.resets ?? this.resets);
+    if (summary) this.prize = { runId: this.raceState?.runId ?? 0, total: summary.prize.total };
+    const save = champ.get();
+    const rec = save?.results[save.results.length - 1];
+    const extra = h('div', { class: 'rewards', 'data-testid': 'rewards' });
+    if (summary && rec) {
+      extra.append(
+        h('div', { class: 'new-record' }, summary.position === null ? 'RETIRED – NO POINTS' : `P${summary.position} · +${summary.pointsGained} PTS`),
+        classificationTable(rec.classification, 12),
+        h('div', { class: 'panel-title', style: 'margin:14px 0 6px' }, 'Prize money'),
+        ...summary.prize.lines.map((l) => h('div', { class: `prize-line ${l.amount < 0 ? 'neg' : ''}` }, h('span', {}, l.label), h('span', {}, `${l.amount < 0 ? '−' : '+'}${money(Math.abs(l.amount))}`))),
+        h('div', { class: 'prize-line total' }, h('span', {}, 'Added to your bank'), h('span', {}, money(summary.prize.total))),
+      );
+    }
+    const show = () => {
+      if (this.disposed) return;
+      const actions = [{ label: 'Go to service park', primary: true, onClick: () => void this.leaveTo('service') }];
+      if (r) return this.showOverlay(resultsOverlay(r, this.stage, actions, undefined, extra));
+      const go = h('button', { class: 'btn primary', onclick: () => void this.leaveTo('service') }, 'Go to service park');
+      this.showOverlay(
+        h('div', { class: 'overlay results' },
+          h('div', { class: 'card', style: 'max-height:92vh;overflow-y:auto' },
+            h('h2', {}, 'Retired'),
+            h('div', { class: 'sub' }, `${this.stage.def.name} · ${this.stage.def.location}`),
+            extra,
+            h('div', { class: 'actions' }, go),
+          ),
+        ),
+      );
+    };
+    if (r) setTimeout(show, 1200);
+    else show();
+  }
+
+  private retire() {
+    if (this.retired || this.resultShown) return;
+    this.retired = true;
+    this.resultShown = true;
+    this.vehicle.frozen = true;
+    this.finishChampionship(null);
+  }
+
+  private finishDaily(r: RaceResult, date: string) {
+    const ch = dailyChallenge(date);
+    const medal = medalFor(r.timeMs, ch.targets);
+    const prev = career.get().daily;
+    const today = prev.date === date ? prev : { date, bestMs: null, medal: 'none' as const, finished: false };
+    let pay = today.finished ? 0 : DAILY_FINISH_PAY;
+    const lines: Array<[string, number]> = [];
+    if (pay) lines.push(['First finish today', pay]);
+    if (MEDAL_RANK[medal] > MEDAL_RANK[today.medal]) {
+      const diff = MEDAL_PAY[medal] - MEDAL_PAY[today.medal];
+      lines.push([`${medal[0].toUpperCase()}${medal.slice(1)} medal${today.medal !== 'none' ? ' (upgrade)' : ''}`, diff]);
+      pay += diff;
+    }
+    const best = today.bestMs === null || r.timeMs < today.bestMs;
+    career.setDaily({ date, bestMs: best ? r.timeMs : today.bestMs, medal: MEDAL_RANK[medal] > MEDAL_RANK[today.medal] ? medal : today.medal, finished: true });
+    if (pay) career.credit(`daily:${date}:${r.finishedAt}`, pay, false);
+    this.prize = { runId: this.raceState?.runId ?? 0, total: pay };
+    const t = ch.targets;
+    const tgt = (m: 'gold' | 'silver' | 'bronze', ms: number) =>
+      h('div', { class: `prize-line ${r.timeMs <= ms ? '' : 'neg'}` }, h('span', {}, `${m === 'gold' ? '🥇' : m === 'silver' ? '🥈' : '🥉'} ${m}`), h('span', {}, formatMs(ms)));
+    const extra = h(
+      'div',
+      { class: 'rewards', 'data-testid': 'rewards' },
+      h('div', { class: 'new-record' }, medal === 'none' ? 'NO MEDAL – TRY AGAIN' : `${medal.toUpperCase()} MEDAL!`),
+      best ? h('div', { class: 'sub' }, 'Your best time today.') : null,
+      tgt('gold', t.gold), tgt('silver', t.silver), tgt('bronze', t.bronze),
+      h('div', { class: 'panel-title', style: 'margin:14px 0 6px' }, 'Prize money'),
+      ...(lines.length ? lines : [['Nothing new this time', 0] as [string, number]]).map(([l, a]) => h('div', { class: 'prize-line' }, h('span', {}, l), h('span', {}, `+${money(a)}`))),
+      h('div', { class: 'prize-line' }, h('span', {}, 'Balance'), h('span', {}, money(career.get().money))),
+    );
+    setTimeout(() => {
+      if (this.disposed || this.raceState?.phase !== 'finished') return;
+      this.showOverlay(
+        resultsOverlay(r, this.stage, [
+          { label: 'Try again', primary: true, onClick: () => this.restart() },
+          { label: 'Daily leaderboard', onClick: () => void this.leaveTo('daily') },
+          { label: 'Main menu', onClick: () => this.leave() },
+        ], undefined, extra),
+      );
+    }, 1200);
+  }
+
+  private async leaveTo(to: GameExit) {
+    this.closeOverlay();
+    await net.leave().catch(() => undefined);
+    this.onExit(to);
+  }
+
   private restart() {
     this.closeOverlay();
     net.restartRace().catch((e) => toast(e.message, 'bad'));
@@ -431,7 +564,8 @@ export class Game {
   }
 
   private openPause() {
-    if (this.raceState?.phase === 'finished') return;
+    if (this.raceState?.phase === 'finished' || this.resultShown) return;
+    const champRound = this.ctx.kind === 'championship';
     const card = h(
       'div',
       { class: 'overlay' },
@@ -439,15 +573,17 @@ export class Game {
         'div',
         { class: 'card' },
         h('h2', {}, 'Paused'),
-        h('div', { class: 'sub' }, 'The stage clock keeps running – this is rally.'),
+        h('div', { class: 'sub' }, champRound ? 'Championship round – no restarts. The clock keeps running.' : 'The stage clock keeps running – this is rally.'),
         h(
           'div',
           { class: 'actions' },
           h('button', { class: 'btn primary', onclick: () => this.closeOverlay() }, 'Resume'),
-          h('button', { class: 'btn', onclick: () => this.restart() }, 'Restart stage'),
+          champRound ? null : h('button', { class: 'btn', onclick: () => this.restart() }, 'Restart stage'),
           h('button', { class: 'btn', onclick: () => { this.closeOverlay(); this.resetVehicle(); } }, 'Reset car'),
-          h('button', { class: 'btn', onclick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) }, 'Back to lobby'),
-          h('button', { class: 'btn danger', onclick: () => void this.leave() }, 'Quit rally'),
+          this.ctx.kind === 'quick' ? h('button', { class: 'btn', onclick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) }, 'Back to lobby') : null,
+          champRound
+            ? h('button', { class: 'btn danger', onclick: () => this.retire() }, 'Retire from round (0 pts)')
+            : h('button', { class: 'btn danger', onclick: () => void (this.ctx.kind === 'daily' ? this.leaveTo('daily') : this.leave()) }, 'Quit rally'),
         ),
       ),
     );
@@ -690,3 +826,4 @@ export class Game {
     });
   }
 }
+
