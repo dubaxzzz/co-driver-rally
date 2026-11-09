@@ -147,6 +147,22 @@ Set `CLIENT_ORIGIN` if the page is served from a different origin than the serve
 | Reset car onto the road | R | X |
 | Pause menu | Esc | Start |
 
+## Career: money, cars and upgrades
+
+- **PLAY** → *Solo stage*, *Create lobby* or *Join lobby*.
+- Every finished stage pays **prize money**: stage length, harder weather,
+  your position against AI rivals (more for harder AI) and a clean-run bonus –
+  minus the **repair bill** for any crash or wheel damage.
+- The **navigator** earns a 40% share of their driver's prize on top (the driver keeps all of theirs).
+- **Garage → Dealership:** Sparrow R2 (FWD), Kestrel R5 (4WD, starter), Dune Raider (4×4 truck),
+  Bruno 300 (RWD Group B) and Vortex RX (Rally1 hybrid).
+- **Garage → Upgrades:** engine, gearbox, tyres, suspension, brakes and armour, 3 levels each –
+  they change the physics (power, shift time, grip, stiffness, braking, crash resistance).
+- **Personal bests** per stage and weather show in the lobby; beat one and the results say so.
+- **Potholes** (yellow dots on the navigator's map) and hard landings damage wheels;
+  enough damage and the wheel breaks off and bounces away – you can limp on, slowly.
+- Progress is saved in this browser (Settings → Reset career to start over).
+
 ## Stages, weather and opponents
 
 The driver picks everything in the **lobby** (the navigator's screen follows):
@@ -167,8 +183,8 @@ Weather changes light, fog, rain/snow on the windscreen and tyre grip.
 are slippery *and* slow you down; leaving the road onto grass, snowbanks or sand
 costs a lot of speed; miss a bridge and you're wading through a fast river.
 
-**AI opponents (0–3, Easy/Medium/Hard):** real physics cars that drive the same
-stage at the same time (they pass through you – no contact, like real rally),
+**AI opponents (0–3, Easy/Medium/Hard):** fast, upgraded physics cars that race
+the same stage at the same time. They collide with you, steer round slower cars,
 and appear on the navigator's map and in the final leaderboard.
 
 **Damage:** hits are tracked per zone – front, left, right, rear, windscreen,
@@ -299,6 +315,8 @@ npm run test:physics     # vehicle physics (headless Rapier)
 npm run test:handling    # real Vehicle class: no spin-outs, handbrake still slides
 npm run test:rollover    # no roll-overs in hard cornering
 npm run test:ai          # AI drivers finish every stage
+npm run test:wheels      # potholes, landings, wheels breaking off
+npm run test:career      # prize money, repair bills, upgrades
 npm run dev:server       # then, in another terminal:
 npm run test:server      # 20 multiplayer checks incl. a full-stage finish (~50 s)
 npm run test:e2e         # with `npm run dev` running; needs Python Playwright

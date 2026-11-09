@@ -14,6 +14,8 @@ import { formatDistance, formatSpeed, formatTime } from '../settings';
 import { h, toast } from '../ui/dom';
 import { resultsOverlay, type Standing } from '../ui/results';
 import { AI_CREWS } from '../game/ai/AIDriver';
+import { career, money } from '../career';
+import { NAVIGATOR_SHARE } from '@cdr/shared';
 import type { CockpitView } from './CockpitView';
 import { Interpolator } from './Interpolator';
 import { MapView } from './MapView';
@@ -43,6 +45,9 @@ export class NavigatorApp {
   private lookBtn: HTMLButtonElement;
   private lastFrame = performance.now();
   private disposed = false;
+  private rewardsEl: HTMLElement | null = null;
+  private paidRun = -1;
+  private wheelsGone = [false, false, false, false];
 
   private readonly weatherId: string;
 
@@ -162,6 +167,30 @@ export class NavigatorApp {
   private pushTelemetry(p: RelayedTelemetry) {
     this.interp.push(p);
     this.lastPacketAt = performance.now();
+    // co-driver's share of the prize (paid on top – the driver keeps all of theirs)
+    if (p.prize !== undefined && this.race?.phase === 'finished' && this.paidRun !== p.runId) {
+      this.paidRun = p.runId;
+      const share = Math.round(p.prize * NAVIGATOR_SHARE);
+      const paid = career.credit(`nav:${net.room?.code}:${p.runId}:${this.race.finishedAt}`, share);
+      if (this.rewardsEl) {
+        this.rewardsEl.innerHTML = '';
+        this.rewardsEl.append(
+          h('div', { class: 'panel-title', style: 'margin:14px 0 6px' }, 'Co-driver reward'),
+          h('div', { class: 'prize-line' }, h('span', {}, `Driver's prize`), h('span', {}, money(p.prize))),
+          h('div', { class: 'prize-line total' }, h('span', {}, paid ? `Your ${Math.round(NAVIGATOR_SHARE * 100)}% share – added to your bank` : 'Already paid'), h('span', {}, money(share))),
+          h('div', { class: 'prize-line' }, h('span', {}, 'Your balance'), h('span', {}, money(career.get().money))),
+        );
+      }
+    }
+    // warn the co-driver when a wheel comes off
+    if (p.dz && p.dz.length === 10) {
+      const names = ['front-left', 'front-right', 'rear-left', 'rear-right'];
+      for (let i = 0; i < 4; i++) {
+        const gone = p.dz[6 + i] >= 1;
+        if (gone && !this.wheelsGone[i]) toast(`Your driver lost the ${names[i]} wheel!`, 'bad', 4000);
+        this.wheelsGone[i] = gone;
+      }
+    }
   }
 
   private bind() {
@@ -175,6 +204,7 @@ export class NavigatorApp {
         const newRun = !this.race || this.race.runId !== s.runId;
         this.race = s;
         if (newRun) {
+          this.wheelsGone = [false, false, false, false];
           this.interp.clear();
           this.map.clearTrail();
         }
@@ -246,7 +276,7 @@ export class NavigatorApp {
           { label: 'Restart stage', primary: true, onClick: () => void net.restartRace().catch((e) => toast(e.message, 'bad')) },
           { label: 'Back to lobby', onClick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) },
           { label: 'Close', onClick: () => this.closeOverlay() },
-        ], () => this.standings(s.result!.timeMs)),
+        ], () => this.standings(s.result!.timeMs), (this.rewardsEl = h('div', { class: 'rewards', 'data-testid': 'nav-rewards' }, h('div', { class: 'setup-desc' }, 'Waiting for the prize…')))),
       );
     }
     if (s.phase !== 'finished') this.closeOverlay();

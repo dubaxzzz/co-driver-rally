@@ -23,6 +23,8 @@ export interface CockpitState {
   snow: number; // 0..1 (flakes settle on the glass)
   speedUnit: 'kmh' | 'mph';
   damage: DamageZones;
+  /** 0..1 – a bent or missing front wheel makes the steering wheel shake. */
+  wheelShake?: number;
 }
 
 // Windscreen geometry (car-local)
@@ -326,7 +328,8 @@ export class Cockpit {
     this.time += dt;
 
     // Steering wheel + hands
-    const spin = -s.steer * WHEEL_LOCK;
+    const shake = (s.wheelShake ?? 0) * Math.sin(this.time * 38) * 0.09;
+    const spin = -s.steer * WHEEL_LOCK + shake;
     this.wheelSpin.rotation.z = spin;
     const tiltAxis = new THREE.Vector3(1, 0, 0);
     const zAxis = new THREE.Vector3(0, 0, 1);

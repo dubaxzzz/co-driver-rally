@@ -5,6 +5,7 @@ import type {
   CenterlineSample,
   Checkpoint,
   PaceNote,
+  Pothole,
   River,
   SegmentDef,
   StageDef,
@@ -270,6 +271,28 @@ export function buildStage(def: StageDef): BuiltStage {
     return { bridgeIndex: b.index, points, halfWidth: 7, waterY: b.y - 3.2, bedY: b.y - 4.8 };
   });
 
+  // Potholes: mostly on loose surfaces, never on bridges, none in the first 150 m.
+  const potholes: Pothole[] = [];
+  let seed = def.seed * 7 + 13;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let d = startDistance + 150; d < finishDistance - 30; d += 70 + rnd() * 110) {
+    const sf = surfaceAt({ surfaceSpans } as BuiltStage, d);
+    if (sf === 'wood') continue;
+    if (sf === 'tarmac' && rnd() < 0.6) continue; // tarmac is smoother
+    const c = sampleAt(samples, d);
+    const lateral = (rnd() - 0.5) * (def.roadWidth - 2.2);
+    const lx = Math.cos(c.h), lz = -Math.sin(c.h);
+    potholes.push({
+      distance: d,
+      lateral,
+      x: c.x + lx * lateral,
+      y: c.y,
+      z: c.z + lz * lateral,
+      radius: 0.45 + rnd() * 0.45,
+      severity: 0.35 + rnd() * 0.65,
+    });
+  }
+
   return {
     def,
     samples,
@@ -283,6 +306,7 @@ export function buildStage(def: StageDef): BuiltStage {
     surfaceSpans,
     bridges,
     rivers,
+    potholes,
     bounds,
   };
 }

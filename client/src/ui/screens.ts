@@ -12,7 +12,9 @@ import {
 } from '@cdr/shared';
 import { net, type NetError } from '../multiplayer/NetClient';
 import { MapView } from '../navigator/MapView';
-import { settings, type Settings } from '../settings';
+import { formatTime, settings, type Settings } from '../settings';
+import { career, money } from '../career';
+import { bestKey } from '@cdr/shared';
 import { h, toast } from './dom';
 
 export interface Screen {
@@ -57,19 +59,6 @@ export function menuScreen(nav: Nav): Screen {
     raf = requestAnimationFrame(draw);
   };
 
-  const quickPlay = async (btn: HTMLButtonElement) => {
-    btn.disabled = true;
-    try {
-      await net.createRoom(playerName('Driver'), settings.get().rally);
-      await net.startRace();
-      nav.go('drive');
-    } catch (e) {
-      toast((e as NetError).message, 'bad');
-    } finally {
-      btn.disabled = false;
-    }
-  };
-
   const btn = (label: string, sub: string, onClick: (b: HTMLButtonElement) => void, primary = false, delay = 0) => {
     const b = h('button', { class: `menu-btn ${primary ? 'primary' : ''}` }, h('span', {}, label), h('small', {}, sub));
     b.style.animationDelay = `${delay}ms`;
@@ -88,11 +77,10 @@ export function menuScreen(nav: Nav): Screen {
         { class: 'menu-left' },
         h('div', { class: 'brand' }, h('span', { class: 'co' }, 'CO-'), 'DRIVER', h('br'), 'RALLY'),
         h('div', { class: 'tagline' }, 'One drives · One navigates'),
-        btn('Play', `${stage.def.name} · ${WEATHER[settings.get().rally.weather].name} – navigator can join any time`, (b) => void quickPlay(b), true, 0),
-        btn('Create Rally', 'Host a room & wait for your navigator', () => nav.go('create'), false, 60),
-        btn('Join Rally', 'Navigator · enter a 4-character code', () => nav.go('join'), false, 120),
-        btn('Garage', 'Car, paint & wheels', () => nav.go('garage'), false, 180),
-        btn('Settings', 'Audio, graphics, controls', () => nav.go('settings'), false, 240),
+        btn('Play', 'Solo · create a lobby · join a lobby', () => nav.go('play'), true, 0),
+        btn('Garage', 'Your cars, dealership, upgrades', () => nav.go('garage'), false, 80),
+        btn('Settings', 'Audio, graphics, controls', () => nav.go('settings'), false, 160),
+        h('div', { class: 'menu-bank' }, h('span', {}, 'BANK'), h('span', { class: 'money-chip', 'data-testid': 'menu-money' }, money(career.get().money))),
         h('div', { style: 'margin-top:18px;color:var(--muted);font-size:13px;letter-spacing:.08em', 'data-testid': 'conn-status' }, status.el),
       ),
       h(
@@ -117,7 +105,9 @@ export function menuScreen(nav: Nav): Screen {
 }
 
 // ------------------------------------------------------------------ create / lobby
-export function lobbyScreen(nav: Nav): Screen {
+/** Lobby: 'crew' = room code + navigator; 'solo' = just pick the stage and go. */
+export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
+  const solo = mode === 'solo';
   const status = serverStatusLine();
   const codeEl = h('div', { class: 'room-code', 'data-testid': 'room-code' }, '····');
   const hint = h('div', { class: 'join-hint' }, 'Creating rally…');
@@ -129,6 +119,7 @@ export function lobbyScreen(nav: Nav): Screen {
 
   // ---- rally setup pickers ----
   const stageGrid = h('div', { class: 'stage-grid' });
+  const bestEls = new Map<string, HTMLElement>();
   const stageCards = new Map<string, HTMLElement>();
   const previews: MapView[] = [];
   for (const def of STAGE_DEFS) {
@@ -147,6 +138,9 @@ export function lobbyScreen(nav: Nav): Screen {
     );
     card.title = def.description;
     card.onclick = () => choose({ stageId: def.id, weather: def.defaultWeather });
+    const best = h('div', { class: 'stage-best' }, '');
+    card.append(best);
+    bestEls.set(def.id, best);
     stageCards.set(def.id, card);
     stageGrid.append(card);
   }
@@ -178,6 +172,10 @@ export function lobbyScreen(nav: Nav): Screen {
   }
 
   const showConfig = (c: RallyConfig) => {
+    bestEls.forEach((el, id) => {
+      const b = career.best(bestKey(id, c.weather));
+      el.textContent = b === null ? '' : `Best (${WEATHER[c.weather].name}): ${formatTime(b)}`;
+    });
     current = { stageId: c.stageId, weather: c.weather, aiCount: c.aiCount, aiSkill: c.aiSkill };
     stageCards.forEach((el, id) => el.classList.toggle('sel', id === c.stageId));
     weatherBtns.forEach((el, id) => el.classList.toggle('sel', id === c.weather));
@@ -226,7 +224,7 @@ export function lobbyScreen(nav: Nav): Screen {
     );
     showConfig(room.race);
     startBtn.disabled = false;
-    startBtn.textContent = n?.connected ? 'Start stage' : 'Start without navigator';
+    startBtn.textContent = solo ? 'Start stage' : n?.connected ? 'Start stage' : 'Start without navigator';
     if (room.race.phase === 'countdown' || room.race.phase === 'racing') nav.go('drive');
   };
 
@@ -266,11 +264,16 @@ export function lobbyScreen(nav: Nav): Screen {
   const el = h(
     'div',
     { class: 'screen' },
-    h('div', { class: 'screen-header' }, h('button', { class: 'back-btn', onclick: () => leaveBtn.click() }, '← Menu'), h('h2', {}, 'Rally lobby'), h('div', { style: 'margin-left:auto;color:var(--muted);font-size:13px' }, status.el)),
+    h('div', { class: 'screen-header' }, h('button', { class: 'back-btn', onclick: () => leaveBtn.click() }, '← Back'), h('h2', {}, solo ? 'Solo stage' : 'Rally lobby'), h('div', { style: 'margin-left:auto;color:var(--muted);font-size:13px' }, status.el)),
     h(
       'div',
       { class: 'lobby-wrap' },
-      h(
+      solo
+        ? h('div', { class: 'panel', style: 'width:min(1100px,100%);display:flex;align-items:center;gap:16px;flex-wrap:wrap' },
+            h('div', { style: 'flex:1;min-width:220px' }, h('div', { class: 'panel-title' }, 'Solo'), h('div', { class: 'setup-desc', style: 'margin:0' }, `Driving the ${career.activeDef().name}. Pick a stage, weather and AI opponents, then go. Every finish earns prize money.`)),
+            startBtn,
+          )
+        : h(
         'div',
         { class: 'lobby' },
         h('div', { class: 'panel' }, h('div', { class: 'panel-title' }, 'Room code'), codeEl, hint),
@@ -297,6 +300,29 @@ export function lobbyScreen(nav: Nav): Screen {
   // draw the stage previews once they are in the document
   requestAnimationFrame(() => requestAnimationFrame(() => previews.forEach((p) => p.draw(null, 0))));
   return { el, dispose: () => unsubs.forEach((u) => u()) };
+}
+
+// ------------------------------------------------------------------ play
+export function playScreen(nav: Nav): Screen {
+  const card = (k: string, title: string, desc: string, route: string, primary = false, id = '') =>
+    h('button', { class: `play-card ${primary ? 'primary' : ''}`, onclick: () => nav.go(route), 'data-testid': id }, h('div', { class: 'k' }, k), h('div', { class: 't' }, title), h('div', { class: 'd' }, desc));
+  const el = h(
+    'div',
+    { class: 'screen' },
+    h('div', { class: 'screen-header' }, h('button', { class: 'back-btn', onclick: () => nav.go('menu') }, '← Menu'), h('h2', {}, 'Play'), h('div', { style: 'margin-left:auto' }, h('span', { class: 'money-chip' }, money(career.get().money)))),
+    h(
+      'div',
+      { class: 'center-wrap' },
+      h(
+        'div',
+        { class: 'play-grid' },
+        card('SOLO', 'Solo stage', 'Pick any stage, weather and up to 3 AI rivals. Earn prize money for every finish.', 'solo', true, 'play-solo'),
+        card('MULTIPLAYER', 'Create lobby', 'Host a rally and share the 4-character code. Your navigator joins from a tablet or phone.', 'create', false, 'play-create'),
+        card('MULTIPLAYER', 'Join lobby', 'Enter a code to join a rally as the navigator. You earn a 40% share of your driver\'s prize.', 'join', false, 'play-join'),
+      ),
+    ),
+  );
+  return { el };
 }
 
 // ------------------------------------------------------------------ join
@@ -384,6 +410,22 @@ export function settingsScreen(nav: Nav): Screen {
   const name = h('input', { class: 'input', maxlength: 16, placeholder: 'Your name', style: 'width:220px;font-size:16px' }) as HTMLInputElement;
   name.value = s.playerName;
   name.addEventListener('change', () => settings.update({ playerName: name.value.trim() }));
+  const resetBtn = h('button', { class: 'btn danger' }, 'Reset career') as HTMLButtonElement;
+  let armed = false;
+  resetBtn.onclick = () => {
+    if (!armed) {
+      armed = true;
+      resetBtn.textContent = 'Tap again to confirm';
+      setTimeout(() => {
+        armed = false;
+        resetBtn.textContent = 'Reset career';
+      }, 3000);
+      return;
+    }
+    career.reset();
+    toast('Career reset', 'ok');
+    nav.go('settings');
+  };
   const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.05 }) as HTMLInputElement;
   vol.value = String(s.volume);
   vol.addEventListener('input', () => settings.update({ volume: Number(vol.value) }));
@@ -406,6 +448,7 @@ export function settingsScreen(nav: Nav): Screen {
         row('Graphics quality', 'Low: no shadows, fewer trees – for older laptops', seg('quality', [['high', 'High'], ['low', 'Low']])),
         row('Speed units', '', seg('units', [['kmh', 'km/h'], ['mph', 'mph']])),
         row('Controls help', 'Show key hints on the driving HUD', seg('showHelp', [[true, 'Show'], [false, 'Hide']])),
+        row('Career', `Bank ${money(career.get().money)} · ${Object.keys(career.get().owned).length} car(s). Resetting starts again with ${money(20000)} and the Kestrel R5.`, resetBtn),
         h(
           'div',
           { class: 'desc', style: 'margin-top:18px;line-height:1.8;color:var(--muted)' },

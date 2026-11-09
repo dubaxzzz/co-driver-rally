@@ -138,6 +138,7 @@ export class CockpitView {
       handbrake: t?.handbrake ?? false,
       brake: t?.brake ?? 0,
       wipers: st.wipers,
+      wheelShake: t?.dz && t.dz.length === 10 ? Math.max(t.dz[6], t.dz[7]) * Math.min(1, Math.abs(t.v) / 15) : 0,
       rain: this.weather.rain,
       snow: this.weather.snow,
       speedUnit: st.units,

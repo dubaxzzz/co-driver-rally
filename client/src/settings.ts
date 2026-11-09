@@ -1,5 +1,6 @@
 /** User preferences + garage selection (local to this device). */
 import { DEFAULT_CONFIG, PAINTS, VEHICLES, WHEELS, type RallyConfig } from '@cdr/shared';
+import { career } from './career';
 
 export interface Settings {
   playerName: string;
@@ -91,7 +92,8 @@ export const garageStore = {
   },
   resolve() {
     return {
-      vehicle: VEHICLES.find((v) => v.id === garage.vehicleId) ?? VEHICLES[0],
+      // the car you drive comes from your career (with its upgrades)
+      vehicle: career.activeDef(),
       paint: PAINTS.find((p) => p.id === garage.paintId) ?? PAINTS[0],
       wheel: WHEELS.find((w) => w.id === garage.wheelId) ?? WHEELS[0],
     };

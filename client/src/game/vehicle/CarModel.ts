@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { PaintOption, WheelOption } from '@cdr/shared';
+import type { PaintOption, VehicleDef, WheelOption } from '@cdr/shared';
 
 /** Wheel layout shared by the model and the physics. Car faces +Z. */
 export const WHEEL_LAYOUT = {
@@ -51,7 +51,7 @@ function numberTexture(num: string) {
 }
 
 /** Builds a stylised but complete rally car from primitives. */
-export function createCarModel(paint: PaintOption, wheel: WheelOption): CarModel {
+export function createCarModel(paint: PaintOption, wheel: WheelOption, bodyDef?: VehicleDef['body']): CarModel {
   const root = new THREE.Group();
   const body = new THREE.Group();
   root.add(body);
@@ -108,9 +108,12 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption): CarModel
   for (const [x, z] of [[-0.86, WHEEL_LAYOUT.frontZ], [0.86, WHEEL_LAYOUT.frontZ], [-0.86, WHEEL_LAYOUT.rearZ], [0.86, WHEEL_LAYOUT.rearZ]]) {
     add(new THREE.BoxGeometry(0.16, 0.14, 0.95), blackMat, x, 0.24, z);
   }
-  // Rear wing
+  // Rear wing (only cars that have one)
+  const wingStart = body.children.length;
   add(new THREE.BoxGeometry(1.6, 0.05, 0.36), accentMat, 0, 1.0, -1.72);
   for (const sx of [-0.62, 0.62]) add(new THREE.BoxGeometry(0.05, 0.3, 0.2), blackMat, sx, 0.82, -1.68);
+  const wingParts = body.children.slice(wingStart);
+  if (bodyDef && !bodyDef.wing) wingParts.forEach((m) => (m.visible = false));
   // Lights + light pod
   for (const sx of [-0.58, 0.58]) add(new THREE.BoxGeometry(0.34, 0.12, 0.05), lightMat, sx, 0.2, 2.0);
   add(new THREE.BoxGeometry(1.2, 0.2, 0.12), blackMat, 0, 0.32, 2.05);
@@ -187,6 +190,25 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption): CarModel
     steerGroup.add(spin);
     root.add(steerGroup);
     wheels.push(steerGroup);
+  }
+
+  // ---- Body style: proportions + extra parts ----
+  if (bodyDef) {
+    body.scale.set(bodyDef.width, bodyDef.height, bodyDef.length);
+    if (bodyDef.style === 'truck') {
+      // pick-up bed with roll bar, roof light bar, bull bar, raised ride
+      add(new THREE.BoxGeometry(1.62, 0.32, 1.25), paintMat, 0, 0.42, -1.25);
+      add(new THREE.BoxGeometry(1.5, 0.06, 1.15), blackMat, 0, 0.6, -1.25);
+      for (const sx of [-0.7, 0.7]) add(new THREE.BoxGeometry(0.06, 0.5, 0.06), blackMat, sx, 0.82, -0.75);
+      add(new THREE.BoxGeometry(1.46, 0.06, 0.06), blackMat, 0, 1.06, -0.75);
+      add(new THREE.BoxGeometry(1.3, 0.1, 0.12), lightMat, 0, 0.98, 0.25);
+      add(new THREE.BoxGeometry(1.5, 0.45, 0.08), blackMat, 0, 0.05, 2.12);
+      add(new THREE.BoxGeometry(1.7, 0.12, 0.6), blackMat, 0, -0.18, 0.2); // skid plate
+    } else if (bodyDef.style === 'coupe') {
+      // long low bonnet, louvres, side scoops
+      for (let i = 0; i < 4; i++) add(new THREE.BoxGeometry(1.2, 0.02, 0.06), blackMat, 0, 0.42, -1.3 - i * 0.12);
+      for (const sx of [-0.9, 0.9]) add(new THREE.BoxGeometry(0.06, 0.2, 0.5), blackMat, sx, 0.25, -0.9);
+    }
   }
 
   // Headlights are created on demand (only the car the camera sits in needs real lights).

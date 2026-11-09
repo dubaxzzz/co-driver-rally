@@ -8,6 +8,8 @@ import {
   getStage,
   sampleAt,
   surfaceAt,
+  bestKey,
+  computePrize,
   type WeatherDef,
   type BuiltStage,
   type RaceResult,
@@ -20,7 +22,11 @@ import { fogMultiplier, garageStore, settings } from '../settings';
 import { h, loadingOverlay, toast } from '../ui/dom';
 import { Hud } from '../ui/hud';
 import { resultsOverlay, type Standing } from '../ui/results';
+import { career, money } from '../career';
 import { AIDriver, AI_CREWS } from './ai/AIDriver';
+import { VEHICLES } from '@cdr/shared';
+
+const VEHICLES_BODY = VEHICLES[0].body;
 import { DustSystem } from './environment/Atmosphere';
 import { FirstPersonCamera } from './camera/FirstPersonCamera';
 import { Input } from './input/Input';
@@ -28,7 +34,8 @@ import { loadRapier, PhysicsWorld } from './physics/PhysicsWorld';
 import { RaceClient } from './race/RaceClient';
 import { createCarModel } from './vehicle/CarModel';
 import { Cockpit } from './vehicle/Cockpit';
-import { DAMAGE_KEYS, Vehicle } from './vehicle/Vehicle';
+import { DAMAGE_KEYS, Vehicle, type NearbyPothole } from './vehicle/Vehicle';
+import type { AIDriver as AIDriverT } from './ai/AIDriver';
 import { buildStageWorld, type StageWorld } from './world/StageWorld';
 
 export type GameExit = 'menu' | 'lobby';
@@ -48,6 +55,10 @@ export class Game {
   private ai: AIDriver[] = [];
   private smoke = new DustSystem(260, 'rgba(70,70,74,', -0.8, 2.6);
   private underwaterFor = 0;
+  private sparks = new DustSystem(200, 'rgba(255,170,60,', 7, 0.35);
+  private looseWheels: Array<{ body: import('@dimforge/rapier3d-compat').RigidBody; mesh: THREE.Object3D; age: number }> = [];
+  /** Prize for the current run (sent to the navigator so they get their share). */
+  private prize: { runId: number; total: number } | null = null;
   private cockpit!: Cockpit;
   private fp!: FirstPersonCamera;
   private input = new Input();
@@ -100,12 +111,12 @@ export class Game {
       this.physics = new PhysicsWorld(R);
       await new Promise((r) => setTimeout(r, 0)); // let the loading screen paint
       this.world = buildStageWorld(this.scene, stage, { quality, physics: this.physics, fogMultiplier: fogMultiplier(), weather: this.weather.id });
-      this.scene.add(this.smoke.points);
+      this.scene.add(this.smoke.points, this.sparks.points);
       this.unsubs.push(settings.subscribe(() => this.world.atmosphere.setFogMultiplier(fogMultiplier())));
 
       // Vehicle
       const sel = garageStore.resolve();
-      const model = createCarModel(sel.paint, sel.wheel);
+      const model = createCarModel(sel.paint, sel.wheel, sel.vehicle.body);
       this.scene.add(model.root);
       this.vehicle = new Vehicle(this.physics, sel.vehicle, sel.wheel, model);
       if (this.world.roadColliderHandle !== null) this.vehicle.roadColliders.add(this.world.roadColliderHandle);
@@ -116,6 +127,12 @@ export class Game {
       this.cockpit = new Cockpit(sel.paint, 'driver');
       model.root.add(this.cockpit.group);
       this.vehicle.onGearChange = (up) => audio.gearChange(up);
+      this.vehicle.onWheelLost = (i, name) => {
+        this.spawnLooseWheel(this.vehicle, i);
+        this.hud.warn(`${name.toUpperCase()} WHEEL GONE!`, 3);
+        audio.impact(0.9);
+      };
+      this.vehicle.onWheelHit = (_i, strength) => audio.impact(0.25 + strength * 0.5);
       this.vehicle.onImpact = (s, zone) => {
         audio.impact(s);
         if (zone === 'windscreen' || (zone === 'front' && s > 0.15)) audio.glass(s);
@@ -125,10 +142,11 @@ export class Game {
       const aiCount = room?.race.aiCount ?? 0;
       for (let i = 0; i < aiCount; i++) {
         const crew = AI_CREWS[i % AI_CREWS.length];
-        const aiModel = createCarModel(crew.paint, WHEELS[0]);
+        const aiModel = createCarModel(crew.paint, WHEELS[0], VEHICLES_BODY);
         this.scene.add(aiModel.root);
         const driver = new AIDriver(this.physics, stage, crew.name, aiModel, room?.race.aiSkill ?? 'medium', 9 * (i + 1), this.weather);
         if (this.world.roadColliderHandle !== null) driver.vehicle.roadColliders.add(this.world.roadColliderHandle);
+        driver.vehicle.onWheelLost = (wi) => this.spawnLooseWheel(driver.vehicle, wi);
         this.ai.push(driver);
       }
 
@@ -246,6 +264,48 @@ export class Game {
       a.resetToGrid();
       a.vehicle.syncVisuals();
     });
+    this.clearLooseWheels();
+    this.prize = null;
+  }
+
+  /** A wheel that broke off becomes its own physics object and bounces away. */
+  private spawnLooseWheel(car: Vehicle, i: number) {
+    const R = this.physics.R;
+    const src = car.model.wheels[i];
+    const mesh = src.clone(true);
+    mesh.visible = true;
+    mesh.traverse((o) => (o.visible = true));
+    src.updateWorldMatrix(true, false);
+    const p = new THREE.Vector3().setFromMatrixPosition(src.matrixWorld);
+    const q = new THREE.Quaternion().setFromRotationMatrix(src.matrixWorld);
+    this.scene.add(mesh);
+    const lv = car.body.linvel();
+    const side = new THREE.Vector3(i % 2 === 0 ? 1 : -1, 0, 0).applyQuaternion(car.model.root.quaternion);
+    const body = this.physics.world.createRigidBody(
+      R.RigidBodyDesc.dynamic()
+        .setTranslation(p.x, p.y + 0.1, p.z)
+        .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
+        .setLinvel(lv.x + side.x * 4, lv.y + 2.5, lv.z + side.z * 4)
+        .setAngvel({ x: 12, y: 2, z: 0 }),
+    );
+    const col = R.ColliderDesc.cylinder(0.12, 0.34).setRestitution(0.45).setFriction(0.8).setDensity(60);
+    col.setRotation(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2));
+    this.physics.world.createCollider(col, body);
+    this.looseWheels.push({ body, mesh, age: 0 });
+  }
+
+  private clearLooseWheels() {
+    for (const w of this.looseWheels) {
+      this.scene.remove(w.mesh);
+      this.physics.world.removeRigidBody(w.body);
+    }
+    this.looseWheels = [];
+  }
+
+  private potholesNear(d: number): NearbyPothole[] {
+    const out: NearbyPothole[] = [];
+    for (const p of this.stage.potholes) if (Math.abs(p.distance - d) < 30) out.push(p);
+    return out;
   }
 
   private resetVehicle() {
@@ -285,6 +345,37 @@ export class Game {
     this.resultShown = true;
     this.vehicle.frozen = true;
     this.hud.center('FINISH');
+
+    // ---- prize money + personal best ----
+    const state = this.raceState!;
+    const standings = this.standings(r.timeMs, true);
+    const sorted = [...standings].sort((a, b) => (a.timeMs ?? Infinity) - (b.timeMs ?? Infinity));
+    const position = sorted.findIndex((s) => s.you) + 1;
+    const v = this.vehicle;
+    const prize = computePrize({
+      stageLengthM: this.stage.finishDistance - this.stage.startDistance,
+      weather: state.weather,
+      aiSkill: state.aiSkill,
+      position,
+      fieldSize: standings.length,
+      zones: DAMAGE_KEYS.map((k) => v.damage[k]),
+      wheels: [...v.wheelDamage],
+      resets: r.resets,
+    });
+    this.prize = { runId: state.runId, total: prize.total };
+    const runKey = `${net.room?.code}:${state.runId}:${r.finishedAt}`;
+    const paid = career.credit(runKey, prize.total, position === 1 && standings.length > 1);
+    const isBest = career.recordBest(bestKey(state.stageId, state.weather), r.timeMs);
+    const rewards = h(
+      'div',
+      { class: 'rewards', 'data-testid': 'rewards' },
+      isBest ? h('div', { class: 'new-record' }, 'NEW PERSONAL BEST!') : null,
+      h('div', { class: 'panel-title', style: 'margin:14px 0 6px' }, 'Prize money'),
+      ...prize.lines.map((l) => h('div', { class: `prize-line ${l.amount < 0 ? 'neg' : ''}` }, h('span', {}, l.label), h('span', {}, `${l.amount < 0 ? '−' : '+'}${money(Math.abs(l.amount))}`))),
+      h('div', { class: 'prize-line total' }, h('span', {}, paid ? 'Added to your bank' : 'Already paid'), h('span', {}, money(prize.total))),
+      h('div', { class: 'prize-line' }, h('span', {}, 'Balance'), h('span', {}, money(career.get().money))),
+    );
+
     setTimeout(() => {
       if (this.disposed || this.raceState?.phase !== 'finished') return;
       this.showOverlay(
@@ -292,15 +383,25 @@ export class Game {
           { label: 'Restart stage', primary: true, onClick: () => this.restart() },
           { label: 'Back to lobby', onClick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) },
           { label: 'Main menu', onClick: () => this.leave() },
-        ], () => this.standings(r.timeMs)),
+        ], () => this.standings(r.timeMs), rewards),
       );
     }, 1200);
   }
 
-  private standings(playerMs: number): Standing[] {
+  /**
+   * Standings vs the AI. With `project`, crews still on the stage get an
+   * estimated time from their pace so far (used for the payout at the finish).
+   */
+  private standings(playerMs: number, project = false): Standing[] {
+    const elapsed = Math.max(1, this.raceTimeMs());
+    const estimate = (a: AIDriverT) => {
+      const covered = Math.max(1, a.distance - this.stage.spawnDistance);
+      const remaining = Math.max(0, this.stage.finishDistance - a.distance);
+      return Math.round(elapsed + remaining / (covered / elapsed));
+    };
     return [
       { name: net.room?.driver?.name ?? 'You', timeMs: playerMs, you: true },
-      ...this.ai.map((a) => ({ name: a.name, timeMs: a.finishTimeMs, you: false })),
+      ...this.ai.map((a) => ({ name: a.name, timeMs: a.finishTimeMs ?? (project ? estimate(a) : null), you: false })),
     ];
   }
 
@@ -374,6 +475,20 @@ export class Game {
     const river = this.world.terrain.waterAt(p0.x, p0.z);
     v.inWater = !!river && p0.y < river.waterY + 0.6;
 
+    // potholes near each car, and where everyone is (AI overtaking / not ramming)
+    v.nearbyPotholes = this.potholesNear(this.race.distance);
+    const others = [
+      { x: p0.x, z: p0.z, speed: Math.abs(v.telemetry.speed) },
+      ...this.ai.map((a) => {
+        const ap = a.vehicle.position;
+        return { x: ap.x, z: ap.z, speed: Math.abs(a.vehicle.telemetry.speed) };
+      }),
+    ];
+    this.ai.forEach((a, i) => {
+      a.vehicle.nearbyPotholes = this.potholesNear(a.distance);
+      a.others = others.map((o, j) => ({ ...o, self: j === i + 1 }));
+    });
+
     const aiRacing = phase === 'racing' || phase === 'finished';
     const raceMs = this.raceTimeMs();
     this.physics.step(dt, (fixed) => {
@@ -385,10 +500,27 @@ export class Game {
     for (const a of this.ai) {
       a.afterStep();
       a.vehicle.syncVisuals();
-      // AI cars pass through you (no contact in rally) – hide one while it overlaps your car
-      a.vehicle.model.root.visible = a.vehicle.model.root.position.distanceTo(v.model.root.position) > 4.2;
     }
     v.model.setHeadlightDamage(v.damage.front);
+    // loose wheels bounce away; hubs dragging on the ground throw sparks
+    for (const w of this.looseWheels) {
+      const t = w.body.translation();
+      const r = w.body.rotation();
+      w.mesh.position.set(t.x, t.y, t.z);
+      w.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+      w.age += dt;
+    }
+    for (const car of [v, ...this.ai.map((a) => a.vehicle)]) {
+      if (Math.abs(car.telemetry.speed) < 3) continue;
+      car.wheelLost.forEach((lost, i) => {
+        if (!lost) return;
+        car.model.wheels[i].updateWorldMatrix(true, false);
+        const hp = new THREE.Vector3().setFromMatrixPosition(car.model.wheels[i].matrixWorld);
+        const lvv = car.body.linvel();
+        for (let k = 0; k < 3; k++) this.sparks.emit(hp.x, hp.y - 0.2, hp.z, -lvv.x * 0.6, -lvv.z * 0.6, 0.35);
+      });
+    }
+    this.sparks.update(dt);
 
     const pos = v.position.clone();
     this.race.update(pos.x, pos.z, v.telemetry.speed, false);
@@ -450,6 +582,7 @@ export class Game {
       handbrake: this.input.state.handbrake && !v.frozen,
       brake: t.brake,
       wipers: st.wipers,
+      wheelShake: Math.max(v.wheelDamage[0], v.wheelDamage[1], v.wheelLost[0] || v.wheelLost[1] ? 1 : 0) * Math.min(1, Math.abs(t.speed) / 15),
       rain: this.weather.rain,
       snow: this.weather.snow,
       speedUnit: st.units,
@@ -465,7 +598,7 @@ export class Game {
     this.hud.updateRace(timeMs, this.race.distance, this.race.remaining, this.race.progress01, this.raceState?.checkpointsPassed ?? 0);
     this.hud.tick(dt);
 
-    this.hud.setDamage(v.damage, v.surfaceName.name);
+    this.hud.setDamage(v.damage, v.surfaceName.name, v.wheelDamage, v.wheelLost);
     audio.update(t.rpm, phase === 'racing' ? t.throttle : 0, t.speed, t.slip, v.surfaceName.sound, t.grounded);
 
     // Telemetry at ~20 Hz
@@ -517,7 +650,8 @@ export class Game {
       toNote: r2(this.race.distanceToNext),
       dmg: r2(t.damage),
       resets: this.resets,
-      dz: DAMAGE_KEYS.map((k) => r2(v.damage[k])),
+      dz: [...DAMAGE_KEYS.map((k) => r2(v.damage[k])), ...v.wheelDamage.map((w, i) => (v.wheelLost[i] ? 1 : r2(Math.min(0.99, w))))],
+      prize: this.prize && this.prize.runId === this.raceState.runId ? this.prize.total : undefined,
       ai: this.ai.flatMap((a) => {
         const ap = a.vehicle.position;
         return [r2(ap.x), r2(ap.y), r2(ap.z), Math.round(a.vehicle.heading * 1000) / 1000, Math.round(a.distance), a.finishTimeMs ?? -1];
@@ -541,6 +675,7 @@ export class Game {
     this.input.dispose();
     audio.stopDriving();
     this.vehicle?.model.dispose();
+    this.clearLooseWheels();
     this.ai.forEach((a) => {
       a.vehicle.model.dispose();
       a.dispose();

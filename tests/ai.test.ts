@@ -40,6 +40,7 @@ function race(base: BuiltStage, skill: AiSkill) {
 }
 
 for (const def of STAGE_DEFS) race(getStage(def.id)!, 'medium');
+for (const def of STAGE_DEFS) race(getStage(def.id)!, 'hard');
 const forest = getStage(STAGE_DEFS[0].id)!;
 const easy = race(forest, 'easy');
 const hard = race(forest, 'hard');

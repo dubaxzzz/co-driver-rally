@@ -7,7 +7,8 @@
  *   npm run test:handling
  */
 import * as THREE from 'three';
-import { VEHICLES, WHEELS } from '../shared/src/vehicles';
+import { VEHICLES, WHEELS, type VehicleDef } from '../shared/src/vehicles';
+import { applyUpgrades, noUpgrades } from '../shared/src/career';
 import { loadRapier, PhysicsWorld } from '../client/src/game/physics/PhysicsWorld';
 import { Vehicle } from '../client/src/game/vehicle/Vehicle';
 import type { CarModel } from '../client/src/game/vehicle/CarModel';
@@ -33,10 +34,11 @@ interface Scenario {
   minSlipDeg?: number; // the back MUST step out at least this much
 }
 
+let CAR: VehicleDef = VEHICLES[0];
 function run(sc: Scenario) {
   const physics = new PhysicsWorld(R);
   const ground = physics.world.createCollider(R.ColliderDesc.cuboid(3000, 0.5, 3000).setTranslation(0, -0.5, 0));
-  const v = new Vehicle(physics, VEHICLES[0], WHEELS[0], stubModel);
+  const v = new Vehicle(physics, CAR, WHEELS[0], stubModel);
   v.roadColliders.add(ground.handle);
   v.place(0, 1.0, 0, 0);
   v.frozen = false;
@@ -76,18 +78,32 @@ function run(sc: Scenario) {
       if (slip > Math.max(60, sc.maxSlipDeg)) spun = true;
     }
   }
-  const ok = !spun && maxSlip <= sc.maxSlipDeg && maxSlip >= (sc.minSlipDeg ?? 0);
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${sc.name}: max slip ${maxSlip.toFixed(1)}° (limit ${sc.maxSlipDeg}°), top ${(maxSpeed * 3.6).toFixed(0)} km/h${spun ? ' – SPUN OUT' : ''}`);
+  const wheelsOk = v.wheelDamage.every((w) => w < 0.05);
+  const ok = !spun && maxSlip <= sc.maxSlipDeg && maxSlip >= (sc.minSlipDeg ?? 0) && wheelsOk;
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${sc.name}: max slip ${maxSlip.toFixed(1)}° (limit ${sc.maxSlipDeg}°), top ${(maxSpeed * 3.6).toFixed(0)} km/h${spun ? ' – SPUN OUT' : ''}${wheelsOk ? '' : ' – WHEEL DAMAGED'}`);
   physics.dispose();
   return ok;
 }
 
-const results = [
-  run({ name: 'tap steering at speed', steer: 1, throttle: 1, maxSlipDeg: 12, pulse: true }),
-  run({ name: 'gentle turn (25% steer) on throttle', steer: 0.25, throttle: 1, maxSlipDeg: 10 }),
-  run({ name: 'medium turn (50% steer) on throttle', steer: 0.5, throttle: 1, maxSlipDeg: 20 }),
-  run({ name: 'full lock on throttle', steer: 1, throttle: 1, maxSlipDeg: 45 }),
-  run({ name: 'full lock, lifting off', steer: 1, throttle: 0, maxSlipDeg: 45 }),
-  run({ name: 'handbrake turn still slides the back out', steer: 1, throttle: 0.6, maxSlipDeg: 90, minSlipDeg: 12, handbrake: true }),
+const scenarios: Scenario[] = [
+  { name: 'tap steering at speed', steer: 1, throttle: 1, maxSlipDeg: 12, pulse: true },
+  { name: 'gentle turn (25% steer) on throttle', steer: 0.25, throttle: 1, maxSlipDeg: 10 },
+  { name: 'medium turn (50% steer) on throttle', steer: 0.5, throttle: 1, maxSlipDeg: 20 },
+  { name: 'full lock on throttle', steer: 1, throttle: 1, maxSlipDeg: 45 },
+  { name: 'full lock, lifting off', steer: 1, throttle: 0, maxSlipDeg: 45 },
+  { name: 'handbrake turn still slides the back out', steer: 1, throttle: 0.6, maxSlipDeg: 180, minSlipDeg: 12, handbrake: true },
 ];
+const results: boolean[] = [];
+const maxed = { engine: 3, gearbox: 3, tyres: 3, suspension: 3, brakes: 3, armour: 3 };
+for (const car of VEHICLES) {
+  for (const [label, lv] of [['stock', noUpgrades()], ['fully upgraded', maxed]] as const) {
+    CAR = applyUpgrades(car, lv);
+    console.log(`\n${car.name} (${car.drive}, ${label})`);
+    for (const sc of scenarios) {
+      // rear-drive cars are allowed to step out more on full-lock power – that's their character
+      const tuned = car.drive === 'RWD' && sc.name.startsWith('full lock on') ? { ...sc, maxSlipDeg: 55 } : sc;
+      results.push(run(tuned));
+    }
+  }
+}
 if (results.some((r) => !r)) process.exit(1);

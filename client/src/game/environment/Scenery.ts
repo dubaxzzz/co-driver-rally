@@ -73,6 +73,7 @@ export class Scenery {
     this.buildBarriersAndSigns();
     this.buildGates();
     this.buildBridges();
+    this.buildPotholes();
   }
 
   private track<T extends { dispose(): void }>(o: T) {
@@ -381,6 +382,31 @@ export class Scenery {
       }
       this.group.add(g);
     }
+  }
+
+  /** Dark, slightly sunken potholes with a broken rim – hit one fast and a wheel suffers. */
+  private buildPotholes() {
+    const holes = this.stage.potholes;
+    if (!holes.length) return;
+    const holeMat = this.track(new THREE.MeshStandardMaterial({ color: 0x17120c, roughness: 0.5, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+    const rimMat = this.track(new THREE.MeshStandardMaterial({ color: 0x5b4a36, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+    const holeGeo = this.track(new THREE.CircleGeometry(1, 14).rotateX(-Math.PI / 2));
+    const rimGeo = this.track(new THREE.RingGeometry(0.9, 1.25, 14).rotateX(-Math.PI / 2));
+    const inner = new THREE.InstancedMesh(holeGeo, holeMat, holes.length);
+    const rims = new THREE.InstancedMesh(rimGeo, rimMat, holes.length);
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    holes.forEach((p, i) => {
+      const c = sampleAt(this.stage.samples, p.distance);
+      // crown of the road: a little lower towards the edges
+      const crown = 0.07 - Math.min(1, Math.abs(p.lateral) / (this.stage.def.roadWidth / 2)) * 0.07;
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), c.h + i);
+      m.compose(new THREE.Vector3(p.x, c.y + crown + 0.035, p.z), q, new THREE.Vector3(p.radius, 1, p.radius * (0.7 + (i % 3) * 0.15)));
+      inner.setMatrixAt(i, m);
+      rims.setMatrixAt(i, m);
+    });
+    inner.receiveShadow = rims.receiveShadow = true;
+    this.group.add(rims, inner);
   }
 
   markCheckpoint(index: number, passed: boolean) {

@@ -25,6 +25,8 @@
     "test:rollover": "tsx tests/rollover.test.ts",
     "test:handling": "tsx tests/handling.test.ts",
     "test:ai": "tsx tests/ai.test.ts",
+    "test:wheels": "tsx tests/wheels.test.ts",
+    "test:career": "tsx tests/career.test.ts",
     "test:e2e": "python3 tests/e2e_two_browsers.py",
     "render-build": "npm install --include=dev && npm run build"
   },

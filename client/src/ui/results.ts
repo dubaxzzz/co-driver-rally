@@ -15,7 +15,7 @@ export interface ResultAction {
 }
 
 /** Stage results card – identical for driver and navigator. */
-export function resultsOverlay(result: RaceResult, stage: BuiltStage, actions: ResultAction[], standings?: () => Standing[]) {
+export function resultsOverlay(result: RaceResult, stage: BuiltStage, actions: ResultAction[], standings?: () => Standing[], extra?: HTMLElement) {
   const stat = (k: string, v: string) => h('div', {}, h('div', { class: 'k' }, k), h('div', { class: 'v' }, v));
   const splits = h('div', { class: 'splits' });
   result.splits.forEach((s) => splits.append(h('div', {}, h('span', {}, `Checkpoint ${s.index + 1}`), h('span', {}, formatTime(s.timeMs)))));
@@ -68,6 +68,7 @@ export function resultsOverlay(result: RaceResult, stage: BuiltStage, actions: R
       ),
       splits,
       board,
+      extra ?? null,
       h(
         'div',
         { class: 'actions' },

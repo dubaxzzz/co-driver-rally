@@ -136,6 +136,18 @@ export interface River {
   bedY: number;
 }
 
+export interface Pothole {
+  distance: number;
+  /** Offset from the centre line (m, + = left). */
+  lateral: number;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  /** 0..1 how deep / damaging it is. */
+  severity: number;
+}
+
 export interface BuiltStage {
   def: StageDef;
   samples: CenterlineSample[];
@@ -150,5 +162,6 @@ export interface BuiltStage {
   surfaceSpans: SurfaceSpan[];
   bridges: Bridge[];
   rivers: River[];
+  potholes: Pothole[];
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number; minY: number; maxY: number };
 }

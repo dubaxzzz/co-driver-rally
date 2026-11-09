@@ -110,8 +110,10 @@ export interface TelemetryPacket {
    * Simulated on the driver's device and shown to the navigator.
    */
   ai?: number[];
-  /** Damage zones 0..1: front, left, right, rear, windscreen, engine. */
+  /** Damage 0..1: front, left, right, rear, windscreen, engine, then wheels FL, FR, RL, RR (1 = wheel gone). */
   dz?: number[];
+  /** Prize the driver earned this run (sent after the finish so the navigator gets their share). */
+  prize?: number;
 }
 
 /** Telemetry as relayed by the server (server timestamp added). */

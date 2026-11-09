@@ -99,8 +99,12 @@ export function validateTelemetry(p: unknown): TelemetryPacket | null {
   }
   if (p.dz !== undefined) {
     const dz = p.dz;
-    if (!Array.isArray(dz) || dz.length !== 6 || !dz.every((n) => isNum(n, 0, 1))) return null;
+    if (!Array.isArray(dz) || (dz.length !== 6 && dz.length !== 10) || !dz.every((n) => isNum(n, 0, 1))) return null;
     out.dz = dz;
+  }
+  if (p.prize !== undefined) {
+    if (!isNum(p.prize, 0, 1e7)) return null;
+    out.prize = p.prize;
   }
   return out as unknown as TelemetryPacket;
 }

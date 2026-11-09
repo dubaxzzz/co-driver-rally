@@ -78,9 +78,9 @@ export class Hud {
 
   private lastDamageKey = '';
   /** Damage per zone (green → amber → red) plus the surface you're on. */
-  setDamage(d: DamageZones, surface: string) {
+  setDamage(d: DamageZones, surface: string, wheels: number[] = [0, 0, 0, 0], lost: boolean[] = [false, false, false, false]) {
     const zones: Array<[string, number]> = [['FRONT', d.front], ['L', d.left], ['R', d.right], ['REAR', d.rear], ['GLASS', d.windscreen], ['ENGINE', d.engine]];
-    const key = surface + zones.map(([, v]) => Math.round(v * 10)).join();
+    const key = surface + zones.map(([, v]) => Math.round(v * 10)).join() + wheels.map((w) => Math.round(w * 10)).join() + lost.join();
     if (key === this.lastDamageKey) return;
     this.lastDamageKey = key;
     this.dmgEl.innerHTML = '';
@@ -91,6 +91,13 @@ export class Hud {
       row.append(h('i', { class: v > 0.6 ? 'b' : 'w' }, `${label} ${Math.round(v * 100)}%`));
     }
     this.dmgEl.append(row);
+    // tyre status: FL FR / RL RR
+    const tyres = h('div', { class: 'tyres', title: 'Wheels' });
+    wheels.forEach((w, i) => {
+      const cls = lost[i] ? 'gone' : w > 0.6 ? 'b' : w > 0.15 ? 'w' : '';
+      tyres.append(h('i', { class: cls }, lost[i] ? '✕' : ''));
+    });
+    this.dmgEl.append(tyres);
   }
 
   setRoom(code: string) {

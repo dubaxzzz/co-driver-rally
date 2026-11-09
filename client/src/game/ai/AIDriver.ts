@@ -3,6 +3,8 @@ import {
   SURFACES,
   VEHICLES,
   WHEELS,
+  applyUpgrades,
+  noUpgrades,
   projectOnStage,
   sampleAt,
   surfaceAt,
@@ -22,12 +24,23 @@ export const AI_CREWS = [
   { name: 'M. Dubois', paint: { id: 'ai3', name: 'Yellow', body: 0xf0b400, accent: 0x111111 } },
 ];
 
-/** How hard each difficulty pushes: cornering grip used, braking, top speed. */
-const SKILL: Record<AiSkill, { lat: number; brake: number; top: number; look: number }> = {
-  easy: { lat: 0.8, brake: 5.5, top: 32, look: 0.55 },
-  medium: { lat: 1.05, brake: 7, top: 40, look: 0.6 },
-  hard: { lat: 1.3, brake: 8.5, top: 48, look: 0.65 },
+/**
+ * How hard each difficulty pushes: cornering grip used (g), braking (m/s²),
+ * top speed, look-ahead, and how upgraded their car is. These are tough.
+ */
+const SKILL: Record<AiSkill, { lat: number; brake: number; top: number; look: number; engine: number; tyres: number; gearbox: number }> = {
+  easy: { lat: 1.35, brake: 8.5, top: 46, look: 0.6, engine: 0, tyres: 0, gearbox: 0 },
+  medium: { lat: 1.65, brake: 10.5, top: 54, look: 0.62, engine: 1, tyres: 1, gearbox: 1 },
+  hard: { lat: 1.95, brake: 12.5, top: 62, look: 0.65, engine: 3, tyres: 2, gearbox: 2 },
 };
+
+/** Other cars on the road (for overtaking / not ramming). */
+export interface OtherCar {
+  x: number;
+  z: number;
+  speed: number;
+  self?: boolean;
+}
 
 /**
  * An AI opponent: a real physics car (same Vehicle class as the player)
@@ -45,6 +58,9 @@ export class AIDriver {
   private stuckFor = 0;
   private readonly input: DriveInput = { throttle: 0, brake: 0, steer: 0, handbrake: false };
   private readonly skill: (typeof SKILL)[AiSkill];
+  /** Cars around this one – set by the game every frame. */
+  others: OtherCar[] = [];
+  private passOffset = 0;
 
   constructor(
     physics: PhysicsWorld,
@@ -56,7 +72,8 @@ export class AIDriver {
     private readonly weather: WeatherDef,
   ) {
     this.skill = SKILL[skill];
-    this.vehicle = new Vehicle(physics, VEHICLES[0], WHEELS[0], model);
+    const lv = { ...noUpgrades(), engine: this.skill.engine, tyres: this.skill.tyres, gearbox: this.skill.gearbox };
+    this.vehicle = new Vehicle(physics, applyUpgrades(VEHICLES[0], lv), WHEELS[0], model);
     this.vehicle.weatherGrip = weather.grip;
     this.distance = stage.spawnDistance;
     this.resetToGrid();
@@ -102,16 +119,32 @@ export class AIDriver {
     const speed = v.telemetry.speed;
     const absV = Math.abs(speed);
 
-    // ---- steering: aim at a point ahead on the centre line ----
+    // ---- traffic: pick a side to pass a slower car ahead, or ease off ----
+    let wantOffset = 0;
+    let trafficCap = Infinity;
+    for (const o of this.others) {
+      if (o.self) continue;
+      const op = projectOnStage(st, o.x, o.z, proj.index, 40);
+      const ahead = op.distance - proj.distance;
+      if (ahead < 1 || ahead > 22) continue;
+      if (Math.abs(op.lateral - proj.lateral) > 3 && Math.abs(op.lateral - this.passOffset) > 2.4) continue;
+      const room = st.def.roadWidth / 2 - 1.2;
+      wantOffset = op.lateral > 0 ? -room : room; // go round on the other side
+      if (ahead < 9 && absV > o.speed) trafficCap = Math.max(0, o.speed - 0.5);
+    }
+    this.passOffset += (wantOffset - this.passOffset) * Math.min(1, dt * 1.5);
+
+    // ---- steering: aim at a point ahead on the racing line ----
     const look = THREE.MathUtils.clamp(absV * this.skill.look, 6, 26);
-    const target = sampleAt(st.samples, Math.min(st.length, proj.distance + look));
+    const c0 = sampleAt(st.samples, Math.min(st.length, proj.distance + look));
+    const target = { x: c0.x + Math.cos(c0.h) * this.passOffset, z: c0.z - Math.sin(c0.h) * this.passOffset };
     const h = v.heading;
     const toX = target.x - pos.x, toZ = target.z - pos.z;
     const desired = Math.atan2(toX, toZ);
     let err = desired - h;
     while (err > Math.PI) err -= Math.PI * 2;
     while (err < -Math.PI) err += Math.PI * 2;
-    const steer = THREE.MathUtils.clamp(err * 2.4 - proj.lateral * 0.02, -1, 1);
+    const steer = THREE.MathUtils.clamp(err * 2.4 - (proj.lateral - this.passOffset) * 0.02, -1, 1);
 
     // ---- speed: slow enough for every corner within braking distance ----
     const surfGrip = v.roadSurface.grip * this.weather.grip;
@@ -126,6 +159,7 @@ export class AIDriver {
       const vAllowed = Math.sqrt(vCorner * vCorner + 2 * decel * Math.max(0, d - proj.distance - 6));
       if (vAllowed < targetV) targetV = vAllowed;
     }
+    targetV = Math.min(targetV, trafficCap);
     if (this.finishTimeMs !== null) targetV = 0; // pull up after the finish
 
     let throttle = 0;

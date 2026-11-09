@@ -1,7 +1,7 @@
 import './ui/styles.css';
 import { net } from './multiplayer/NetClient';
 import { h, loadingOverlay, toast } from './ui/dom';
-import { joinScreen, lobbyScreen, menuScreen, settingsScreen, type Screen } from './ui/screens';
+import { joinScreen, lobbyScreen, menuScreen, playScreen, settingsScreen, type Screen } from './ui/screens';
 import './audio/AudioEngine';
 
 /**
@@ -11,6 +11,8 @@ import './audio/AudioEngine';
 const app = document.getElementById('app')!;
 let current: Screen | null = null;
 let routeToken = 0;
+/** Which lobby to go back to after a stage ('create' or 'solo'). */
+let lastLobby: 'create' | 'solo' = 'create';
 
 function go(route: string) {
   const target = `#/${route === 'menu' ? '' : route}`;
@@ -27,8 +29,16 @@ async function render() {
   const nav = { go };
 
   switch (route) {
+    case 'play':
+      current = playScreen(nav);
+      break;
     case 'create':
-      current = lobbyScreen(nav);
+      lastLobby = 'create';
+      current = lobbyScreen(nav, 'crew');
+      break;
+    case 'solo':
+      lastLobby = 'solo';
+      current = lobbyScreen(nav, 'solo');
       break;
     case 'join':
       current = joinScreen(nav, param ?? '');
@@ -50,7 +60,7 @@ async function render() {
       // Load Three.js/Rapier only for the driver (keeps the navigator page light)
       const { Game } = await import('./game/Game');
       if (token !== routeToken) return;
-      const game = new Game(root, (to) => go(to === 'lobby' ? 'create' : 'menu'));
+      const game = new Game(root, (to) => go(to === 'lobby' ? lastLobby : 'menu'));
       current = { el: root, dispose: () => game.dispose() };
       void game.init();
       return;
