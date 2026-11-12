@@ -894,15 +894,11 @@ export class Scenery {
 
       // ---- stone abutments with wing walls, once at each end ----
       for (const end of [-1, 1]) {
-        // tops kept below the ground beside the road, so only the faces towards the river show
-        const top = -0.9;
+        // kept well below the ground beside the road, so only the face towards the river shows
+        const top = -1.5;
         const ah = top - bed + 0.3;
-        const ab = box(W + 1.0, ah, 2.2, stone, 0, top - ah / 2, end * (L / 2 + 0.9));
+        const ab = box(W + 0.6, ah, 1.6, stone, 0, top - ah / 2, end * (L / 2 + 0.6));
         ab.castShadow = false;
-        for (const side of [-1, 1]) {
-          const wing = box(0.6, ah, 4, stone, side * (W / 2 + 0.7), top - 0.3 - ah / 2, end * (L / 2 + 2.2));
-          wing.rotation.y = side * end * 0.3;
-        }
         // "narrow bridge" warning sign before each end
         const sx = -(hw + 2.2);
         const z = end * (L / 2 + 18);

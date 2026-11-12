@@ -70,6 +70,57 @@ export interface TrackBuild {
   terrainCollider: { vertices: Float32Array; indices: Uint32Array };
 }
 
+/**
+ * Road surface textures – kept gentle: a base colour, a light speckle and faint
+ * tyre lines (plus edge lines on tarmac). No stones or patches.
+ */
+function surfaceTexture(surface: SurfaceId, tint: number): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d')!;
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const base: Record<SurfaceId, string> = {
+    gravel: `#${new THREE.Color(tint).lerp(new THREE.Color(0xb5aa98), 0.25).getHexString()}`,
+    tarmac: '#46484c',
+    snow: '#e5eaee',
+    mud: '#4f3d2b',
+    sand: '#c9a46a',
+    wood: '#6b4a2e',
+  } as Record<SurfaceId, string>;
+  g.fillStyle = base[surface] ?? base.gravel;
+  g.fillRect(0, 0, 128, 128);
+  // light speckle
+  for (let i = 0; i < 900; i++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)';
+    g.fillRect(rnd() * 128, rnd() * 128, 1.5, 1.5);
+  }
+  // faint tyre lines where cars drive
+  g.fillStyle = surface === 'snow' ? 'rgba(90,110,130,0.09)' : 'rgba(0,0,0,0.06)';
+  for (const x of [36, 82]) g.fillRect(x, 0, 10, 128);
+  if (surface === 'tarmac') {
+    g.fillStyle = 'rgba(235,235,225,0.7)'; // edge lines
+    g.fillRect(8, 0, 2.5, 128);
+    g.fillRect(117.5, 0, 2.5, 128);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+/** The terrain's grass colour at a point (noise-blended, with patches). */
+function grassColour(sc: BuiltStage['def']['scenery'], noise: ReturnType<typeof makeNoise>) {
+  const grassA = new THREE.Color(sc.grassA), grassB = new THREE.Color(sc.grassB), patch = new THREE.Color(sc.patch);
+  const out = new THREE.Color();
+  return (x: number, z: number) => {
+    out.copy(grassA).lerp(grassB, noise(x * 0.05, z * 0.05, 3));
+    if (noise(x * 0.012 + 9, z * 0.012, 2) > 0.62) out.lerp(patch, 0.6);
+    return out;
+  };
+}
+
 const MARGIN = 280;
 const CELL = 5;
 const VISIBLE_RADIUS = 300;
@@ -89,6 +140,8 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
   const n = samples.length;
   const pos = new Float32Array(n * cols * 3);
   const uv = new Float32Array(n * cols * 2);
+  const noise = makeNoise(def.seed);
+  const grassAt = grassColour(sc, noise);
   for (let i = 0; i < n; i++) {
     const s = samples[i];
     const lx = Math.cos(s.h), lz = -Math.sin(s.h); // left vector
@@ -132,9 +185,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
   roadGeo.computeVertexNormals();
   const roadMats = surfaceList.map((sf) => {
     const wet = sf === 'mud' ? 0.45 : sf === 'snow' ? 0.6 : sf === 'tarmac' ? 0.75 : 1;
-    // plain, single-colour road surfaces (no texture detail)
-    const color = sf === 'tarmac' ? 0x4a4c50 : sf === 'snow' ? 0xe4e9ee : sf === 'mud' ? 0x4f3d2b : sf === 'sand' ? 0xc9a46a : sf === 'wood' ? 0x6b4a2e : sc.verge;
-    return new THREE.MeshStandardMaterial({ color, roughness: wet, metalness: 0 });
+    return new THREE.MeshStandardMaterial({ map: surfaceTexture(sf, sc.verge), roughness: wet, metalness: 0 });
   });
   const road = new THREE.Mesh(roadGeo, roadMats);
   road.receiveShadow = true;
@@ -147,7 +198,6 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
   const heights = new Float32Array(gcols * grows);
   const dists = new Float32Array(gcols * grows);
   const rdists = new Float32Array(gcols * grows).fill(1e9);
-  const noise = makeNoise(def.seed);
   const coarseStep = 8;
 
   for (let r = 0; r < grows; r++) {
@@ -198,8 +248,8 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
 
   const tPos = new Float32Array(gcols * grows * 3);
   const tCol = new Float32Array(gcols * grows * 3);
-  const grassA = new THREE.Color(sc.grassA), grassB = new THREE.Color(sc.grassB), patch = new THREE.Color(sc.patch), verge = new THREE.Color(sc.verge);
   const riverBank = new THREE.Color(0x4a4036);
+  const verge = new THREE.Color(sc.verge);
   const tmp = new THREE.Color();
   for (let r = 0; r < grows; r++) {
     for (let c = 0; c < gcols; c++) {
@@ -208,11 +258,10 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
       tPos[i * 3] = x;
       tPos[i * 3 + 1] = heights[i];
       tPos[i * 3 + 2] = z;
-      const nv = noise(x * 0.05, z * 0.05, 3);
-      tmp.copy(grassA).lerp(grassB, nv);
-      if (noise(x * 0.012 + 9, z * 0.012, 2) > 0.62) tmp.lerp(patch, 0.6);
+      tmp.copy(grassAt(x, z));
+      // a dusty verge either side of the road, fading into the grass
       const d = dists[i];
-      if (d < hw + 5) tmp.lerp(verge, 1 - Math.max(0, (d - hw) / 5));
+      if (d < hw + 5) tmp.lerp(verge, (1 - Math.max(0, (d - hw) / 5)) * 0.55);
       if (rdists[i] < 22) tmp.lerp(riverBank, Math.max(0, 1 - rdists[i] / 22) * 0.8);
       tCol[i * 3] = tmp.r;
       tCol[i * 3 + 1] = tmp.g;
