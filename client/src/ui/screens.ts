@@ -13,7 +13,7 @@ import { net, type NetError } from '../multiplayer/NetClient';
 import { MapView } from '../navigator/MapView';
 import { formatTime, settings, type Settings } from '../settings';
 import { career, money } from '../career';
-import { bestKey, TEAMS, dailyChallenge, dailyKey, vehicleById } from '@cdr/shared';
+import { bestKey, TEAMS, dailyChallenge, dailyKey, vehicleById, MEDAL_PAY, STARTING_MONEY } from '@cdr/shared';
 import { champ } from '../championship/state';
 import { h, screenHeader, toast } from './dom';
 
@@ -391,7 +391,7 @@ function dailySub() {
   const ch = dailyChallenge(dailyKey());
   const me = career.get().daily;
   const done = me.date === ch.date && me.finished ? ` · your best ${formatTime(me.bestMs ?? 0)}${me.medal !== 'none' ? ` (${me.medal})` : ''}` : '';
-  return `Today: ${getStage(ch.stageId)?.def.name} in ${WEATHER[ch.weather].name.toLowerCase()}, same loan car for everyone. Medals pay up to $12,000${done}.`;
+  return `Today: ${getStage(ch.stageId)?.def.name} in ${WEATHER[ch.weather].name.toLowerCase()}, same loan car for everyone. Medals pay up to ${money(MEDAL_PAY.gold)}${done}.`;
 }
 export function playScreen(nav: Nav): Screen {
   const card = (k: string, title: string, desc: string, route: string, primary = false, id = '') =>
@@ -553,7 +553,7 @@ export function settingsScreen(nav: Nav): Screen {
           row('Speed units', 'Shown on the dashboards and HUD', seg('units', [['kmh', 'km/h'], ['mph', 'mph']])),
           row('Controls help', 'Key hints at the bottom of the driving screen', seg('showHelp', [[true, 'Show'], [false, 'Hide']])),
         ),
-        section('Career', row('Reset career', `Bank ${money(career.get().money)} · ${Object.keys(career.get().owned).length} car(s). Starts again with ${money(20000)} and the Kestrel R5.`, resetBtn)),
+        section('Career', row('Reset career', `Bank ${money(career.get().money)} · ${Object.keys(career.get().owned).length} car(s). Starts again with ${money(STARTING_MONEY)} and the Kestrel R5.`, resetBtn)),
         section('Controls',
           h('div', { class: 'keys' },
             keyRow('Drive', 'W / ↑ throttle · S / ↓ brake & reverse · A D / ← → steer'),

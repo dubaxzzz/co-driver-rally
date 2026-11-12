@@ -118,12 +118,16 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
   your position against AI rivals (more for harder AI) and a clean-run bonus –
   minus the **repair bill** for any crash damage.
 - The **navigator** earns a 40% share of their driver's prize on top (the driver keeps all of theirs).
-- **Garage → Dealership:** Sparrow R2 (FWD), Kestrel R5 (4WD, starter), Dune Raider (4×4 truck),
-  Bruno 300 (RWD Group B) and Vortex RX (Rally1 hybrid).
+- **Garage → Dealership:** Kestrel R5 (4WD, free starter), Sparrow R2 $35,000, Dune Raider $120,000,
+  Bruno 300 $180,000 and Vortex RX $300,000. You start with $5,000, a stage pays roughly
+  $600 per km (more for harder AI and worse weather) and repairs cost $1,500 per fully
+  wrecked zone – so a new car is a real goal. Upgrades cost $6,000–$12,000 for level 1.
 - **Garage → Upgrades:** engine, gearbox, tyres, suspension, brakes and armour, 3 levels each –
   they change the physics (power, shift time, grip, stiffness, braking, crash resistance).
 - **Personal bests** per stage and weather show in the lobby; beat one and the results say so.
 - Progress is saved in this browser (Settings → Reset career to start over).
+  The new economy came with a one-time reset: everyone's money, cars and championship
+  start fresh the first time they open the game after the update.
 
 ## Multiplayer lobbies (up to 4 players)
 
@@ -153,14 +157,14 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
   Rally (tier 2), Vortex Works (tier 3). Teams give you their car, a salary per round and
   free repairs, but miss their goal two rounds in a row and you are dropped.
 - No restarts in a round; the pause menu has *Retire* (0 points).
-- Season-end bonus: $50,000 for the title, $20,000 for P2, $10,000 for P3.
+- Season-end bonus: $25,000 for the title, $10,000 for P2, $5,000 for P3.
 - A navigator can still join any round with the room code shown before the start.
 
 ## Daily challenge
 
 - One stage + weather + loan car per day (UTC), the same for everybody – stock car, no AI.
-- Gold / silver / bronze target times pay $12,000 / $6,000 / $3,000 (a better medal later
-  pays the difference) plus $500 for the first finish of the day. Retry as often as you like.
+- Gold / silver / bronze target times pay $4,000 / $2,000 / $1,000 (a better medal later
+  pays the difference) plus $200 for the first finish of the day. Retry as often as you like.
 - The server forces today's stage and keeps a leaderboard from its own timing
   (in memory, so it clears when Render restarts the server).
 
@@ -197,7 +201,12 @@ Resetting (R) doesn't repair the car – restarting the stage does.
 
 ## The cars and their cockpits
 
-Every car has its own detailed body *and* its own dashboard:
+Every car has its own detailed body, its own dashboard *and* its own interior:
+bucket seats with 4-point harnesses, a roll cage with padding in the car's colour
+(white in the Sparrow, yellow in the Dune, red in the Bruno, carbon in the Vortex),
+checker-plate or carpet floor, pedal box, co-driver footrest, door cards with pull
+straps, a fire extinguisher and intercom between the seats, and a sun strip
+across the windscreen.
 
 | Car | Body | Dashboard |
 |---|---|---|
@@ -228,11 +237,16 @@ windscreen and the wipers sweep it away – so the navigator's calls matter.
 Visibility can be raised in Settings (Very low / Low / Normal).
 
 The **navigator** sits in the passenger seat, seeing the real car's position
-in 3D from the driver's telemetry. **Look at road** (↑) lowers the tablet so
-you can see through the windscreen (drag to look around); **Look at tablet**
-(↓, or tap the tablet edge) brings the map and controls back up.
+in 3D from the driver's telemetry, holding a real **tablet** in their gloved hands.
+**Look at tablet** (↓) looks down and zooms in on it; **Look at road** (↑) looks up
+through the windscreen (drag to look around – the tablet stays in your lap, tap it
+to look down again).
 
 ## Navigator tablet
+
+A rugged-case tablet held in the co-driver's hands inside the car – its screen is
+live and touchable (tap FOLLOW / FULL STAGE on the screen itself). On phones held
+upright it turns to portrait.
 
 - **Live map** – follow (heading-up, zoomed) or full-stage view, the car's
   position and heading from live telemetry, the driven trail, checkpoints and finish.
@@ -278,7 +292,7 @@ client/src/
     camera/            Chase / far chase / bonnet cameras
     race/              Driver-side progress + automatic pace-note timing
     input/             Keyboard + gamepad
-  navigator/           Navigator app, canvas map, telemetry interpolation
+  navigator/           Navigator app, 3D tablet + its screen, canvas map, telemetry interpolation
   ui/                  Menu, lobby, join, garage, settings, HUD, results, styles
   audio/               Synthesised engine/gravel/skid/impact/countdown audio + speech
 

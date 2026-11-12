@@ -3,6 +3,7 @@
  * FIELD of 11 AI drivers. Three of your closest rivals race you on track;
  * the rest get simulated times based on how fast the on-track AI really were.
  */
+import '../progressReset';
 import {
   CHAMPION_BONUS,
   FIELD,

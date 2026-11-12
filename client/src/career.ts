@@ -2,6 +2,7 @@
  * Career save: money, cars you own (with their upgrades), the car you drive,
  * personal bests and lifetime stats. Saved in this browser (localStorage).
  */
+import './progressReset';
 import {
   MAX_UPGRADE_LEVEL,
   STARTER_CAR_ID,

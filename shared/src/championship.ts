@@ -35,15 +35,15 @@ export const TEAMS: Record<TeamId, TeamDef> = {
     offer: { roundPosition: 0, standingsPosition: 0, minRound: 99 }, blurb: 'Your own car, your own money. Every repair comes out of your pocket.',
   },
   kallio: {
-    id: 'kallio', short: 'KAL', name: 'Kallio Motorsport', tier: 1, colour: 0x1f8a4c, accent: 0xffffff, carId: 'kestrel-r5', upgrades: { engine: 1, tyres: 1, suspension: 1 }, salary: 3000, goal: 8,
+    id: 'kallio', short: 'KAL', name: 'Kallio Motorsport', tier: 1, colour: 0x1f8a4c, accent: 0xffffff, carId: 'kestrel-r5', upgrades: { engine: 1, tyres: 1, suspension: 1 }, salary: 800, goal: 8,
     offer: { roundPosition: 6, standingsPosition: 6, minRound: 1 }, blurb: 'A friendly Finnish team. Free repairs, a tuned Kestrel R5 and a small salary.',
   },
   northern: {
-    id: 'northern', short: 'NLR', name: 'Northern Lights Rally', tier: 2, colour: 0x1e5bc6, accent: 0xffd400, carId: 'bruno-300', upgrades: { engine: 1, tyres: 2, brakes: 1, suspension: 1 }, salary: 6000, goal: 5,
+    id: 'northern', short: 'NLR', name: 'Northern Lights Rally', tier: 2, colour: 0x1e5bc6, accent: 0xffd400, carId: 'bruno-300', upgrades: { engine: 1, tyres: 2, brakes: 1, suspension: 1 }, salary: 1500, goal: 5,
     offer: { roundPosition: 4, standingsPosition: 4, minRound: 2 }, blurb: 'Fast and flamboyant – they run the wild Bruno 300. Expect top-5 finishes.',
   },
   vortex: {
-    id: 'vortex', short: 'VTX', name: 'Vortex Works Team', tier: 3, colour: 0xd8261c, accent: 0x111111, carId: 'vortex-rx', upgrades: { engine: 2, tyres: 2, gearbox: 2, suspension: 2, brakes: 2, armour: 1 }, salary: 12000, goal: 3,
+    id: 'vortex', short: 'VTX', name: 'Vortex Works Team', tier: 3, colour: 0xd8261c, accent: 0x111111, carId: 'vortex-rx', upgrades: { engine: 2, tyres: 2, gearbox: 2, suspension: 2, brakes: 2, armour: 1 }, salary: 3000, goal: 3,
     offer: { roundPosition: 2, standingsPosition: 2, minRound: 3 }, blurb: 'The factory team. A works Vortex RX, big salary – podiums or you are out.',
   },
 };
@@ -78,7 +78,7 @@ export const SKILL_TIME_FACTOR: Record<AiSkill, number> = { hard: 1, medium: 1.0
 
 export const POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1];
 export const pointsFor = (position: number) => POINTS[position - 1] ?? 0;
-export const CHAMPION_BONUS = [50000, 20000, 10000];
+export const CHAMPION_BONUS = [25000, 10000, 5000];
 
 export interface Round {
   stageId: string;
@@ -153,8 +153,8 @@ export function teamCar(team: TeamId) {
 
 // ------------------------------------------------------------------ daily challenge
 export type Medal = 'none' | 'bronze' | 'silver' | 'gold';
-export const MEDAL_PAY: Record<Medal, number> = { none: 0, bronze: 3000, silver: 6000, gold: 12000 };
-export const DAILY_FINISH_PAY = 500;
+export const MEDAL_PAY: Record<Medal, number> = { none: 0, bronze: 1000, silver: 2000, gold: 4000 };
+export const DAILY_FINISH_PAY = 200;
 
 /** Today's key, the same for every player in the world (UTC date). */
 export const dailyKey = (d = new Date()) => d.toISOString().slice(0, 10);

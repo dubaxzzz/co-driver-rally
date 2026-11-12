@@ -3,6 +3,8 @@ import { type CarModelId, type CarSwitches, type PaintOption } from '@cdr/shared
 import { noDamage, type DamageZones } from './Vehicle';
 import { buildDashboard, type Dashboard } from './Dashboards';
 import type { Control, ControlId } from './Controls';
+import { buildInterior } from './Interior';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
 export type Seat = 'driver' | 'navigator';
 
@@ -106,8 +108,6 @@ export class Cockpit {
     const plastic = mat({ color: 0x3a3d43, roughness: 0.8 });
     const darkPlastic = mat({ color: 0x24262b, roughness: 0.85 });
     const cage = mat({ color: 0x8d949c, metalness: 0.6, roughness: 0.35 });
-    const seatMat = mat({ color: 0x2c2c35, roughness: 0.9 });
-    const seatAccent = mat({ color: paint.accent, roughness: 0.7 });
     const suit = mat({ color: 0x1d3f7a, roughness: 0.85 });
     const navSuit = mat({ color: 0x6b1d1d, roughness: 0.85 });
     const glove = mat({ color: 0x1f1f24, roughness: 0.8 });
@@ -152,33 +152,14 @@ export class Cockpit {
       tube(v(sx * 0.75, 0.44, 0.8), v(sx * 0.7, 0.87, 0.45), 0.035, darkPlastic); // A-pillar
       tube(v(sx * 0.72, 0.87, 0.45), v(sx * 0.72, 0.88, -0.9), 0.03, darkPlastic); // roof rail
       tube(v(sx * 0.78, 0.42, -0.85), v(sx * 0.72, 0.88, -0.9), 0.04, darkPlastic); // B-pillar
-      const door = box(0.05, 0.44, 1.7, plastic, sx * 0.86, 0.2, -0.1); // door card
-      this.doorCards[sx > 0 ? 'left' : 'right'] = door;
-      box(0.12, 0.04, 1.7, darkPlastic, sx * 0.83, 0.42, -0.1); // window sill
     }
     box(1.48, 0.06, 0.08, darkPlastic, 0, 0.87, 0.45); // header above windscreen
     box(1.46, 0.025, 1.4, plastic, 0, 0.9, -0.22); // headliner
 
-    // ---- Roll cage ----
-    for (const sx of [-1, 1]) {
-      tube(v(sx * 0.68, 0.0, -0.9), v(sx * 0.66, 0.84, -0.9), 0.025, cage); // main hoop legs
-      tube(v(sx * 0.7, 0.3, 0.62), v(sx * 0.65, 0.84, 0.42), 0.022, cage); // A-pillar bars
-      tube(v(sx * 0.65, 0.84, 0.42), v(sx * 0.66, 0.84, -0.9), 0.022, cage); // roof bars
-      tube(v(sx * 0.78, 0.08, 0.5), v(sx * 0.78, 0.4, -0.75), 0.02, cage); // door bars (X)
-      tube(v(sx * 0.78, 0.4, 0.5), v(sx * 0.78, 0.08, -0.75), 0.02, cage);
-    }
-    tube(v(-0.66, 0.84, -0.9), v(0.66, 0.84, -0.9), 0.025, cage);
-    tube(v(-0.65, 0.84, 0.42), v(0.65, 0.84, 0.42), 0.022, cage);
-    tube(v(-0.66, 0.84, -0.9), v(0.68, 0.0, -0.9), 0.022, cage); // diagonal
-
-    // ---- Seats ----
-    for (const sx of [this.dx, -this.dx]) {
-      box(0.5, 0.12, 0.5, seatMat, sx, 0.02, -0.45);
-      const back = box(0.52, 0.8, 0.12, seatMat, sx, 0.42, -0.74);
-      back.rotation.x = -0.14;
-      for (const wx of [-0.25, 0.25]) box(0.04, 0.6, 0.3, seatMat, sx + wx, 0.35, -0.62);
-      box(0.5, 0.05, 0.12, seatAccent, sx, 0.8, -0.76);
-    }
+    // ---- Roll cage, seats + harnesses, door cards, pedals, footrest… (per car) ----
+    const interior = buildInterior(this.group, model, paint, (o) => this.track(o), this.dx);
+    this.doorCards.left = interior.doors.left;
+    this.doorCards.right = interior.doors.right;
 
     // ---- Steering wheel ----
     const wheelTilt = new THREE.Group();
@@ -255,13 +236,46 @@ export class Cockpit {
     tube(v(0, 0, 0), v(0, 0.24, 0.05), 0.013, cage, this.handbrakeLever);
     box(0.03, 0.06, 0.03, darkPlastic, 0, 0.26, 0.055, this.handbrakeLever);
 
+    // ---- Crew bodies: rounded torso, shoulders, HANS collar, legs down to the footwell ----
+    const rb = (w: number, h: number, d: number, r: number, m: THREE.Material, x: number, y: number, z: number, parent: THREE.Object3D) => {
+      const mesh = new THREE.Mesh(this.track(new RoundedBoxGeometry(w, h, d, 2, r)), m);
+      mesh.position.set(x, y, z);
+      parent.add(mesh);
+      return mesh;
+    };
+    const hans = mat({ color: 0x15161a, roughness: 0.6 });
+    const boot = mat({ color: 0x18181b, roughness: 0.7 });
+    const crew = (x: number, suitM: THREE.Material, parent: THREE.Group, footZ: number) => {
+      const torso = rb(0.38, 0.48, 0.22, 0.08, suitM, x, 0.38, -0.6, parent);
+      torso.rotation.x = -0.14;
+      rb(0.3, 0.07, 0.2, 0.03, hans, x, 0.63, -0.63, parent); // HANS collar
+      for (const s of [-1, 1]) {
+        const sh = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.07, 12, 10)), suitM);
+        sh.position.set(x + s * 0.19, 0.57, -0.6);
+        parent.add(sh);
+        const hip = v(x + s * 0.1, 0.13, -0.5);
+        const knee = v(x + s * 0.11, 0.2, -0.1);
+        const ankle = v(x + s * 0.1, 0.0, footZ);
+        tube(hip, knee, 0.075, suitM, parent);
+        tube(knee, ankle, 0.055, suitM, parent);
+        const kneeBall = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.068, 10, 8)), suitM);
+        kneeBall.position.copy(knee);
+        parent.add(kneeBall);
+        rb(0.09, 0.08, 0.2, 0.03, boot, ankle.x, ankle.y - 0.02, ankle.z + 0.05, parent);
+      }
+    };
+    /** Dark visor wrapped round the front of a helmet (sphere segment facing +Z). */
+    const visorMesh = () => new THREE.Mesh(this.track(new THREE.SphereGeometry(0.141, 18, 8, Math.PI / 2 - 1.0, 2.0, 0.95, 0.62)), visor);
+
     // ---- Driver (avatar) ----
     this.group.add(this.driverBody);
-    box(0.42, 0.52, 0.24, suit, this.dx, 0.36, -0.58, this.driverBody);
+    crew(this.dx, suit, this.driverBody, 0.58);
     const dHelmet = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.135, 14, 12)), helmet);
     dHelmet.position.set(this.dx, 0.7, -0.5);
     this.driverBody.add(dHelmet);
-    box(0.2, 0.07, 0.05, visor, this.dx, 0.7, -0.38, this.driverBody);
+    const dVisor = visorMesh();
+    dVisor.position.copy(dHelmet.position);
+    this.driverBody.add(dVisor);
     for (const side of [1, -1]) {
       const upper = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.05, 0.045, 1, 8)), suit);
       const fore = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.042, 0.038, 1, 8)), suit);
@@ -274,13 +288,15 @@ export class Cockpit {
     // ---- Co-driver (avatar) with tablet on the lap ----
     const nx = -this.dx;
     this.group.add(this.navBody);
-    box(0.42, 0.52, 0.24, navSuit, nx, 0.36, -0.58, this.navBody);
+    crew(nx, navSuit, this.navBody, 0.42);
     this.navHead.position.set(nx, 0.62, -0.52);
     this.navBody.add(this.navHead);
     const nHelmet = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.135, 14, 12)), helmet);
     nHelmet.position.set(0, 0.07, 0);
     this.navHead.add(nHelmet);
-    box(0.2, 0.07, 0.05, visor, 0, 0.07, 0.12, this.navHead);
+    const nVisor = visorMesh();
+    nVisor.position.set(0, 0.07, 0);
+    this.navHead.add(nVisor);
     const tablet = new THREE.Group();
     tablet.position.set(nx, 0.3, -0.14);
     tablet.rotation.x = -2.3; // screen faces the co-driver
@@ -351,6 +367,26 @@ export class Cockpit {
     glare.position.z = 0.01;
     glare.renderOrder = 13;
     wsInner.add(glare);
+    // tinted sun strip across the top of the glass (the event banner, read backwards from inside)
+    const stripCanvas = document.createElement('canvas');
+    stripCanvas.width = 512;
+    stripCanvas.height = 40;
+    const sg = stripCanvas.getContext('2d')!;
+    sg.fillStyle = '#0b1a2e';
+    sg.fillRect(0, 0, 512, 40);
+    sg.translate(512, 0);
+    sg.scale(-1, 1);
+    sg.fillStyle = 'rgba(255,255,255,0.55)';
+    sg.font = 'italic 900 26px sans-serif';
+    sg.textAlign = 'center';
+    sg.textBaseline = 'middle';
+    sg.fillText('CO-DRIVER  RALLY', 256, 21);
+    const stripTex = this.track(new THREE.CanvasTexture(stripCanvas));
+    stripTex.colorSpace = THREE.SRGBColorSpace;
+    const sunStrip = new THREE.Mesh(this.track(new THREE.PlaneGeometry(WS_WIDTH, 0.075)), this.track(new THREE.MeshBasicMaterial({ map: stripTex, transparent: true, opacity: 0.93 })));
+    sunStrip.position.set(0, WS_HEIGHT / 2 - 0.0375, -0.006);
+    sunStrip.renderOrder = 9;
+    wsInner.add(sunStrip);
     const scale = WS_WIDTH / CANVAS_W;
     for (const px of WIPER_PIVOTS) {
       const arm = new THREE.Group();

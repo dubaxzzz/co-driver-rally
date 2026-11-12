@@ -9,6 +9,10 @@ export class MapView {
   mode: 'follow' | 'full' = 'follow';
   /** Small thumbnails (stage picker) draw markers only – text labels would overlap. */
   labels = true;
+  /** Fixed drawing size (when the canvas is not in the page, e.g. drawn onto the tablet). */
+  size: { w: number; h: number } | null = null;
+  /** Pixels per logical unit when `size` is set (bigger = larger text and markers). */
+  pixelScale = 1;
   private ctx = this.canvas.getContext('2d')!;
   private trail: Array<[number, number]> = [];
   private viewHeading = 0;
@@ -21,8 +25,8 @@ export class MapView {
 
   draw(t: RelayedTelemetry | null, checkpointsPassed: number) {
     const c = this.canvas;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = c.clientWidth, hgt = c.clientHeight;
+    const dpr = this.size ? this.pixelScale : Math.min(2, window.devicePixelRatio || 1);
+    const w = this.size?.w ?? c.clientWidth, hgt = this.size?.h ?? c.clientHeight;
     if (c.width !== Math.round(w * dpr) || c.height !== Math.round(hgt * dpr)) {
       c.width = Math.round(w * dpr);
       c.height = Math.round(hgt * dpr);

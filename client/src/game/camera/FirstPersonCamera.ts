@@ -19,6 +19,10 @@ export class FirstPersonCamera {
   private shake = 0;
   private time = 0;
   private readonly eye: THREE.Vector3;
+  /** Where the head has been thrown by G-forces (car frame) – things held in the hands follow it. */
+  get head(): Readonly<THREE.Vector3> {
+    return this.headOffset;
+  }
 
   constructor(aspect: number, seat: Seat) {
     this.camera = new THREE.PerspectiveCamera(74, aspect, 0.03, 900);

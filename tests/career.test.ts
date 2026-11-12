@@ -9,7 +9,7 @@ const check = (ok: boolean, msg: string) => {
 const clean = { zones: [0, 0, 0, 0, 0, 0], wheels: [0, 0, 0, 0] };
 
 const solo = computePrize({ stageLengthM: 3000, weather: 'clear', aiSkill: 'medium', position: 1, fieldSize: 1, resets: 0, ...clean });
-check(solo.total === 6000 + 1500, `solo 3 km clean run in clear weather pays $${solo.total} (base + clean bonus)`);
+check(solo.total === 1800 + 400, `solo 3 km clean run in clear weather pays $${solo.total} (base + clean bonus)`);
 
 const storm = computePrize({ stageLengthM: 3000, weather: 'storm', aiSkill: 'medium', position: 1, fieldSize: 1, resets: 0, ...clean });
 check(storm.total > solo.total, `night storm pays more ($${storm.total})`);

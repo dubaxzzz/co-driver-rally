@@ -1,4 +1,5 @@
 /** What kind of event the next stage is: a quick stage, a championship round or the daily challenge. */
+import '../progressReset';
 import type { AiSkill, PaintOption, UpgradeLevels } from '@cdr/shared';
 
 export interface AiEntrantCtx {

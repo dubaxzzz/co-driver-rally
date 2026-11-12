@@ -1,4 +1,5 @@
 import './ui/styles.css';
+import { progressWasReset } from './progressReset';
 import { net } from './multiplayer/NetClient';
 import { h, loadingOverlay, toast } from './ui/dom';
 import { joinScreen, lobbyScreen, menuScreen, playScreen, settingsScreen, type Screen } from './ui/screens';
@@ -126,3 +127,7 @@ async function boot() {
 }
 
 void boot();
+
+if (progressWasReset) {
+  setTimeout(() => toast('Fresh start! Everyone\'s progress has been reset – cars now cost a lot more, so every stage counts.', 'ok', 8000), 800);
+}

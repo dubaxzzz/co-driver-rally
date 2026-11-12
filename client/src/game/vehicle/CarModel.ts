@@ -336,6 +336,48 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption, bodyDef?:
   else if (modelId === 'dune') buildDune();
   else if (modelId === 'bruno') buildBruno();
   else buildVortex();
+  screenExtras();
+
+  /**
+   * Things every car has on its windscreen: a tinted sun strip with the event
+   * banner across the top, and two parked wiper arms at the bottom.
+   */
+  function screenExtras() {
+    // [bottom, top, glass width, glass bevel] – matching each body's windscreen
+    const WS: Record<CarModelId, [P, P, number, number]> = {
+      kestrel: [[0.84, 0.44], [0.36, 0.86], 1.54, 0.05],
+      sparrow: [[0.78, 0.45], [0.32, 0.88], 1.42, 0.08],
+      dune: [[0.95, 0.56], [0.55, 1.06], 1.7, 0.04],
+      bruno: [[0.72, 0.38], [0.15, 0.82], 1.5, 0.04],
+      vortex: [[0.86, 0.44], [0.3, 0.86], 1.58, 0.04],
+    };
+    const [[z0, y0], [z1, y1], gw, bev] = WS[modelId];
+    const len = Math.hypot(z1 - z0, y1 - y0);
+    const tilt = Math.atan2(z1 - z0, y1 - y0);
+    const screen = new THREE.Group();
+    screen.position.set(0, y0, z0);
+    screen.rotation.x = tilt; // local +Y runs up the glass, +Z points out of it
+    body.add(screen);
+    const bannerTex = track(
+      canvasTex(512, 40, (g) => {
+        g.fillStyle = '#0b1a2e';
+        g.fillRect(0, 0, 512, 40);
+        g.fillStyle = '#ffffff';
+        g.font = 'italic 900 26px sans-serif';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.fillText('CO-DRIVER  RALLY', 256, 21);
+      }),
+    );
+    const strip = add(new THREE.PlaneGeometry(gw - bev * 2 - 0.04, 0.09), M({ map: bannerTex, roughness: 0.4, metalness: 0.2 }), 0, len - 0.075, bev + 0.004, screen);
+    strip.castShadow = false;
+    for (const [x, l] of [[0.32, 0.5], [-0.24, 0.5]] as const) {
+      const arm = add(new THREE.BoxGeometry(l, 0.012, 0.014), black, x - 0.04, 0.05, bev + 0.012, screen);
+      arm.rotation.z = 0.05;
+      add(new THREE.BoxGeometry(l * 0.85, 0.018, 0.02), black, x - 0.06, 0.07, bev + 0.01, screen).rotation.z = 0.05;
+      add(new THREE.CylinderGeometry(0.018, 0.018, 0.03, 10), satin, x + l / 2 - 0.04, 0.03, bev + 0.01, screen).rotation.x = Math.PI / 2;
+    }
+  }
 
   /** Kestrel R5 – boxy modern rally hatch, big flares, roof scoop, rear wing. */
   function buildKestrel() {

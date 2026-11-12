@@ -632,27 +632,14 @@ input[type='range'] { accent-color: var(--accent); width: 180px; }
 .nav-3d { position: absolute; inset: 0; }
 .nav-3d canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .nav-3d-loading { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; }
-.nav-tablet {
-  position: absolute;
-  left: 2.5vw;
-  right: 2.5vw;
-  top: 2.5vh;
-  bottom: 2.5vh;
-  border-radius: 26px;
-  border: 12px solid #15171a;
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.85), 0 0 0 1px #2d3238, inset 0 0 0 1px #2a2e33;
-  background: #090b0e;
-  overflow: hidden;
-  transform-origin: 50% 100%;
-  transition: transform 0.55s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.55s;
-}
-.nav-tablet .nav { position: absolute; inset: 0; }
-.nav-shell.looking-up .nav-tablet {
-  transform: translateY(calc(100% - 64px));
-  cursor: pointer;
-}
-.nav-shell.looking-up .nav-tablet .nav { pointer-events: none; }
-.nav-shell.looking-up .nav-tablet .look-btn { pointer-events: auto; }
+.nav-hud { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.nav-hud > * { pointer-events: auto; position: absolute; }
+.nav-leave { top: 14px; right: 14px; }
+.nav-look { bottom: 18px; left: 50%; transform: translateX(-50%); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6); }
+.nav-timer-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.nav-3d.flat { display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 50% 40%, #1b2026, #000); }
+.nav-3d.flat .nav-flat-tablet { position: static; width: auto; height: auto; max-width: 94vw; max-height: 86vh; border: 14px solid #15171a; border-radius: 22px; box-shadow: 0 30px 90px rgba(0, 0, 0, 0.85); }
+.look-btn { pointer-events: auto; }
 .look-btn {
   background: linear-gradient(90deg, var(--accent), var(--accent2));
   color: #fff;
@@ -666,10 +653,7 @@ input[type='range'] { accent-color: var(--accent); width: 180px; }
   clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
   white-space: nowrap;
 }
-@media (max-width: 900px) {
-  .nav-tablet { left: 0; right: 0; top: 0; bottom: 0; border-width: 6px; border-radius: 14px; }
-  .nav-tablet .nav { overflow: auto; }
-}
+
 
 /* Voice-only navigator: big map + data, no call buttons */
 .nav.nav-voice { grid-template-columns: 1fr; }

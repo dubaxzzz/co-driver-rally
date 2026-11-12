@@ -11,9 +11,19 @@ import { FirstPersonCamera } from '../game/camera/FirstPersonCamera';
 import { createCarModel, type CarModel } from '../game/vehicle/CarModel';
 import { Cockpit } from '../game/vehicle/Cockpit';
 import { buildStageWorld, type StageWorld } from '../game/world/StageWorld';
+import { SEATS } from '../game/vehicle/Cockpit';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import type { TabletScreen } from './TabletScreen';
 
 const LOOK_DOWN_PITCH = -0.95;
+const LOOK_DOWN_YAW = 0.12;
 const LOOK_UP_PITCH = -0.1;
+const ROAD_FOV = 74;
+/** How far in front of the eyes the co-driver holds the tablet (m). */
+const TABLET_DIST = 0.4;
+/** Screen size of the tablet (m), landscape; the case adds a rugged bezel around it. */
+const SCREEN_W = 0.25;
+const SCREEN_H = 0.156;
 
 /**
  * The co-driver's seat. Renders the same stage and the same car interior as
@@ -34,7 +44,6 @@ export class CockpitView {
   private lastVel = new THREE.Vector3();
   private vel = new THREE.Vector3();
   private accel = new THREE.Vector3();
-  private frameSkip = 0;
   private drag: { x: number; y: number; yaw: number; pitch: number } | null = null;
   private unsub: () => void;
   private weather: WeatherDef;
@@ -47,10 +56,20 @@ export class CockpitView {
   private picker: CockpitPicker;
   private trip = { start: 0, watchStart: 0, watchAcc: 0, running: false, mapLight: false };
   private lastDist = 0;
+  private tablet = new THREE.Group();
+  private tabletScreenMesh: THREE.Mesh | null = null;
+  private tabletTex: THREE.CanvasTexture | null = null;
+  private tabletBase = new THREE.Vector3();
+  private tabletVersion = -1;
+  private ray = new THREE.Raycaster();
+  /** Tap on the tablet screen while looking at it (u, v = texture coordinates). */
+  onTabletTap: (u: number, v: number) => void = () => {};
+  /** Tap on the tablet while looking at the road: bring it up. */
+  onTabletRaise: () => void = () => {};
   /** Sends a shared switch press to the driver's car. */
   onSwitch: (id: SharedSwitch, down: boolean) => void = () => {};
 
-  constructor(private container: HTMLElement, private stage: BuiltStage, weatherId: WeatherId) {
+  constructor(private container: HTMLElement, private stage: BuiltStage, weatherId: WeatherId, private screen: TabletScreen) {
     this.weather = WEATHER[weatherId] ?? WEATHER.storm;
     const quality = settings.get().quality;
     this.renderer = new THREE.WebGLRenderer({ antialias: quality === 'high', powerPreference: 'high-performance' });
@@ -68,6 +87,7 @@ export class CockpitView {
     this.cockpit = built.cockpit;
     this.picker = new CockpitPicker(container, () => this.fp.camera, this.cockpit.controls, (id) => this.press(id), (id) => this.release(id), (id) => id !== 'ignition' && id !== 'start');
     this.fp.pitch = this.fp.targetPitch = LOOK_DOWN_PITCH;
+    this.fp.yaw = this.fp.targetYaw = LOOK_DOWN_YAW;
     this.placeAtStart();
     this.resize();
     if (import.meta.env.DEV) (window as unknown as { __cdrNavView: CockpitView }).__cdrNavView = this;
@@ -75,12 +95,21 @@ export class CockpitView {
     // Drag to look around while looking up at the road
     this.canvas.style.touchAction = 'none';
     this.canvas.addEventListener('pointerdown', (e) => {
+      const uv = this.pickTablet(e);
+      if (uv) {
+        if (this.lookingDown) this.onTabletTap(uv.x, uv.y);
+        else this.onTabletRaise();
+        return;
+      }
       if (this.lookingDown || this.picker.busy) return;
       this.drag = { x: e.clientX, y: e.clientY, yaw: this.fp.targetYaw, pitch: this.fp.targetPitch };
       this.canvas.setPointerCapture(e.pointerId);
     });
     this.canvas.addEventListener('pointermove', (e) => {
-      if (!this.drag) return;
+      if (!this.drag) {
+        if (!this.picker.busy) this.canvas.style.cursor = this.pickTablet(e) ? 'pointer' : '';
+        return;
+      }
       const k = 3 / Math.max(300, this.canvas.clientWidth);
       this.fp.targetYaw = THREE.MathUtils.clamp(this.drag.yaw - (e.clientX - this.drag.x) * k, -1.7, 1.7);
       this.fp.targetPitch = THREE.MathUtils.clamp(this.drag.pitch - (e.clientY - this.drag.y) * k, -1.0, 0.45);
@@ -92,6 +121,110 @@ export class CockpitView {
     this.canvas.addEventListener('pointercancel', end);
   }
 
+  /** Where on the tablet screen (texture uv) the pointer is, or null when it misses the tablet. */
+  private pickTablet(e: PointerEvent): THREE.Vector2 | null {
+    if (!this.tabletScreenMesh) return null;
+    const r = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    this.ray.setFromCamera(ndc, this.fp.camera);
+    this.ray.far = 2;
+    const hit = this.ray.intersectObject(this.tablet, true)[0];
+    if (!hit) return null;
+    if (hit.object === this.tabletScreenMesh && hit.uv) return hit.uv.clone();
+    return new THREE.Vector2(-1, -1); // the case: still "the tablet"
+  }
+
+  /**
+   * The co-driver's tablet: a rugged-case tablet held in both gloved hands,
+   * in front of the passenger's chest. Its screen is the live TabletScreen canvas.
+   */
+  private buildTablet() {
+    const portrait = this.screen.portrait;
+    // clear the old one
+    this.tablet.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) {
+        m.geometry.dispose();
+        (m.material as THREE.Material).dispose();
+      }
+    });
+    this.tablet.clear();
+    this.tabletTex?.dispose();
+
+    const sw = portrait ? SCREEN_H : SCREEN_W;
+    const sh = portrait ? SCREEN_W : SCREEN_H;
+    const caseW = sw + 0.034, caseH = sh + 0.034;
+    const caseMat = new THREE.MeshStandardMaterial({ color: 0x1a1d21, roughness: 0.75, metalness: 0.1 });
+    const bumperMat = new THREE.MeshStandardMaterial({ color: 0xc8401c, roughness: 0.85 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x050607, roughness: 0.15, metalness: 0.4 });
+    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      this.tablet.add(m);
+      return m;
+    };
+    // case body + black glass border
+    add(new RoundedBoxGeometry(caseW, caseH, 0.016, 3, 0.008), caseMat, 0, 0, -0.008);
+    add(new THREE.PlaneGeometry(sw + 0.01, sh + 0.01), glassMat, 0, 0, 0.0005);
+    // orange corner bumpers
+    for (const cx of [-1, 1]) for (const cy of [-1, 1]) {
+      add(new RoundedBoxGeometry(0.026, 0.026, 0.02, 2, 0.007), bumperMat, cx * (caseW / 2 - 0.004), cy * (caseH / 2 - 0.004), -0.008);
+    }
+    // little camera dot + a strap on the back
+    add(new THREE.CircleGeometry(0.0025, 10), new THREE.MeshBasicMaterial({ color: 0x222831 }), 0, caseH / 2 - 0.006, 0.001);
+    add(new THREE.BoxGeometry(0.03, caseH * 0.8, 0.006), caseMat, 0, 0, -0.019);
+
+    // the live screen
+    this.tabletTex = new THREE.CanvasTexture(this.screen.canvas);
+    this.tabletTex.colorSpace = THREE.SRGBColorSpace;
+    this.tabletTex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    this.tabletTex.minFilter = THREE.LinearMipmapLinearFilter;
+    this.tabletVersion = -1;
+    this.tabletScreenMesh = add(new THREE.PlaneGeometry(sw, sh), new THREE.MeshBasicMaterial({ map: this.tabletTex, toneMapped: false }), 0, 0, 0.001);
+
+    // gloved hands gripping the sides, forearms running back towards the body
+    const glove = new THREE.MeshStandardMaterial({ color: 0x18191c, roughness: 0.85 });
+    const sleeve = new THREE.MeshStandardMaterial({ color: 0x2a3a52, roughness: 0.9 });
+    const palmY = portrait ? -sh * 0.12 : -sh * 0.05;
+    for (const side of [-1, 1]) {
+      const hx = side * (caseW / 2 + 0.004);
+      const palm = add(new RoundedBoxGeometry(0.03, 0.085, 0.045, 2, 0.012), glove, hx + side * 0.006, palmY, -0.018);
+      palm.rotation.z = side * 0.12;
+      // thumb over the bezel
+      const thumb = add(new RoundedBoxGeometry(0.022, 0.05, 0.016, 2, 0.007), glove, side * (caseW / 2 - 0.006), palmY + 0.012, 0.006);
+      thumb.rotation.z = side * -0.5;
+      // fingers wrapping round the back
+      add(new RoundedBoxGeometry(0.05, 0.075, 0.014, 2, 0.006), glove, side * (caseW / 2 - 0.016), palmY - 0.004, -0.03);
+      // forearm: from the wrist down and back out of view
+      const wrist = new THREE.Vector3(hx + side * 0.01, palmY - 0.035, -0.04);
+      const elbow = new THREE.Vector3(hx + side * 0.07, palmY - 0.26, -0.2);
+      const len = wrist.distanceTo(elbow);
+      const arm = add(new THREE.CylinderGeometry(0.03, 0.036, len, 10), sleeve, 0, 0, 0);
+      arm.position.copy(wrist).lerp(elbow, 0.5);
+      arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), elbow.clone().sub(wrist).normalize());
+    }
+
+    // place it in front of the passenger's eyes, along the "look down" direction, facing them
+    const seat = SEATS.navigator;
+    const p = LOOK_DOWN_PITCH, y = LOOK_DOWN_YAW;
+    const dir = new THREE.Vector3(Math.cos(p) * Math.sin(y), Math.sin(p), Math.cos(p) * Math.cos(y));
+    this.tabletBase.set(seat.x, seat.eyeY, seat.eyeZ).addScaledVector(dir, TABLET_DIST);
+    this.tablet.position.copy(this.tabletBase);
+    this.tablet.quaternion.setFromEuler(new THREE.Euler(p, Math.PI + y, 0, 'YXZ'));
+    // the plane faces the camera's +Z, i.e. back at the eyes
+  }
+
+  /** Field of view that makes the held tablet fill most of the screen. */
+  private tabletFov() {
+    const portrait = this.screen.portrait;
+    const tw = (portrait ? SCREEN_H : SCREEN_W) + (portrait ? 0.035 : 0.07); // include the hands (on phones, just the bezel)
+    const th = (portrait ? SCREEN_W : SCREEN_H) + 0.03;
+    const aspect = this.fp.camera.aspect;
+    const vFromH = 2 * Math.atan(th / 2 / TABLET_DIST / 0.9);
+    const vFromW = 2 * Math.atan(Math.tan(Math.atan(tw / 2 / TABLET_DIST / 0.96)) / aspect);
+    return THREE.MathUtils.radToDeg(Math.max(vFromH, vFromW));
+  }
+
   /** The driver's car: interior + dashboard of whatever they drive. */
   private buildCar(id: CarModelId) {
     const sel = garageStore.resolve();
@@ -101,6 +234,7 @@ export class CockpitView {
     if (this.weather.headlights) car.enableHeadlights();
     const cockpit = new Cockpit(sel.paint, 'navigator', id);
     car.root.add(cockpit.group);
+    car.root.add(this.tablet);
     this.scene.add(car.root);
     this.modelId = id;
     return { car, cockpit };
@@ -158,7 +292,7 @@ export class CockpitView {
   setLookDown(down: boolean) {
     this.lookingDown = down;
     this.fp.targetPitch = down ? LOOK_DOWN_PITCH : LOOK_UP_PITCH;
-    this.fp.targetYaw = down ? 0.12 : 0;
+    this.fp.targetYaw = down ? LOOK_DOWN_YAW : 0;
   }
 
   resize() {
@@ -166,6 +300,12 @@ export class CockpitView {
     const h = this.container.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
     this.fp.resize(w / Math.max(1, h));
+    // tall phone screens get the tablet turned to portrait
+    const portrait = w / Math.max(1, h) < 0.9;
+    if (portrait !== this.screen.portrait || !this.tabletScreenMesh) {
+      this.screen.setPortrait(portrait);
+      this.buildTablet();
+    }
   }
 
   update(dt: number, t: RelayedTelemetry | null) {
@@ -225,11 +365,22 @@ export class CockpitView {
     this.car.setLightPod(this.sw.pod);
     this.car.setHazards(this.sw.hazards);
     this.car.tick(performance.now() / 1000);
+    // the tablet is held in the hands, so it moves with the head (mostly)
+    this.tablet.position.copy(this.tabletBase).addScaledVector(this.fp.head, 0.85);
+    // zoom in on the tablet when looking at it, wide angle when looking at the road
+    const k = THREE.MathUtils.clamp((this.fp.pitch - LOOK_UP_PITCH) / (LOOK_DOWN_PITCH - LOOK_UP_PITCH), 0, 1);
+    const ease = k * k * (3 - 2 * k);
+    const fov = THREE.MathUtils.lerp(ROAD_FOV, this.tabletFov(), ease);
+    if (Math.abs(fov - this.fp.camera.fov) > 0.01) {
+      this.fp.camera.fov = fov;
+      this.fp.camera.updateProjectionMatrix();
+    }
     this.fp.update(dt, root, this.accel, Math.min(1, Math.abs(this.accel.y) * 0.04));
     this.world.update(dt, this.fp.camera.position, this.vel);
-
-    // While the tablet covers the screen, render at half rate to save battery
-    if (this.lookingDown && Math.abs(this.fp.pitch - LOOK_DOWN_PITCH) < 0.02 && this.frameSkip++ % 2) return;
+    if (this.tabletTex && this.screen.version !== this.tabletVersion) {
+      this.tabletVersion = this.screen.version;
+      this.tabletTex.needsUpdate = true;
+    }
     this.picker.enabled = !this.lookingDown;
     this.renderer.render(this.scene, this.fp.camera);
   }
@@ -256,6 +407,7 @@ export class CockpitView {
   }
 
   dispose() {
+    this.tabletTex?.dispose();
     this.picker.dispose();
     this.aiCars.forEach((m) => m.dispose());
     this.unsub();

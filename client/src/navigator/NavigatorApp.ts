@@ -19,6 +19,7 @@ import { NAVIGATOR_SHARE } from '@cdr/shared';
 import type { CockpitView } from './CockpitView';
 import { Interpolator } from './Interpolator';
 import { MapView } from './MapView';
+import { TabletScreen, type TabletData } from './TabletScreen';
 
 /**
  * The co-driver's seat. The navigator sits in the passenger seat (3D view
@@ -50,6 +51,10 @@ export class NavigatorApp {
   private disposed = false;
   private rewardsEl: HTMLElement | null = null;
   private paidRun = -1;
+  private screen: TabletScreen;
+  private weatherName: string;
+  private lastTabletDraw = 0;
+  private tab: TabletData;
 
   private readonly weatherId: string;
 
@@ -61,101 +66,73 @@ export class NavigatorApp {
     this.stage = getStage(net.room?.race.stageId ?? DEFAULT_STAGE_ID) ?? getStage(DEFAULT_STAGE_ID)!;
     this.weatherId = net.room?.race.weather ?? 'storm';
     this.map = new MapView(this.stage);
-    const v = (key: string, init = '—') => (this.els[key] = h('div', { class: 'v' }, init));
-
-    // ---- header ----
-    this.lookBtn = h('button', { class: 'look-btn', 'data-testid': 'look-btn', onclick: () => this.toggleLook() }, '▲ Look at road') as HTMLButtonElement;
-    this.els.code = h('span', { class: 'code' }, net.room?.code ?? '----');
-    this.els.server = h('span', { class: 'chip' }, h('span', { class: 'status-dot' }), 'ONLINE');
-    this.els.driver = h('span', { class: 'chip' }, h('span', { class: 'status-dot' }), 'DRIVER');
-    this.els.timer = h('span', { class: 'timer', 'data-testid': 'nav-timer' }, '00:00.00');
-    this.els.phase = h('span', { class: 'chip' }, 'LOBBY');
-    const header = h(
-      'div',
-      { class: 'nav-header' },
-      this.lookBtn,
-      h('span', { class: 'brand nh-brand' }, h('span', { class: 'co' }, 'CO-'), 'DRIVER'),
-      h('span', { class: 'nh-room' }, h('span', { class: 'chip' }, 'ROOM'), this.els.code),
-      h('span', { class: 'nh-status' }, this.els.server, this.els.driver, this.els.phase),
-      this.els.timer,
-      h('button', { class: 'back-btn nh-leave', onclick: () => void this.leave() }, 'Leave'),
-    );
-
-    // ---- map ----
+    this.screen = new TabletScreen(this.map);
     const w = WEATHER[this.weatherId as keyof typeof WEATHER];
-    this.waitingEl = h(
-      'div',
-      { class: 'nav-waiting', 'data-testid': 'nav-waiting' },
-      h('div', {}, `${this.stage.def.name} · ${w?.name ?? ''}`, h('br'), h('small', { style: 'font-size:13px;color:var(--muted);letter-spacing:.06em' }, 'Waiting for the driver to start the stage…')),
-    );
-    this.els.mapStatus = h('div', { class: 'map-status' }, 'No telemetry yet');
-    const followBtn = h('button', { class: 'sel' }, 'FOLLOW');
-    const fullBtn = h('button', {}, 'FULL STAGE');
-    followBtn.onclick = () => { this.map.mode = 'follow'; followBtn.classList.add('sel'); fullBtn.classList.remove('sel'); };
-    fullBtn.onclick = () => { this.map.mode = 'full'; fullBtn.classList.add('sel'); followBtn.classList.remove('sel'); };
-    const mapBox = h(
-      'div',
-      { class: 'nav-map' },
-      this.map.canvas,
-      h('div', { class: 'map-tools' }, followBtn, fullBtn),
-      this.els.mapStatus,
-      h('div', { class: 'map-hint' }, 'Read the road ahead and call it out loud to your driver'),
-      this.waitingEl,
-    );
+    this.weatherName = w?.name ?? '';
+    this.tab = {
+      code: net.room?.code ?? '----',
+      phase: 'LOBBY',
+      timer: '00:00.00',
+      server: 'warn',
+      driverOk: false,
+      driverLabel: 'DRIVER',
+      stageName: this.stage.def.name,
+      weatherName: this.weatherName,
+      waiting: true,
+      mapStatus: 'No telemetry yet',
+      speed: '0',
+      speedUnit: formatSpeed(0).unit,
+      gear: 'N',
+      rpm: '0',
+      pct: 0,
+      remain: formatDistance(this.stage.finishDistance - this.stage.startDistance),
+      cps: `0/${this.stage.checkpoints.length}`,
+      surface: SURFACES[this.stage.def.surface].name,
+      damage: 'OK',
+      damageLevel: 0,
+    };
 
-    // ---- live data ----
-    this.els.progress = h('i', {});
-    const data = h(
-      'div',
-      { class: 'nav-data' },
-      h('div', {}, h('div', { class: 'k' }, 'SPEED'), v('speed', '0')),
-      h('div', {}, h('div', { class: 'k' }, 'GEAR'), v('gear', 'N')),
-      h('div', {}, h('div', { class: 'k' }, 'RPM'), v('rpm', '0')),
-      h('div', {}, h('div', { class: 'k' }, 'STAGE PROGRESS'), v('pct', '0%')),
-      h('div', {}, h('div', { class: 'k' }, 'REMAINING'), v('remain', formatDistance(this.stage.finishDistance - this.stage.startDistance))),
-      h('div', {}, h('div', { class: 'k' }, 'CHECKPOINTS'), v('cps', `0/${this.stage.checkpoints.length}`)),
-      h('div', {}, h('div', { class: 'k' }, 'SURFACE'), v('surface', SURFACES[this.stage.def.surface].name)),
-      h('div', {}, h('div', { class: 'k' }, 'CAR DAMAGE'), v('damage', 'OK')),
-      h('div', { class: 'nav-progress' }, this.els.progress),
-    );
-
-    const navEl = h('div', { class: 'nav nav-voice' }, header, h('div', { class: 'nav-left' }, mapBox, data));
-    const tablet = h('div', { class: 'nav-tablet' }, navEl);
-    // When looking at the road, tapping the tablet edge brings it back up.
-    tablet.addEventListener(
-      'click',
-      (e) => {
-        if (!this.lookingDown && e.target !== this.lookBtn) {
-          e.preventDefault();
-          e.stopPropagation();
-          this.toggleLook();
-        }
-      },
-      true,
-    );
+    // Only two real buttons float over the view; everything else is on the tablet in your hands.
+    this.lookBtn = h('button', { class: 'look-btn nav-look', 'data-testid': 'look-btn', onclick: () => this.toggleLook() }, '▲ Look at road') as HTMLButtonElement;
+    const leaveBtn = h('button', { class: 'back-btn nav-leave', onclick: () => void this.leave() }, 'Leave');
+    const hud = h('div', { class: 'nav-hud' }, leaveBtn, this.lookBtn);
+    this.els.timer = h('span', { class: 'nav-timer-sr', 'data-testid': 'nav-timer', 'aria-live': 'off' }, '00:00.00');
+    this.waitingEl = h('span', { class: 'nav-timer-sr', 'data-testid': 'nav-waiting' }, 'Waiting for the driver');
     const view3d = h('div', { class: 'nav-3d' }, h('div', { class: 'nav-3d-loading' }, 'Loading passenger-seat view…'));
-    this.root = h('div', { class: 'nav-shell' }, view3d, tablet);
+    this.root = h('div', { class: 'nav-shell' }, view3d, hud, this.els.timer, this.waitingEl);
     window.addEventListener('keydown', this.onKey);
     window.addEventListener('resize', this.onResize);
 
-    // Load the 3D passenger view after the tablet is on screen.
     setTimeout(() => {
       import('./CockpitView')
         .then(({ CockpitView }) => {
           if (this.disposed) return;
-          this.view = new CockpitView(view3d, this.stage, this.weatherId as keyof typeof WEATHER);
+          this.view = new CockpitView(view3d, this.stage, this.weatherId as keyof typeof WEATHER, this.screen);
           this.view.setLookDown(this.lookingDown);
           this.view.onSwitch = (id, down) => net.sendSwitch(id, down);
+          this.view.onTabletTap = (u, v) => this.tapTablet(u, v);
+          this.view.onTabletRaise = () => !this.lookingDown && this.toggleLook();
           view3d.querySelector('.nav-3d-loading')?.remove();
         })
         .catch((e) => {
           console.error(e);
-          const l = view3d.querySelector('.nav-3d-loading');
-          if (l) l.textContent = 'This device cannot show the 3D view – the tablet still works.';
+          // No 3D on this device: show the tablet screen flat instead
+          view3d.innerHTML = '';
+          view3d.classList.add('flat');
+          const c = this.screen.canvas;
+          c.classList.add('nav-flat-tablet');
+          c.addEventListener('pointerdown', (ev) => {
+            const r = c.getBoundingClientRect();
+            this.tapTablet((ev.clientX - r.left) / r.width, 1 - (ev.clientY - r.top) / r.height);
+          });
+          view3d.append(c);
+          const fit = () => this.screen.setPortrait(window.innerWidth / Math.max(1, window.innerHeight) < 0.9);
+          fit();
+          window.addEventListener('resize', fit);
+          this.unsubs.push(() => window.removeEventListener('resize', fit));
           this.lookBtn.style.display = 'none';
         });
     }, 60);
-
     for (const p of net.lastJoin?.lastTelemetry ?? []) this.route(p);
     this.race = net.room?.race ?? null;
     this.bind();
@@ -220,7 +197,7 @@ export class NavigatorApp {
       net.on('room', (r) => {
         if (r.race.stageId !== this.stage.def.id || r.race.weather !== this.weatherId) return this.onReload();
         this.race = r.race;
-        this.els.code.textContent = r.code;
+        this.tab.code = r.code;
         const f = net.followedDriverId();
         if (f !== this.followed) {
           this.followed = f;
@@ -256,6 +233,15 @@ export class NavigatorApp {
     );
   }
 
+  /** A tap on the tablet's screen (texture coordinates). */
+  private tapTablet(u: number, v: number) {
+    const b = this.screen.hit(u, v);
+    if (!b) return;
+    audio.click();
+    this.map.mode = b;
+    this.lastTabletDraw = 0; // redraw right away
+  }
+
   private toggleLook() {
     this.lookingDown = !this.lookingDown;
     this.root.classList.toggle('looking-up', !this.lookingDown);
@@ -274,23 +260,23 @@ export class NavigatorApp {
   private onResize = () => this.view?.resize();
 
   private updateConnection() {
-    const sDot = this.els.server.firstChild as HTMLElement;
-    sDot.className = `status-dot ${net.status === 'connected' ? 'ok' : net.status === 'disconnected' ? 'bad' : 'warn'}`;
+    this.tab.server = net.status === 'connected' ? 'ok' : net.status === 'disconnected' ? 'bad' : 'warn';
     const d = net.member(this.followed);
-    const dDot = this.els.driver.firstChild as HTMLElement;
-    dDot.className = `status-dot ${d?.connected ? 'ok' : 'bad'}`;
-    this.els.driver.lastChild!.textContent = d ? (d.connected ? `DRIVER: ${d.name}` : 'DRIVER DISCONNECTED') : 'NO DRIVER';
+    this.tab.driverOk = !!d?.connected;
+    const name = d && d.name.length > 16 ? `${d.name.slice(0, 15)}…` : d?.name;
+    this.tab.driverLabel = d ? (d.connected ? `DRIVER: ${name}` : 'DRIVER OFFLINE') : 'NO DRIVER';
   }
 
   private applyRace() {
     const s = this.race;
     if (!s) return;
     const labels = { lobby: 'LOBBY', countdown: 'COUNTDOWN', racing: 'RACING', finished: 'FINISHED' } as const;
-    this.els.phase.textContent = labels[s.phase];
+    this.tab.phase = labels[s.phase];
     if (s.phase === 'lobby') return void setTimeout(() => !this.disposed && this.onReload(), 0); // back to the lobby screen
+    this.tab.waiting = false;
     this.waitingEl.style.display = 'none';
     const dr = this.driverRace();
-    this.els.cps.textContent = `${dr?.checkpointsPassed ?? 0}/${this.stage.checkpoints.length}`;
+    this.tab.cps = `${dr?.checkpointsPassed ?? 0}/${this.stage.checkpoints.length}`;
     const result = dr?.result;
     if (result && this.resultRun !== s.runId) {
       this.resultRun = s.runId;
@@ -357,35 +343,38 @@ export class NavigatorApp {
     const dt = Math.min(0.1, (pnow - this.lastFrame) / 1000);
     this.lastFrame = pnow;
     this.view?.update(dt, t);
-    this.map.draw(t, this.driverRace()?.checkpointsPassed ?? 0);
-
+    const tab = this.tab;
     // timer from the authoritative race state
     let ms = 0;
     if (s?.phase === 'racing' && s.startAt) ms = Math.max(0, now - s.startAt);
     const res = this.driverRace()?.result;
     if (res) ms = res.timeMs;
-    if (s?.phase === 'countdown' && s.startAt) this.els.timer.textContent = `GO IN ${Math.max(0, Math.ceil((s.startAt - now) / 1000))}`;
-    else this.els.timer.textContent = formatTime(ms);
-
+    tab.timer = s?.phase === 'countdown' && s.startAt ? `GO IN ${Math.max(0, Math.ceil((s.startAt - now) / 1000))}` : formatTime(ms);
+    this.els.timer.textContent = tab.timer;
     const age = performance.now() - this.lastPacketAt;
     if (!t) {
-      this.els.mapStatus.textContent = net.member(this.followed)?.connected ? 'Waiting for telemetry…' : 'Driver offline';
-      return;
+      tab.mapStatus = net.member(this.followed)?.connected ? 'Waiting for telemetry…' : 'Driver offline';
+    } else {
+      tab.mapStatus = age > 1500 ? `Telemetry stalled (${(age / 1000).toFixed(1)}s)` : `Live · ${net.latencyMs ?? '–'} ms`;
+      const sp = formatSpeed(t.v);
+      tab.speed = String(sp.value);
+      tab.speedUnit = sp.unit;
+      tab.gear = t.gear === -1 ? 'R' : t.gear === 0 ? 'N' : String(t.gear);
+      tab.rpm = String(Math.round(t.rpm / 10) * 10);
+      const span = this.stage.finishDistance - this.stage.startDistance;
+      tab.pct = Math.min(100, Math.max(0, ((t.dist - this.stage.startDistance) / span) * 100));
+      tab.remain = formatDistance(t.remain);
+      tab.surface = SURFACES[surfaceAt(this.stage, t.dist)].name;
+      const worst = t.dz ? Math.max(...t.dz) : t.dmg;
+      tab.damage = worst < 0.05 ? 'OK' : `${Math.round(worst * 100)}%`;
+      tab.damageLevel = worst > 0.6 ? 2 : worst > 0.2 ? 1 : 0;
     }
-    this.els.mapStatus.textContent = age > 1500 ? `Telemetry stalled (${(age / 1000).toFixed(1)}s)` : `Live · ${net.latencyMs ?? '–'} ms`;
-    const sp = formatSpeed(t.v);
-    this.els.speed.innerHTML = `${sp.value}<small> ${sp.unit}</small>`;
-    this.els.gear.textContent = t.gear === -1 ? 'R' : t.gear === 0 ? 'N' : String(t.gear);
-    this.els.rpm.textContent = String(Math.round(t.rpm / 10) * 10);
-    const span = this.stage.finishDistance - this.stage.startDistance;
-    const pct = Math.min(100, Math.max(0, ((t.dist - this.stage.startDistance) / span) * 100));
-    this.els.pct.textContent = `${pct.toFixed(0)}%`;
-    this.els.progress.style.width = `${pct}%`;
-    this.els.remain.textContent = formatDistance(t.remain);
-    this.els.surface.textContent = SURFACES[surfaceAt(this.stage, t.dist)].name;
-    const worst = t.dz ? Math.max(...t.dz) : t.dmg;
-    this.els.damage.textContent = worst < 0.05 ? 'OK' : `${Math.round(worst * 100)}%`;
-    this.els.damage.style.color = worst > 0.6 ? 'var(--bad)' : worst > 0.2 ? 'var(--warn)' : '';
+    // the tablet screen refreshes ~20 times a second (like a real one, and cheap)
+    if (pnow - this.lastTabletDraw > 50) {
+      this.lastTabletDraw = pnow;
+      this.screen.setMapState(t, this.driverRace()?.checkpointsPassed ?? 0);
+      this.screen.draw(tab);
+    }
   };
 
   private async leave() {
