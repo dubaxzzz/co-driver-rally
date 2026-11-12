@@ -7,7 +7,6 @@ import {
 import { getStage } from './tracks';
 import type { AiSkill, NavCallRequest, RallyConfig, TelemetryPacket } from './types';
 import { WEATHER_IDS, type WeatherId } from './weather';
-import { VEHICLES } from './vehicles';
 
 const AI_SKILLS: AiSkill[] = ['easy', 'medium', 'hard'];
 export const MAX_AI = 3;
@@ -27,10 +26,6 @@ export function validateConfig(p: unknown): Partial<RallyConfig> | null {
   if (p.aiCount !== undefined) {
     if (!isNum(p.aiCount, 0, MAX_AI) || !Number.isInteger(p.aiCount)) return null;
     out.aiCount = p.aiCount;
-  }
-  if (p.limited !== undefined) {
-    if (typeof p.limited !== 'string' || !/^[a-z0-9-]{1,40}$/.test(p.limited)) return null;
-    out.limited = p.limited;
   }
   if (p.daily !== undefined) {
     if (typeof p.daily !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(p.daily)) return null;
@@ -119,6 +114,14 @@ export function validateTelemetry(p: unknown): TelemetryPacket | null {
     if (!isNum(p.sw, 0, 1023) || !Number.isInteger(p.sw)) return null;
     out.sw = p.sw;
   }
+  if (p.sys !== undefined) {
+    if (!isNum(p.sys, 0, 1023) || !Number.isInteger(p.sys)) return null;
+    out.sys = p.sys;
+  }
+  if (p.tmp !== undefined) {
+    if (!isNum(p.tmp, -50, 200)) return null;
+    out.tmp = Math.round(p.tmp);
+  }
   if (p.look !== undefined) {
     const look = p.look;
     if (!Array.isArray(look) || look.length !== 3 || !look.every((n) => isNum(n, 0, 0xffffff) && Number.isInteger(n))) return null;
@@ -146,27 +149,4 @@ export function validateNavCall(p: unknown): NavCallRequest | null {
     req.noteIndex = p.noteIndex;
   }
   return req;
-}
-
-export interface LimitedEventInput {
-  name: string;
-  stageId: string;
-  weather: WeatherId;
-  carId: string | null;
-  prize: number;
-  hours: number;
-}
-
-/** Validates an admin's new limited event. */
-export function validateLimitedInput(p: unknown): LimitedEventInput | null {
-  if (!isObj(p)) return null;
-  const name = typeof p.name === 'string' ? p.name.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 40) : '';
-  if (!name) return null;
-  if (typeof p.stageId !== 'string' || !getStage(p.stageId)) return null;
-  if (!WEATHER_IDS.includes(p.weather as WeatherId)) return null;
-  const carId = p.carId === null || p.carId === undefined || p.carId === '' ? null : p.carId;
-  if (carId !== null && (typeof carId !== 'string' || !VEHICLES.some((v) => v.id === carId))) return null;
-  if (!isNum(p.prize, 0, 10_000_000)) return null;
-  if (!isNum(p.hours, 0.25, 24 * 30)) return null;
-  return { name, stageId: p.stageId, weather: p.weather as WeatherId, carId: carId as string | null, prize: Math.round(p.prize as number), hours: p.hours as number };
 }

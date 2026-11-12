@@ -23,12 +23,13 @@ export class PhysicsWorld {
   }
 
   /** Advances the simulation in fixed steps; `beforeStep` runs before each one. */
-  step(dt: number, beforeStep: (h: number) => void): number {
+  step(dt: number, beforeStep: (h: number) => void, afterStep?: (h: number) => void): number {
     this.acc += Math.min(dt, 0.1);
     let steps = 0;
     while (this.acc >= this.fixedDt && steps < 6) {
       beforeStep(this.fixedDt);
       this.world.step();
+      afterStep?.(this.fixedDt);
       this.acc -= this.fixedDt;
       steps++;
     }

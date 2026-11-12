@@ -8,7 +8,7 @@ declare const __BUILD_ID__: string;
 export const BUILD_ID = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'dev';
 
 const BUILD_KEY = 'cdr.build';
-const PROGRESS_KEYS = ['cdr.career', 'cdr.championship', 'cdr.limitedDone'];
+const PROGRESS_KEYS = ['cdr.career', 'cdr.championship', 'cdr.limitedDone', 'cdr.admin'];
 
 /** Must run before the career/championship stores load. Returns true if progress was wiped. */
 export function applyProgressReset(): boolean {

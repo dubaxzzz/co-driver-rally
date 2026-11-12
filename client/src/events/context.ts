@@ -21,8 +21,7 @@ export type EventContext =
       /** Damage carried over from the last round (zones ×6, wheels ×4). */
       carry: { zones: number[]; wheels: number[] };
     }
-  | { kind: 'daily'; date: string; carId: string }
-  | { kind: 'limited'; id: string; name: string; carId: string | null; prize: number };
+  | { kind: 'daily'; date: string; carId: string };
 
 const KEY = 'cdr.event';
 let ctx: EventContext = (() => {

@@ -10,6 +10,7 @@ import {
   dailyChallenge,
   dailyKey,
   SHARED_SWITCHES,
+  validateSysCommand,
   type SharedSwitch,
   type RallyConfig,
   type Ack,
@@ -21,7 +22,7 @@ import {
 } from '@cdr/shared';
 import { config } from '../config';
 import { RoomManager, type Room } from '../rooms/RoomManager';
-import { dailyBoard, limitedEvents } from '../daily/DailyBoard';
+import { dailyBoard } from '../daily/DailyBoard';
 
 /** Daily Challenge: the server decides stage + weather (no AI) for today's date. */
 function applyDaily(cfg: Partial<RallyConfig>): Partial<RallyConfig> | string {
@@ -33,16 +34,8 @@ function applyDaily(cfg: Partial<RallyConfig>): Partial<RallyConfig> | string {
 
 /** AI rivals only race in championship rounds (solo events that aren't the daily). */
 function onlyChampionshipAi<T extends Partial<RallyConfig>>(cfg: T, soloEvent: boolean): T {
-  if (!soloEvent || cfg.daily || cfg.limited) cfg.aiCount = 0;
+  if (!soloEvent || cfg.daily) cfg.aiCount = 0;
   return cfg;
-}
-
-/** Limited event: the server locks stage + weather to the event while it runs. */
-function applyLimited(cfg: Partial<RallyConfig>): Partial<RallyConfig> | string {
-  if (!cfg.limited) return cfg;
-  const ev = limitedEvents.active(cfg.limited);
-  if (!ev) return 'That limited event has ended.';
-  return { ...cfg, stageId: ev.stageId, weather: ev.weather, aiCount: 0, soloEvent: true, daily: undefined };
 }
 
 type IO = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -77,7 +70,6 @@ export function registerHandlers(io: IO) {
       io.to(code).emit('race:finished', r);
       const st = rooms.get(code)?.race.state;
       if (st?.daily) dailyBoard.add(st.daily, r.name, r.timeMs);
-      if (st?.limited) limitedEvents.addResult(st.limited, r.name, r.timeMs);
     },
   }));
 
@@ -115,9 +107,7 @@ export function registerHandlers(io: IO) {
       const name = sanitiseName(payload && (payload as { name?: unknown }).name, 'Driver');
       const raw = payload?.config === undefined ? {} : validateConfig(payload.config);
       if (!raw) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
-      const dailied = applyDaily(raw);
-      if (typeof dailied === 'string') return ack(err('BAD_PAYLOAD', dailied));
-      const config = applyLimited(dailied);
+      const config = applyDaily(raw);
       if (typeof config === 'string') return ack(err('BAD_PAYLOAD', config));
       onlyChampionshipAi(config, !!config.soloEvent);
       leaveCurrent();
@@ -134,7 +124,7 @@ export function registerHandlers(io: IO) {
       const code = normaliseRoomCode(payload?.code);
       if (!code) return ack(err('INVALID_CODE', 'Room codes are 4 letters/numbers, e.g. R7K2.'));
       const name = sanitiseName(payload?.name, 'Player');
-      const want = payload?.role === 'driver' || payload?.role === 'navigator' ? payload.role : undefined;
+      const want = payload?.role === 'driver' || payload?.role === 'navigator' || payload?.role === 'spectator' ? payload.role : undefined;
       const res = rooms.join(socket.id, code, name, want);
       if (!res.ok) return ack(res);
       socket.join(code);
@@ -207,7 +197,7 @@ export function registerHandlers(io: IO) {
     socket.on('room:role', (payload, ackFn) => {
       const ack = safeAck<RoomSnapshot>(ackFn);
       const role = payload?.role;
-      if (role !== 'driver' && role !== 'navigator') return ack(err('BAD_PAYLOAD', 'Unknown role.'));
+      if (role !== 'driver' && role !== 'navigator' && role !== 'spectator') return ack(err('BAD_PAYLOAD', 'Unknown role.'));
       const navFor = typeof payload?.navFor === 'string' ? payload.navFor : null;
       const res = rooms.setRole(socket.id, role, navFor);
       ack(res);
@@ -238,12 +228,8 @@ export function registerHandlers(io: IO) {
       if (!raw) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
       delete raw.soloEvent; // fixed when the room is created
       // a daily room stays locked to today's challenge
-      delete raw.limited;
       const st = ctx.room.race.state;
-      const cfg0 = applyDaily(st.daily ? { ...raw, daily: st.daily } : raw);
-      if (typeof cfg0 === 'string') return ack(err('BAD_PAYLOAD', cfg0));
-      // a limited-event room stays locked to its event
-      const cfg = applyLimited(st.limited ? { ...cfg0, limited: st.limited } : cfg0);
+      const cfg = applyDaily(st.daily ? { ...raw, daily: st.daily } : raw);
       if (typeof cfg === 'string') return ack(err('BAD_PAYLOAD', cfg));
       onlyChampionshipAi(cfg, !!ctx.room.race.state.soloEvent);
       ack({ ok: true, data: ctx.room.race.configure(cfg) });
@@ -303,6 +289,18 @@ export function registerHandlers(io: IO) {
       if (typeof id !== 'string' || !(SHARED_SWITCHES as readonly string[]).includes(id)) return;
       const target = rooms.seat(ctx.room, seat.navFor)?.socketId;
       if (target) io.to(target).emit('car:switch', { id: id as SharedSwitch, down: payload.down !== false, from: seat.name });
+    });
+
+    // the co-driver working the car's systems from the tablet → their driver's game
+    socket.on('car:sys', (payload) => {
+      const ctx = currentRoom();
+      if (!ctx || !switchLimiter.allow()) return;
+      const seat = seatOf(ctx);
+      if (!seat || seat.role !== 'navigator' || !seat.navFor) return;
+      const cmd = validateSysCommand(payload);
+      if (!cmd) return;
+      const target = rooms.seat(ctx.room, seat.navFor)?.socketId;
+      if (target) io.to(target).emit('car:sys', { ...cmd, from: seat.name });
     });
 
     socket.on('disconnect', () => {

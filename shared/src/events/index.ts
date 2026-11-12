@@ -18,7 +18,7 @@ import type {
   RoomSnapshot,
   TelemetryPacket,
 } from '../types';
-import type { SharedSwitch } from '../switches';
+import type { SharedSwitch, SysCommand } from '../switches';
 
 export interface ClientToServerEvents {
   'room:create': (payload: { name?: string; config?: Partial<RallyConfig> }, ack: (res: Ack<JoinResult>) => void) => void;
@@ -39,6 +39,8 @@ export interface ClientToServerEvents {
   'nav:call': (payload: NavCallRequest, ack?: (res: Ack<NavCall>) => void) => void;
   /** Navigator flips a shared switch in their driver's car. */
   'car:switch': (payload: { id: SharedSwitch; down?: boolean }) => void;
+  /** Navigator changes a car system (radiator flaps, anti-lag, engine map, tyre pressure, fuse). */
+  'car:sys': (payload: SysCommand) => void;
   'time:sync': (clientTime: number, ack: (serverTime: number) => void) => void;
 }
 
@@ -53,6 +55,5 @@ export interface ServerToClientEvents {
   'nav:call': (call: NavCall) => void;
   /** A navigator flipped one of your switches. */
   'car:switch': (payload: { id: SharedSwitch; down: boolean; from: string }) => void;
-  /** An admin created or removed a limited-time event – fetch /api/limited again. */
-  'limited:changed': () => void;
+  'car:sys': (payload: SysCommand & { from: string }) => void;
 }

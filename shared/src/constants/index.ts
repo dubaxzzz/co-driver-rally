@@ -18,6 +18,8 @@ export const COUNTDOWN_MS = 10000;
 /** Up to four people per lobby: any mix of drivers and navigators. */
 export const MAX_MEMBERS = 4;
 export const MAX_DRIVERS = 4;
+/** Spectators on top of the 4 players. */
+export const MAX_SPECTATORS = 8;
 /** Grid: two cars side by side, rows this far apart (metres). */
 export const GRID_ROW_GAP_M = 10;
 export const GRID_SIDE_OFFSET_M = 2.1;

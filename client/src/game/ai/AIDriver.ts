@@ -61,6 +61,8 @@ export class AIDriver {
   /** Cars around this one – set by the game every frame. */
   others: OtherCar[] = [];
   private passOffset = 0;
+  /** This run's fallen trees / rocks / animals (Game sets them). */
+  obstacles: Array<{ kind: string; distance: number; side: number }> = [];
 
   constructor(
     physics: PhysicsWorld,
@@ -132,7 +134,16 @@ export class AIDriver {
       wantOffset = op.lateral > 0 ? -room : room; // go round on the other side
       if (ahead < 9 && absV > o.speed) trafficCap = Math.max(0, o.speed - 0.5);
     }
-    this.passOffset += (wantOffset - this.passOffset) * Math.min(1, dt * 1.5);
+    // ---- things on the road: steer for the gap and slow for it ----
+    let obstacleCap = Infinity;
+    for (const ob of this.obstacles) {
+      const ahead = ob.distance - proj.distance;
+      if (ahead < -8 || ahead > 120) continue;
+      wantOffset = -ob.side * (st.def.roadWidth / 2 - 0.6); // the gap is on the other side
+      const vSafe = ob.kind === 'animals' ? 6 : 13;
+      obstacleCap = Math.min(obstacleCap, Math.sqrt(vSafe * vSafe + 2 * this.skill.brake * Math.max(0, ahead - 10)));
+    }
+    this.passOffset += (wantOffset - this.passOffset) * Math.min(1, dt * (this.obstacles.length ? 2.5 : 1.5));
 
     // ---- steering: aim at a point ahead on the racing line ----
     const look = THREE.MathUtils.clamp(absV * this.skill.look, 6, 26);
@@ -159,7 +170,7 @@ export class AIDriver {
       const vAllowed = Math.sqrt(vCorner * vCorner + 2 * decel * Math.max(0, d - proj.distance - 6));
       if (vAllowed < targetV) targetV = vAllowed;
     }
-    targetV = Math.min(targetV, trafficCap);
+    targetV = Math.min(targetV, trafficCap, obstacleCap);
     if (this.finishTimeMs !== null) targetV = 0; // pull up after the finish
 
     let throttle = 0;

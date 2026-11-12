@@ -74,6 +74,14 @@ export class Vehicle {
   offroadSurface: SurfaceDef = SURFACES.grass;
   /** True when the car is down in a river. */
   inWater = false;
+  /** Engine power multiplier from the car's systems (engine map, anti-lag, temperature). */
+  sysPower = 1;
+  /** Tyre grip multiplier per surface from the tyre pressures. */
+  sysGrip: (surface: string) => number = () => 1;
+  /** How deep in a river the car is (0 = dry, 1 = roof-deep). */
+  submerged = 0;
+  /** Water got into the engine: it won't run again this stage. */
+  flooded = false;
   /** Weather grip multiplier (rain, snow…). */
   weatherGrip = 1;
   /** Name of the surface most wheels are on (for sound/HUD). */
@@ -275,7 +283,7 @@ export class Vehicle {
     const shiftCut = this.shiftTimer > 0.1 ? 0.2 : 1;
     // engine damage costs power; a smashed front end chokes the radiator too
     const damageLoss = 1 - this.damage.engine * 0.45 - this.damage.front * 0.1;
-    let force = def.enginePowerN * curve * (ratio / ratios[0]) * throttle * limiter * shiftCut * damageLoss;
+    let force = def.enginePowerN * curve * (ratio / ratios[0]) * throttle * limiter * shiftCut * damageLoss * this.sysPower;
     if (this.gear === -1) force = -def.enginePowerN * 0.45 * throttle;
     if (this.frozen) force = 0;
 
@@ -313,10 +321,12 @@ export class Vehicle {
       const rearWheel = i >= 2;
       const surf = this.inWater ? SURFACES.water : isRoad ? this.roadSurface : this.offroadSurface;
       wheelSurfaces[i] = surf;
-      let grip = this.gripBase * surf.grip * this.weatherGrip * (rearWheel ? CHASSIS.rearGripBias : 1);
+      let grip = this.gripBase * surf.grip * this.weatherGrip * this.sysGrip(surf.id) * (rearWheel ? CHASSIS.rearGripBias : 1);
       if (rearWheel && handbrake) grip *= 0.45;
+      // deep water lifts the car: the tyres barely touch the river bed
+      if (this.inWater) grip *= Math.max(0.05, 1 - this.submerged * 1.1);
       c.setWheelFrictionSlip(i, grip);
-      const side = rearWheel ? CHASSIS.sideFrictionRear : CHASSIS.sideFrictionFront;
+      const side = (rearWheel ? CHASSIS.sideFrictionRear : CHASSIS.sideFrictionFront) * (this.inWater ? Math.max(0.05, 1 - this.submerged * 1.1) : 1);
       c.setWheelSideFrictionStiffness(i, rearWheel && handbrake ? side * 0.55 : side);
     }
 

@@ -71,3 +71,90 @@ export const WEATHER: Record<WeatherId, WeatherDef> = {
 
 export const WEATHER_IDS = Object.keys(WEATHER) as WeatherId[];
 export const DEFAULT_WEATHER: WeatherId = 'storm';
+
+// ------------------------------------------------------------------ changing conditions
+/**
+ * What changes along a stage on a given run: rain showers drifting over
+ * sections, fog banks in the dips, and things on the road (a fallen tree,
+ * a rock slide, animals crossing). It's worked out from the stage and the
+ * run number, so every player in the room – and the co-driver's tablet –
+ * gets exactly the same stage.
+ */
+export interface Zone {
+  from: number;
+  to: number;
+  /** 0..1 how much rain / fog at the heart of the zone. */
+  amount: number;
+}
+
+export type ObstacleKind = 'tree' | 'rocks' | 'animals';
+
+export interface Obstacle {
+  kind: ObstacleKind;
+  /** Stage distance (m). */
+  distance: number;
+  /** Which half of the road it blocks: +1 left, −1 right (the gap is on the other side). */
+  side: 1 | -1;
+}
+
+export interface StageConditions {
+  wet: Zone[];
+  fog: Zone[];
+  obstacles: Obstacle[];
+}
+
+function rngFor(seed: number) {
+  let a = seed >>> 0 || 1;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function stageConditions(
+  stage: { def: { seed: number; surface: string }; startDistance: number; finishDistance: number; bridges: Array<{ distance: number; length: number }> },
+  runId: number,
+  weather: WeatherId,
+): StageConditions {
+  const rand = rngFor(stage.def.seed * 7919 + runId * 104729);
+  const len = stage.finishDistance - stage.startDistance;
+  const at = (lo: number, hi: number) => stage.startDistance + len * (lo + rand() * (hi - lo));
+  const out: StageConditions = { wet: [], fog: [], obstacles: [] };
+  const w = WEATHER[weather];
+  // a passing shower on a dry day (not when it's already raining, or snowing)
+  if (w.rain === 0 && w.snow === 0 && rand() < 0.55) {
+    const from = at(0.15, 0.6);
+    out.wet.push({ from, to: from + 350 + rand() * 600, amount: 0.5 + rand() * 0.4 });
+  }
+  // fog banks (thicker in bad weather)
+  const fogs = rand() < (w.fogDensity > 0.01 ? 0.7 : 0.4) ? 1 + (rand() < 0.3 ? 1 : 0) : 0;
+  for (let i = 0; i < fogs; i++) {
+    const from = at(0.1, 0.85);
+    out.fog.push({ from, to: from + 200 + rand() * 350, amount: 0.5 + rand() * 0.5 });
+  }
+  // something on the road (never on or right next to a bridge)
+  const kinds: ObstacleKind[] = ['tree', 'rocks', 'animals'];
+  const n = rand() < 0.75 ? 1 + (rand() < 0.35 ? 1 : 0) : 0;
+  for (let i = 0; i < n; i++) {
+    let d = at(0.2, 0.9);
+    for (let tries = 0; tries < 5 && stage.bridges.some((b) => Math.abs(b.distance - d) < b.length / 2 + 60); tries++) d = at(0.2, 0.9);
+    if (out.obstacles.some((o) => Math.abs(o.distance - d) < 250)) continue;
+    out.obstacles.push({ kind: kinds[Math.floor(rand() * kinds.length)], distance: d, side: rand() < 0.5 ? 1 : -1 });
+  }
+  out.obstacles.sort((a, b) => a.distance - b.distance);
+  return out;
+}
+
+/** How much of a zone list applies at a stage distance (ramps in/out over 60 m). */
+export function zoneAmount(zones: Zone[], d: number): number {
+  let v = 0;
+  for (const z of zones) {
+    if (d < z.from - 60 || d > z.to + 60) continue;
+    const edge = Math.min(1, (d - (z.from - 60)) / 120, ((z.to + 60) - d) / 120);
+    v = Math.max(v, z.amount * Math.max(0, edge));
+  }
+  return v;
+}

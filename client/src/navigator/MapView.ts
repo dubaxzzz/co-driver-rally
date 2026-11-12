@@ -1,3 +1,4 @@
+import type { StageConditions } from '@cdr/shared';
 import type { BuiltStage, RelayedTelemetry } from '@cdr/shared';
 
 /**
@@ -9,6 +10,8 @@ export class MapView {
   mode: 'follow' | 'full' = 'follow';
   /** Small thumbnails (stage picker) draw markers only – text labels would overlap. */
   labels = true;
+  /** This run's showers, fog banks and obstacles (drawn on the map). */
+  conditions: StageConditions | null = null;
   /** Fixed drawing size (when the canvas is not in the page, e.g. drawn onto the tablet). */
   size: { w: number; h: number } | null = null;
   /** Pixels per logical unit when `size` is set (bigger = larger text and markers). */
@@ -118,6 +121,46 @@ export class MapView {
           g.fillStyle = '#fff';
           g.font = '800 10px sans-serif';
           g.fillText('BRIDGE', px + 30, py);
+        }
+      }
+    }
+
+    // this run's conditions: showers (blue), fog banks (grey), things on the road (red !)
+    if (this.conditions) {
+      const span = (from: number, to: number, color: string) => {
+        g.beginPath();
+        let first = true;
+        for (let i = Math.max(0, Math.floor(from / st.step)); i < Math.min(s.length, Math.ceil(to / st.step)); i += stride) {
+          const [px, py] = toScreen(s[i].x, s[i].z);
+          if (first) g.moveTo(px, py);
+          else g.lineTo(px, py);
+          first = false;
+        }
+        g.strokeStyle = color;
+        g.lineWidth = Math.max(6, st.def.roadWidth * scale + 10);
+        g.stroke();
+      };
+      for (const z of this.conditions.wet) span(z.from, z.to, 'rgba(60,150,255,0.45)');
+      for (const z of this.conditions.fog) span(z.from, z.to, 'rgba(200,210,220,0.35)');
+      for (const o of this.conditions.obstacles) {
+        const c = s[Math.min(s.length - 1, Math.round(o.distance / st.step))];
+        const [px, py] = toScreen(c.x, c.z);
+        const r = this.labels ? 9 : 5;
+        g.fillStyle = '#ff3b4e';
+        g.beginPath();
+        g.moveTo(px, py - r * 1.2);
+        g.lineTo(px + r, py + r * 0.7);
+        g.lineTo(px - r, py + r * 0.7);
+        g.closePath();
+        g.fill();
+        if (this.labels) {
+          g.fillStyle = '#fff';
+          g.font = '900 10px sans-serif';
+          g.textAlign = 'center';
+          g.fillText('!', px, py + 3);
+          g.textAlign = 'left';
+          g.font = '800 10px sans-serif';
+          g.fillText(o.kind === 'tree' ? 'TREE DOWN' : o.kind === 'rocks' ? 'ROCKS' : 'ANIMALS', px + 12, py + 3);
         }
       }
     }

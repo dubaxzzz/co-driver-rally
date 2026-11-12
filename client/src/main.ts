@@ -4,7 +4,7 @@ import { net } from './multiplayer/NetClient';
 import { h, loadingOverlay, toast } from './ui/dom';
 import { joinScreen, lobbyScreen, menuScreen, playScreen, settingsScreen, type Screen } from './ui/screens';
 import './audio/AudioEngine';
-import { championshipScreen, dailyScreen, limitedScreen } from './ui/events';
+import { championshipScreen, dailyScreen } from './ui/events';
 import { eventCtx } from './events/context';
 
 /**
@@ -41,9 +41,6 @@ async function render() {
       break;
     case 'daily':
       current = dailyScreen(nav);
-      break;
-    case 'limited':
-      current = limitedScreen(nav);
       break;
     case 'create':
     case 'lobby':
@@ -86,7 +83,7 @@ async function render() {
       return;
     }
     case 'navigator': {
-      if (net.me()?.role !== 'navigator') return go(net.room ? 'lobby' : 'join');
+      if (net.me()?.role !== 'navigator' && net.me()?.role !== 'spectator') return go(net.room ? 'lobby' : 'join');
       if (net.room?.race.phase === 'lobby') return go('lobby');
       const { NavigatorApp } = await import('./navigator/NavigatorApp');
       if (token !== routeToken) return;
@@ -117,7 +114,7 @@ async function boot() {
   }
   const role = net.me()?.role;
   const phase = net.room?.race.phase;
-  if (role === 'navigator') {
+  if (role === 'navigator' || role === 'spectator') {
     go(phase === 'lobby' ? 'lobby' : 'navigator');
   } else {
     const racing = phase === 'countdown' || phase === 'racing' || phase === 'finished';
@@ -125,7 +122,6 @@ async function boot() {
     if (racing) go('drive');
     else if (kind === 'championship') { await net.leave().catch(() => undefined); go('championship'); }
     else if (kind === 'daily') { await net.leave().catch(() => undefined); go('daily'); }
-    else if (kind === 'limited') { await net.leave().catch(() => undefined); go('limited'); }
     else go(lastLobby);
   }
 }

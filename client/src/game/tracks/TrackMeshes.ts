@@ -67,13 +67,20 @@ function surfaceTexture(surface: SurfaceId, tint: number): THREE.CanvasTexture {
   };
   switch (surface) {
     case 'tarmac':
-      g.fillStyle = '#3b3d40';
+      g.fillStyle = '#4b4d51';
       g.fillRect(0, 0, 256, 256);
-      speckle(7000, ['rgba(90,92,96,0.5)', 'rgba(30,31,33,0.5)', 'rgba(120,120,120,0.3)'], 1.6);
-      tracks('rgba(20,20,22,0.35)');
+      speckle(9000, ['rgba(105,107,112,0.5)', 'rgba(35,36,38,0.5)', 'rgba(140,140,140,0.3)'], 1.4);
+      tracks('rgba(22,22,24,0.4)'); // rubbered-in racing lines
+      // patched repairs
+      for (let i = 0; i < 5; i++) {
+        g.fillStyle = 'rgba(30,31,34,0.35)';
+        g.fillRect(40 + rnd() * 160, rnd() * 256, 20 + rnd() * 40, 10 + rnd() * 30);
+      }
       g.fillStyle = 'rgba(235,235,225,0.85)'; // edge lines
       g.fillRect(14, 0, 5, 256);
       g.fillRect(237, 0, 5, 256);
+      g.fillStyle = 'rgba(235,225,180,0.7)'; // dashed centre line
+      for (let y = 0; y < 256; y += 64) g.fillRect(126, y, 4, 34);
       break;
     case 'mud':
       g.fillStyle = '#4a3622';
@@ -111,11 +118,34 @@ function surfaceTexture(surface: SurfaceId, tint: number): THREE.CanvasTexture {
       speckle(800, ['rgba(40,25,12,0.4)'], 2);
       break;
     default: {
-      // gravel, tinted per stage (grey Finnish, red Australian…)
-      g.fillStyle = hex(tint);
+      // gravel, tinted per stage (grey Finnish, red Australian…): packed tyre lines,
+      // a ridge of loose stones down the middle and berms of loose gravel at the edges
+      const base = new THREE.Color(tint).lerp(new THREE.Color(0xb8ad9c), 0.35);
+      g.fillStyle = hex(base.getHex());
       g.fillRect(0, 0, 256, 256);
-      speckle(9000, ['rgba(255,240,220,0.25)', 'rgba(0,0,0,0.25)', 'rgba(140,130,120,0.35)'], 2.4);
-      tracks('rgba(40,30,20,0.32)');
+      speckle(5000, ['rgba(255,245,230,0.22)', 'rgba(0,0,0,0.22)', 'rgba(150,140,128,0.35)'], 1.6);
+      tracks('rgba(45,35,25,0.38)');
+      // loose stones: bigger, lighter, mostly on the ridge and berms
+      for (let i = 0; i < 1400; i++) {
+        const zone = rnd();
+        const x = zone < 0.35 ? 128 + (rnd() - 0.5) * 50 : zone < 0.7 ? (rnd() < 0.5 ? rnd() * 34 : 222 + rnd() * 34) : rnd() * 256;
+        const y = rnd() * 256;
+        const r = 0.6 + rnd() * 1.4;
+        g.fillStyle = rnd() < 0.5 ? 'rgba(215,205,190,0.5)' : 'rgba(95,88,80,0.5)';
+        g.beginPath();
+        g.ellipse(x, y, r, r * (0.6 + rnd() * 0.4), rnd() * 3, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = 'rgba(0,0,0,0.25)'; // tiny shadow under each stone
+        g.fillRect(x - r * 0.4, y + r * 0.6, r, 0.8);
+      }
+      // the outer edge fades into the verge
+      for (const [x0, x1] of [[0, 20], [256, 236]]) {
+        const grad = g.createLinearGradient(x0, 0, x1, 0);
+        grad.addColorStop(0, 'rgba(60,70,40,0.55)');
+        grad.addColorStop(1, 'rgba(60,70,40,0)');
+        g.fillStyle = grad;
+        g.fillRect(Math.min(x0, x1), 0, 20, 256);
+      }
     }
   }
   const t = new THREE.CanvasTexture(c);
@@ -132,6 +162,8 @@ export interface TerrainData {
   riverDistanceAt(x: number, z: number): number;
   /** The river (and water height) if this point is in the water. */
   waterAt(x: number, z: number): River | null;
+  /** The river here (if any): how far from its centre and which way it flows. */
+  riverFlowAt(x: number, z: number): { river: River; dist: number; dirX: number; dirZ: number } | null;
   origin: { x: number; z: number };
   cell: number;
   cols: number;
@@ -176,7 +208,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
     const lx = Math.cos(s.h), lz = -Math.sin(s.h); // left vector
     for (let j = 0; j < cols; j++) {
       const o = (i * cols + j) * 3;
-      const off = -across[j]; // index 0 = right edge
+      const off = -across[j]; // index 0 = left edge (offset along the left vector)
       pos[o] = s.x + lx * off;
       pos[o + 1] = s.y + crown[j] + 0.02;
       pos[o + 2] = s.z + lz * off;
@@ -199,8 +231,11 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
     const start = idx.length;
     for (let i = i0; i < i1; i++) {
       for (let j = 0; j < cols - 1; j++) {
+        // column 0 is the LEFT edge (offset along the left vector), so wind the
+        // triangles this way round for them to face up (they were facing down
+        // and got culled – the road was invisible from above)
         const a = i * cols + j, b = a + 1, c = a + cols, d = c + 1;
-        idx.push(a, c, b, b, c, d);
+        idx.push(a, b, c, b, d, c);
       }
     }
     roadGeo.addGroup(start, idx.length - start, m);
@@ -289,7 +324,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
       tmp.copy(grassA).lerp(grassB, nv);
       if (noise(x * 0.012 + 9, z * 0.012, 2) > 0.62) tmp.lerp(patch, 0.6);
       const d = dists[i];
-      if (d < hw + 5) tmp.lerp(verge, 1 - Math.max(0, (d - hw) / 5));
+      if (d < hw + 5) tmp.lerp(verge, (1 - Math.max(0, (d - hw) / 5)) * 0.55);
       if (rdists[i] < 22) tmp.lerp(riverBank, Math.max(0, 1 - rdists[i] / 22) * 0.8);
       tCol[i * 3] = tmp.r;
       tCol[i * 3 + 1] = tmp.g;
@@ -337,6 +372,12 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
       const rv = riverDistance(stage, x, z);
       if (!rv.river || rv.dist > rv.river.halfWidth + 6) return null;
       return heightAt(x, z) < rv.river.waterY ? rv.river : null;
+    },
+    riverFlowAt: (x, z) => {
+      if (!stage.rivers.length) return null;
+      const rv = riverDistance(stage, x, z);
+      if (!rv.river || rv.dist > rv.river.halfWidth + 3) return null;
+      return { river: rv.river, dist: rv.dist, dirX: rv.dirX, dirZ: rv.dirZ };
     },
     origin: { x: ox, z: oz },
     cell: CELL,

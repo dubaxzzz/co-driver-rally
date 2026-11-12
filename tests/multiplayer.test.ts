@@ -89,6 +89,15 @@ check(lobbyRole.ok, 'staying a driver is fine');
   s2.emit('car:switch', { id: 'ignition' } as never);
   s3.emit('car:switch', { id: 'wipers' });
   check(!(await bad), 'navigators cannot touch the ignition, and drivers cannot send switch clicks');
+  // co-driver jobs from the tablet's CAR page
+  const sysP = waitFor<{ key: string; value: unknown; from: string }>(host, 'car:sys', 2000);
+  s2.emit('car:sys', { key: 'map', value: 2 });
+  const sys = await sysP;
+  check(sys?.key === 'map' && sys.value === 2 && sys.from === 'Bob', "Bob's ENGINE MAP change reaches Alice's car");
+  const badSys = waitFor(host, 'car:sys', 800);
+  s2.emit('car:sys', { key: 'map', value: 7 } as never);
+  s2.emit('car:sys', { key: 'nitro', value: true } as never);
+  check(!(await badSys), 'invalid car-system commands are dropped');
 }
 
 // ---- start: grid of two drivers, AI run by the first on the grid

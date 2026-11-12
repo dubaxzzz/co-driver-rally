@@ -43,9 +43,11 @@ export function buildStageWorld(
   const scenery = new Scenery(stage, track.data, opts.physics, opts.quality);
   scene.add(scenery.group);
   const q = opts.quality === 'high' ? 1 : 0.5;
+  // rain is always ready: showers can drift over a dry stage (see stageConditions)
   let rain: RainSystem | null = null;
-  if (weather.rain > 0) {
-    rain = new RainSystem(weather.rain * q);
+  if (weather.snow === 0) {
+    rain = new RainSystem(Math.max(weather.rain, 0.9) * q);
+    rain.setIntensity(weather.rain / Math.max(weather.rain, 0.9));
     scene.add(rain.lines);
   }
   let snow: SnowSystem | null = null;

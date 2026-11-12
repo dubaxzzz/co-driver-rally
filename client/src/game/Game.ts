@@ -33,7 +33,18 @@ import { eventCtx, type EventContext } from '../events/context';
 import { champ } from '../championship/state';
 import { classificationTable, formatMs } from '../ui/classification';
 import { RemoteCar, fallbackPaint } from './RemoteCars';
-import { applySharedSwitch, decodeSwitches, defaultSwitches, encodeSwitches, SHARED_SWITCHES, type CarSwitches, type SharedSwitch } from '@cdr/shared';
+import { applySharedSwitch, decodeSwitches, defaultSwitches,
+  defaultSystems,
+  stageConditions,
+  zoneAmount,
+  type StageConditions,
+  encodeSystems,
+  stepSystems,
+  autoSystems,
+  systemsPower,
+  systemsGrip,
+  FUSES,
+  type CarSystems, encodeSwitches, SHARED_SWITCHES, type CarSwitches, type SharedSwitch } from '@cdr/shared';
 import { CockpitPicker } from './vehicle/CockpitPicker';
 import type { ControlId } from './vehicle/Controls';
 
@@ -48,7 +59,7 @@ import { DAMAGE_KEYS, Vehicle } from './vehicle/Vehicle';
 import type { AIDriver as AIDriverT } from './ai/AIDriver';
 import { buildStageWorld, type StageWorld } from './world/StageWorld';
 
-export type GameExit = 'menu' | 'lobby' | 'service' | 'daily' | 'limited';
+export type GameExit = 'menu' | 'lobby' | 'service' | 'daily';
 
 /**
  * The driver's game: owns the renderer, physics world, vehicle, stage and
@@ -96,6 +107,10 @@ export class Game {
   private readonly myId = net.session?.playerId ?? '';
   /** Cockpit switches of my car (ignition, lights, wipers…). */
   private sw: CarSwitches = defaultSwitches();
+  /** Co-driver jobs: radiator flaps, anti-lag, engine map, tyre pressures, fuses, temperature. */
+  private sys: CarSystems = defaultSystems();
+  private fuseAt = -1; // stage distance where a fuse will blow this run (-1 = none)
+  private fuseBlownFor = 0;
   private held = new Set<ControlId>();
   private cranking = 0;
   private crankNeed = 1;
@@ -140,7 +155,8 @@ export class Game {
       await new Promise((r) => setTimeout(r, 0)); // let the loading screen paint
       this.world = buildStageWorld(this.scene, stage, { quality, physics: this.physics, fogMultiplier: fogMultiplier(), weather: this.weather.id });
       this.scene.add(this.smoke.points);
-      this.unsubs.push(settings.subscribe(() => this.world.atmosphere.setFogMultiplier(fogMultiplier())));
+      this.unsubs.push(settings.subscribe(() => (this.fogBase = fogMultiplier())));
+      this.fogBase = fogMultiplier();
 
       // Vehicle
       const sel = garageStore.resolve();
@@ -151,8 +167,6 @@ export class Game {
         if (team.carId) sel.paint = { id: team.id, name: team.name, body: team.colour, accent: team.accent };
       } else if (ctx.kind === 'daily') {
         sel.vehicle = vehicleById(ctx.carId); // loan car, stock – same for everyone
-      } else if (ctx.kind === 'limited' && ctx.carId) {
-        sel.vehicle = vehicleById(ctx.carId); // the event's loan car, stock
       }
       const model = createCarModel(sel.paint, sel.wheel, sel.vehicle.body);
       this.scene.add(model.root);
@@ -234,6 +248,24 @@ export class Game {
     this.unsubs.push(
       net.on('race', (s) => this.applyRaceState(s)),
       net.on('telemetry', (p) => this.onRemoteTelemetry(p)),
+      net.on('sys', (e) => {
+        const s = this.sys;
+        if (e.key === 'flaps') s.flaps = e.value;
+        else if (e.key === 'als') s.als = e.value;
+        else if (e.key === 'map') s.map = e.value;
+        else if (e.key === 'tyres') s.tyres = e.value;
+        else if (e.key === 'fuse') {
+          if (s.fuse === e.value) {
+            s.fuse = -1;
+            this.hud.warn(`${e.from.toUpperCase()} REPLACED THE ${FUSES[e.value]} FUSE`, 2);
+            audio.click();
+            return;
+          }
+        }
+        audio.click();
+        const label = e.key === 'map' ? `MAP ${['ECO', 'NORMAL', 'ATTACK'][s.map]}` : e.key === 'tyres' ? `TYRES ${['LOW', 'MID', 'HIGH'][s.tyres]}` : e.key === 'flaps' ? `RADIATOR ${s.flaps ? 'OPEN' : 'SHUT'}` : e.key === 'als' ? `ANTI-LAG ${s.als ? 'ON' : 'OFF'}` : '';
+        if (label) this.hud.warn(`${e.from.toUpperCase()}: ${label}`, 1.2);
+      }),
       net.on('switch', (e) => {
         if (import.meta.env.DEV) console.debug('[switch]', e.id, e.down, e.from);
         if (!(SHARED_SWITCHES as readonly string[]).includes(e.id)) return;
@@ -303,6 +335,17 @@ export class Game {
     const s = sampleAt(this.stage.samples, spawnD);
     // +lateral = left of the road: left of heading h is (cos h, 0, -sin h)
     this.vehicle.place(s.x + Math.cos(s.h) * grid.lateral, s.y + 0.9, s.z - Math.sin(s.h) * grid.lateral, s.h);
+    this.vehicle.flooded = false;
+    this.dirt = 0;
+    this.sys = defaultSystems();
+    this.cond = stageConditions(this.stage, this.raceState?.runId ?? 1, this.weather.id);
+    this.warnedObstacles.clear();
+    this.world.scenery.setObstacles(this.cond.obstacles);
+    for (const a of this.ai) a.obstacles = this.cond.obstacles;
+    const span = this.stage.finishDistance - this.stage.startDistance;
+    this.fuseAt = Math.random() < 0.85 ? this.stage.startDistance + span * (0.2 + Math.random() * 0.55) : -1;
+    this.floodTimer = 0;
+    this.drownShown = false;
     this.vehicle.resetDamage();
     if (this.ctx.kind === 'championship' && !this.carryApplied) {
       this.vehicle.setDamage(this.ctx.carry.zones);
@@ -404,6 +447,12 @@ export class Game {
       if (!this.sw.ignition) {
         this.cranking = 0;
         audio.crank(false);
+      } else if (this.vehicle.flooded) {
+        if (held > 2.5) {
+          this.cranking = 0;
+          audio.crank(false);
+          this.hud.warn('ENGINE FLOODED – IT WON\'T START', 2);
+        }
       } else if (held >= this.crankNeed) {
         this.cranking = 0;
         this.sw = { ...this.sw, engine: true };
@@ -414,8 +463,9 @@ export class Game {
     const v = this.vehicle;
     v.engineOn = this.sw.engine;
     const m = v.model;
-    m.setHeadlights(this.sw.headlights);
-    m.setLightPod(this.sw.pod);
+    const fuse = FUSES[this.sys.fuse];
+    m.setHeadlights(this.sw.headlights && fuse !== 'LIGHTS');
+    m.setLightPod(this.sw.pod && fuse !== 'POD');
     m.setHazards(this.sw.hazards);
     m.tick(this.clock);
 
@@ -532,7 +582,6 @@ export class Game {
     this.hud.center('FINISH');
     if (this.ctx.kind === 'championship') return this.finishChampionship(r);
     if (this.ctx.kind === 'daily') return this.finishDaily(r, this.ctx.date);
-    if (this.ctx.kind === 'limited') return this.finishLimited(r, this.ctx);
 
     // ---- prize money + personal best ----
     const state = this.raceState!;
@@ -716,34 +765,6 @@ export class Game {
     }, 1200);
   }
 
-  private finishLimited(r: RaceResult, ev: { id: string; name: string; prize: number }) {
-    const first = !career.limitedDone(ev.id);
-    if (first) {
-      career.markLimitedDone(ev.id);
-      if (ev.prize > 0) career.credit(`limited:${ev.id}`, ev.prize, false);
-    }
-    this.prize = { runId: this.raceState?.runId ?? 0, total: first ? ev.prize : 0 };
-    const extra = h(
-      'div',
-      { class: 'rewards', 'data-testid': 'rewards' },
-      h('div', { class: 'new-record' }, ev.name.toUpperCase()),
-      h('div', { class: 'panel-title', style: 'margin:14px 0 6px' }, 'Prize money'),
-      h('div', { class: 'prize-line' }, h('span', {}, first ? 'Event finished' : 'Prize already collected'), h('span', {}, `+${money(first ? ev.prize : 0)}`)),
-      h('div', { class: 'prize-line' }, h('span', {}, 'Balance'), h('span', {}, money(career.get().money))),
-      h('div', { class: 'sub' }, 'Your time is on the event leaderboard.'),
-    );
-    setTimeout(() => {
-      if (this.disposed || this.raceState?.phase !== 'finished') return;
-      this.showOverlay(
-        resultsOverlay(r, this.stage, [
-          { label: 'Try again', primary: true, onClick: () => this.restart() },
-          { label: 'Event leaderboard', onClick: () => void this.leaveTo('limited') },
-          { label: 'Main menu', onClick: () => this.leave() },
-        ], undefined, extra),
-      );
-    }, 1200);
-  }
-
   private async leaveTo(to: GameExit) {
     this.closeOverlay();
     await net.leave().catch(() => undefined);
@@ -795,7 +816,7 @@ export class Game {
           this.ctx.kind === 'quick' && net.isHost ? h('button', { class: 'btn', onclick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) }, 'Back to lobby') : null,
           champRound
             ? h('button', { class: 'btn danger', onclick: () => this.retire() }, 'Retire from round (0 pts)')
-            : h('button', { class: 'btn danger', onclick: () => void (this.ctx.kind === 'daily' ? this.leaveTo('daily') : this.ctx.kind === 'limited' ? this.leaveTo('limited') : this.leave()) }, 'Quit rally'),
+            : h('button', { class: 'btn danger', onclick: () => void (this.ctx.kind === 'daily' ? this.leaveTo('daily') : this.leave()) }, 'Quit rally'),
         ),
       ),
     );
@@ -805,6 +826,217 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- loop
+  /** The switches as the car feels them: a blown fuse kills its circuit. */
+  private effectiveSwitches(): CarSwitches {
+    const f = FUSES[this.sys.fuse];
+    if (!f) return this.sw;
+    return {
+      ...this.sw,
+      headlights: this.sw.headlights && f !== 'LIGHTS',
+      wipers: f === 'WIPERS' ? 0 : this.sw.wipers,
+      pod: this.sw.pod && f !== 'POD',
+      demister: this.sw.demister && f !== 'DEMIST',
+      horn: this.sw.horn && f !== 'HORN',
+    };
+  }
+
+  private hasNavigator(): boolean {
+    return !!net.room?.members.some((m) => m.navFor === this.myId && m.connected);
+  }
+
+  /** Co-driver jobs: temperature, faults, and what they do to the car. */
+  private updateSystems(dt: number, v: Vehicle) {
+    const s = this.sys;
+    const racing = this.raceState?.phase === 'racing' && !v.frozen;
+    const t = v.telemetry;
+    const ambient = this.weather.snow > 0 ? -5 : this.weather.rain > 0.5 ? 9 : this.weather.night ? 12 : 19;
+    const load = v.engineOn ? Math.min(1, this.input.state.throttle * (0.25 + (0.75 * t.rpm) / v.def.maxRpm)) : 0;
+    const crewed = this.hasNavigator();
+    if (!crewed) autoSystems(s);
+    stepSystems(s, dt, { load, speed: Math.abs(t.speed), ambient, engineOn: v.engineOn });
+    v.sysPower = systemsPower(s);
+    this.hud.setSystems({ ...s, fuse: FUSES[s.fuse] ?? null }, crewed);
+    v.sysGrip = (surface) => systemsGrip(s, surface);
+    // cooking the engine
+    if (s.temp > 120 && racing) {
+      v.damage.engine = Math.min(1, v.damage.engine + dt * 0.012);
+      if (Math.random() < dt * 0.5) this.hud.warn('ENGINE OVERHEATING – OPEN THE RADIATOR / EASE OFF', 1.5);
+    }
+    // a fuse blows somewhere on the stage
+    if (racing && this.fuseAt > 0 && s.fuse < 0 && this.race.distance > this.fuseAt) {
+      this.fuseAt = -1;
+      s.fuse = Math.floor(Math.random() * FUSES.length);
+      this.fuseBlownFor = 0;
+      audio.click();
+      this.hud.warn(`FUSE BLOWN: ${FUSES[s.fuse]}${crewed ? ' – CO-DRIVER, CHECK THE FUSE BOARD!' : ''}`, 3);
+    }
+    if (s.fuse >= 0) {
+      this.fuseBlownFor += dt;
+      // with nobody to fix it, the car's breaker resets itself after a while
+      if (!crewed && this.fuseBlownFor > 12) {
+        this.hud.warn(`${FUSES[s.fuse]} CIRCUIT RESET`, 1.5);
+        s.fuse = -1;
+      }
+    }
+  }
+
+  private fogBase = 1;
+  private cond: StageConditions = { wet: [], fog: [], obstacles: [] };
+  private warnedObstacles = new Set<number>();
+  private localRain = 0;
+
+  /** Showers, fog banks and things on the road (see stageConditions). */
+  private updateConditions(dt: number, v: Vehicle) {
+    const d = this.race.distance;
+    const wet = zoneAmount(this.cond.wet, d);
+    const fog = zoneAmount(this.cond.fog, d);
+    const base = this.weather.rain;
+    this.localRain = Math.max(base, wet * 0.85);
+    this.world.rain?.setIntensity(this.localRain / Math.max(base, 0.9));
+    v.weatherGrip = this.weather.grip * (1 - 0.13 * Math.max(0, this.localRain - base));
+    this.world.atmosphere.setFogMultiplier(this.fogBase * (1 + fog * 3.5));
+    this.world.scenery.updateObstacles(dt, d);
+    // no co-driver to call it? a late warning for things on the road
+    if (!this.hasNavigator()) {
+      this.cond.obstacles.forEach((o, i) => {
+        if (this.warnedObstacles.has(i) || o.distance - d > 140 || o.distance < d) return;
+        this.warnedObstacles.add(i);
+        const what = o.kind === 'tree' ? 'TREE DOWN' : o.kind === 'rocks' ? 'ROCKS ON THE ROAD' : 'ANIMALS ON THE ROAD';
+        this.hud.warn(`CAUTION: ${what} – ${o.side > 0 ? 'KEEP RIGHT' : 'KEEP LEFT'}`, 3);
+      });
+    }
+  }
+
+  private dirt = 0;
+  /** Mud, dust or snow slowly builds up on the paint as you drive. */
+  private updateDirt(dt: number, v: Vehicle) {
+    const sf = v.roadSurface.id;
+    const speed = Math.abs(v.telemetry.speed);
+    const rate: Record<string, number> = { gravel: 0.0009, mud: 0.003, snow: 0.0016, sand: 0.0016, tarmac: 0, wood: 0 };
+    let r = (rate[sf] ?? 0.0009) * (this.weather.rain > 0.3 && sf === 'gravel' ? 2 : 1);
+    if (sf === 'tarmac' && this.weather.rain > 0.3) r = -0.0004; // rain rinses it off
+    this.dirt = Math.max(0, Math.min(1, this.dirt + r * speed * dt));
+    const col = sf === 'snow' ? 0xdfe6ec : sf === 'mud' ? 0x4a3826 : sf === 'sand' ? this.stage.def.scenery.verge : this.stage.def.scenery.verge;
+    v.model.setDirt(this.dirt, col);
+    this.cockpit.setDirt(this.dirt, col);
+  }
+
+  private floodTimer = 0;
+  private drownShown = false;
+
+  /**
+   * Rivers are dangerous: the current drags the car downstream, deep water
+   * lifts it off its wheels, and once water gets above the engine's air intake
+   * the engine floods – the car is finished for this stage.
+   */
+  private riverStep(h: number) {
+    const v = this.vehicle;
+    const pos = v.body.translation();
+    const flow = this.world.terrain.riverFlowAt(pos.x, pos.z);
+    v.submerged = 0;
+    if (!flow) {
+      this.floodTimer = Math.max(0, this.floodTimer - h);
+      return;
+    }
+    const r = flow.river;
+    // how much of the car is under water (0 = dry, 1 = roof-deep); car origin ≈ 0.35 m above the floor
+    const sub = Math.min(1, Math.max(0, (r.waterY - (pos.y - 0.35)) / 1.3));
+    v.submerged = sub;
+    if (sub <= 0.02) {
+      this.floodTimer = Math.max(0, this.floodTimer - h);
+      return;
+    }
+    const mass = v.body.mass();
+    // the current: fastest mid-stream, slower at the banks
+    const across = Math.min(1, flow.dist / r.halfWidth);
+    const current = 4.5 * (1 - across * across * 0.7);
+    const lv = v.body.linvel();
+    const k = 2.4 * sub; // how strongly the water drags the car along
+    const ix = (flow.dirX * current - lv.x) * k * mass * h;
+    const iz = (flow.dirZ * current - lv.z) * k * mass * h;
+    // buoyancy: deep water takes the weight off the tyres (no grip, it floats off)
+    const iy = 9.81 * mass * h * sub * 0.8 - lv.y * mass * h * 1.5 * sub;
+    v.body.applyImpulse({ x: ix, y: iy, z: iz }, true);
+    // a slow spin from the water pushing on one end harder than the other
+    v.body.applyTorqueImpulse({ x: 0, y: (flow.dirX * lv.z - flow.dirZ * lv.x) * 0.02 * mass * h * sub, z: 0 }, true);
+    // water above the air intake: the engine drinks it
+    if (sub > 0.5) this.floodTimer += h;
+    else this.floodTimer = Math.max(0, this.floodTimer - h * 0.5);
+    if (this.floodTimer > 0.8 && !v.flooded) this.floodEngine();
+  }
+
+  private floodEngine() {
+    const v = this.vehicle;
+    v.flooded = true;
+    v.damage.engine = 1;
+    this.sw = { ...this.sw, engine: false };
+    v.engineOn = false;
+    this.hud.warn('ENGINE FLOODED – THE RIVER HAS TAKEN THE CAR', 4);
+    setTimeout(() => this.drowned(), 4500);
+  }
+
+  /** The car drowned: the stage is over for this crew. */
+  private drowned() {
+    if (this.disposed || this.drownShown || this.resultShown || this.myRace()?.result) return;
+    this.drownShown = true;
+    if (this.ctx.kind === 'championship') return this.retire();
+    this.resultShown = true;
+    this.vehicle.frozen = true;
+    void net.retire().catch(() => undefined);
+    const multi = (this.raceState?.drivers.length ?? 1) > 1;
+    this.showOverlay(
+      h('div', { class: 'overlay results' },
+        h('div', { class: 'card' },
+          h('h2', {}, 'Swept away'),
+          h('div', { class: 'sub' }, `${this.stage.def.name} · ${this.stage.def.location}`),
+          h('p', { class: 'setup-desc' }, 'You drove into the river. The current carried the car off and water flooded the engine – it won\'t run again. Cross rivers on the bridge!'),
+          h('div', { class: 'actions' },
+            !multi || net.isHost ? h('button', { class: 'btn primary', onclick: () => this.restart() }, 'Restart stage') : null,
+            h('button', { class: 'btn', onclick: () => (this.ctx.kind === 'daily' ? void this.leaveTo('daily') : this.leave()) }, this.ctx.kind === 'daily' ? 'Daily challenge' : 'Main menu'),
+          ),
+        ),
+      ),
+    );
+  }
+
+  private preHit: { lv: { x: number; y: number; z: number }; av: { x: number; y: number; z: number } } | null = null;
+  private velSnapshot() {
+    const b = this.vehicle.body;
+    const lv = b.linvel(), av = b.angvel();
+    return { lv: { x: lv.x, y: lv.y, z: lv.z }, av: { x: av.x, y: av.y, z: av.z } };
+  }
+
+  /**
+   * Car-to-car hits in multiplayer: the other car is only a copy of where it was
+   * a moment ago, so contacts can be deep and the physics would fling you away.
+   * While touching another player's car, your speed and spin can only change by
+   * a realistic amount per step – you shove each other instead of flying off.
+   */
+  private softenCarHits() {
+    const before = this.preHit;
+    this.preHit = null;
+    if (!before) return;
+    const b = this.vehicle.body;
+    let touching = false;
+    for (let i = 0; i < b.numColliders() && !touching; i++) {
+      this.physics.world.contactPairsWith(b.collider(i), (other) => {
+        const ob = other.parent();
+        if (ob && ob !== b && [...this.remotes.values()].some((r) => r.body.handle === ob.handle)) touching = true;
+      });
+    }
+    if (!touching) return;
+    const MAX_DV = 1.2; // m/s per 1/60 s step (≈ 7 g)
+    const MAX_DW = 0.6; // rad/s per step
+    const clampVec = (now: { x: number; y: number; z: number }, was: { x: number; y: number; z: number }, max: number, maxUp: number) => {
+      const dx = now.x - was.x, dy = Math.min(now.y - was.y, maxUp), dz = now.z - was.z;
+      const len = Math.hypot(dx, dy, dz);
+      const k = len > max ? max / len : 1;
+      return { x: was.x + dx * k, y: was.y + dy * k, z: was.z + dz * k };
+    };
+    b.setLinvel(clampVec(b.linvel(), before.lv, MAX_DV, 0.3), true);
+    b.setAngvel(clampVec(b.angvel(), before.av, MAX_DW, MAX_DW), true);
+  }
+
   private maxPixelRatio = 1;
   private pixelRatio = 1;
   private frameAvg = 16;
@@ -856,6 +1088,9 @@ export class Game {
     const p0 = v.position;
     v.roadSurface = SURFACES[surfaceAt(this.stage, this.race.distance)];
     v.offroadSurface = SURFACES[this.stage.def.offroad];
+    this.updateDirt(dt, v);
+    this.updateSystems(dt, v);
+    this.updateConditions(dt, v);
     const river = this.world.terrain.waterAt(p0.x, p0.z);
     v.inWater = !!river && p0.y < river.waterY + 0.6;
 
@@ -881,10 +1116,12 @@ export class Game {
     let netT = net.serverNow();
     this.physics.step(dt, (fixed) => {
       netT += fixed * 1000;
-      for (const r of this.remotes.values()) r.stepBody(netT);
+      for (const r of this.remotes.values()) r.stepBody(netT, fixed);
       v.step(fixed, this.input.state);
       for (const a of this.ai) a.step(fixed, aiRacing, phase === 'racing' ? Math.max(0, net.serverNow() - (this.raceState?.startAt ?? 0)) : raceMs);
-    });
+      this.riverStep(fixed);
+      if (this.remotes.size) this.preHit = this.velSnapshot();
+    }, () => this.softenCarHits());
     v.afterStep();
     const alpha = this.physics.alpha;
     v.syncVisuals(alpha);
@@ -919,7 +1156,7 @@ export class Game {
     const roadY = sampleAt(this.stage.samples, this.race.distance).y;
     if (pos.y < roadY - 25 || Math.abs(this.race.lateral) > 105) this.resetVehicle();
     // stuck in the river?
-    if (v.inWater && Math.abs(v.telemetry.speed) < 2) {
+    if (v.inWater && !v.flooded && Math.abs(v.telemetry.speed) < 2) {
       this.underwaterFor += dt;
       if (this.underwaterFor > 3) this.hud.warn('IN THE RIVER – PRESS R', 1);
     } else this.underwaterFor = 0;
@@ -960,13 +1197,13 @@ export class Game {
       gear: t.gear,
       handbrake: this.input.state.handbrake && !v.frozen,
       brake: t.brake,
-      sw: this.sw,
+      sw: this.effectiveSwitches(),
       held: this.held,
       tripKm: (this.race.distance - this.trip.start) / 1000,
       watchMs: this.watchMs(),
       watchRunning: this.trip.running,
       mapLight: this.trip.mapLight,
-      rain: this.weather.rain,
+      rain: this.localRain,
       snow: this.weather.snow,
       speedUnit: st.units,
       damage: v.damage,
@@ -1038,6 +1275,8 @@ export class Game {
       prize: this.prize && this.prize.runId === this.raceState.runId ? this.prize.total : undefined,
       look: this.look,
       sw: encodeSwitches(this.sw),
+      sys: encodeSystems(this.sys),
+      tmp: Math.round(this.sys.temp),
       ai: this.ai.flatMap((a) => {
         const ap = a.vehicle.position;
         return [r2(ap.x), r2(ap.y), r2(ap.z), Math.round(a.vehicle.heading * 1000) / 1000, Math.round(a.distance), a.finishTimeMs ?? -1];

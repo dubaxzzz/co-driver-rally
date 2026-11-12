@@ -2,6 +2,7 @@ import {
   CALL_LOG_LENGTH,
   MAX_DRIVERS,
   MAX_MEMBERS,
+  MAX_SPECTATORS,
   type RallyConfig,
   type Ack,
   type ErrorCode,
@@ -76,6 +77,11 @@ export class RoomManager {
     return room.members.filter((m) => m.role === 'driver');
   }
 
+  /** Members in one of the 4 player seats (not spectators). */
+  private players(room: Room) {
+    return room.members.filter((m) => m.role !== 'spectator');
+  }
+
   createRoom(socketId: string, name: string, rally: Partial<RallyConfig> = {}): Ack<JoinResult> {
     if (this.bySocket.has(socketId)) this.leave(socketId);
     if (this.rooms.size >= config.maxRooms) return fail('SERVER_FULL', 'The server has reached its room limit. Try again shortly.');
@@ -106,14 +112,25 @@ export class RoomManager {
     if (!room) return fail('ROOM_NOT_FOUND', `No rally found with code ${code}. Check the code on the host's screen.`);
     const already = this.bySocket.get(socketId);
     if (already?.code === code) return fail('NOT_ALLOWED', 'You are already in this rally.');
-    if (room.members.length >= MAX_MEMBERS) {
+    // watching: any time, doesn't take a player seat
+    if (wantRole === 'spectator') {
+      if (room.members.filter((m) => m.role === 'spectator').length >= MAX_SPECTATORS) return fail('ROOM_FULL', `This rally already has ${MAX_SPECTATORS} spectators.`);
+      if (already) this.leave(socketId);
+      const seat = createSeat('spectator', name, socketId);
+      seat.ready = true;
+      room.members.push(seat);
+      room.lastActivity = Date.now();
+      this.bind(socketId, seat.token, code, seat.playerId);
+      return { ok: true, data: this.joinResult(room, seat) };
+    }
+    if (this.players(room).length >= MAX_MEMBERS) {
       // free seats whose reconnect window has run out
       const now = Date.now();
       for (const m of [...room.members]) {
         if (!m.connected && now - (m.disconnectedAt ?? now) > config.navigatorGraceMs) this.removeSeat(room, m);
       }
-      if (room.members.length >= MAX_MEMBERS) {
-        const reserved = room.members.find((m) => !m.connected);
+      if (this.players(room).length >= MAX_MEMBERS) {
+        const reserved = room.members.find((m) => !m.connected && m.role !== 'spectator');
         if (reserved) {
           const secs = Math.ceil((config.navigatorGraceMs - (now - (reserved.disconnectedAt ?? now))) / 1000);
           return fail('SEAT_RESERVED', `The rally is full – a seat is reserved for a reconnecting player (${secs}s).`);
@@ -144,6 +161,17 @@ export class RoomManager {
     if (!ctx) return fail('NOT_IN_ROOM', 'You are not in a rally.');
     const { room, seat } = ctx;
     if (room.race.state.phase !== 'lobby') return fail('WRONG_PHASE', 'Wait for the stage to end before changing seats.');
+    if (role === 'spectator') {
+      if (seat.playerId === room.hostId) return fail('NOT_ALLOWED', 'The host runs the rally – hand over or leave to spectate.');
+      const wasDriver = seat.role === 'driver';
+      seat.role = 'spectator';
+      seat.navFor = null;
+      seat.ready = true;
+      if (wasDriver) this.reassignNavigators(room, seat.playerId);
+      room.lastActivity = Date.now();
+      return { ok: true, data: this.snapshot(room) };
+    }
+    if (seat.role === 'spectator' && this.players(room).length >= MAX_MEMBERS) return fail('ROOM_FULL', `All ${MAX_MEMBERS} seats are taken.`);
     if (role === 'driver') {
       if (room.race.state.soloEvent && seat.playerId !== room.hostId) return fail('NOT_ALLOWED', 'This is a single-driver event – you can only navigate.');
       if (seat.role !== 'driver' && this.drivers(room).length >= MAX_DRIVERS) return fail('ROOM_FULL', `There are already ${MAX_DRIVERS} drivers.`);
@@ -325,7 +353,10 @@ export class RoomManager {
   /** Host moves to the next connected person (drivers first). */
   private passHost(room: Room) {
     const next =
-      room.members.find((m) => m.connected && m.role === 'driver') ?? room.members.find((m) => m.connected) ?? room.members[0];
+      room.members.find((m) => m.connected && m.role === 'driver') ??
+      room.members.find((m) => m.connected && m.role !== 'spectator') ??
+      room.members.find((m) => m.connected) ??
+      room.members[0];
     if (next) {
       room.hostId = next.playerId;
       next.ready = true;

@@ -15,7 +15,7 @@ import { h, toast } from '../ui/dom';
 import { resultsOverlay, type Standing } from '../ui/results';
 import { AI_CREWS } from '../game/ai/AIDriver';
 import { career, money } from '../career';
-import { NAVIGATOR_SHARE } from '@cdr/shared';
+import { NAVIGATOR_SHARE, decodeSystems, stageConditions, zoneAmount, type StageConditions, type SysCommand } from '@cdr/shared';
 import type { CockpitView } from './CockpitView';
 import { Interpolator } from './Interpolator';
 import { MapView } from './MapView';
@@ -55,6 +55,11 @@ export class NavigatorApp {
   private weatherName: string;
   private lastTabletDraw = 0;
   private tab: TabletData;
+  private sysHoldUntil = 0;
+  private cond: StageConditions | null = null;
+  /** Watching rather than navigating (TV cameras, live times, pick who to follow). */
+  private readonly spectator = net.me()?.role === 'spectator';
+  private spec: { hud: HTMLElement; who: HTMLElement; time: HTMLElement; gap: HTMLElement; speed: HTMLElement; cam: HTMLButtonElement; board: HTMLElement } | null = null;
 
   private readonly weatherId: string;
 
@@ -90,6 +95,10 @@ export class NavigatorApp {
       surface: SURFACES[this.stage.def.surface].name,
       damage: 'OK',
       damageLevel: 0,
+      sys: null,
+      nextSurface: null,
+      nextSurfaceIn: null,
+      alert: null,
     };
 
     // Only two real buttons float over the view; everything else is on the tablet in your hands.
@@ -102,6 +111,7 @@ export class NavigatorApp {
     this.root = h('div', { class: 'nav-shell' }, view3d, hud, this.els.timer, this.waitingEl);
     window.addEventListener('keydown', this.onKey);
     window.addEventListener('resize', this.onResize);
+    if (this.spectator) this.buildSpectatorHud(hud);
 
     setTimeout(() => {
       import('./CockpitView')
@@ -112,6 +122,11 @@ export class NavigatorApp {
           this.view.onSwitch = (id, down) => net.sendSwitch(id, down);
           this.view.onTabletTap = (u, v) => this.tapTablet(u, v);
           this.view.onTabletRaise = () => !this.lookingDown && this.toggleLook();
+          if (this.spectator) {
+            this.view.setSpectator(true);
+            this.lookingDown = false;
+          }
+          if (this.cond) this.view.setConditions(this.cond);
           view3d.querySelector('.nav-3d-loading')?.remove();
         })
         .catch((e) => {
@@ -163,7 +178,7 @@ export class NavigatorApp {
     this.lastPacketAt = performance.now();
     // co-driver's share of the prize (paid on top – the driver keeps all of theirs)
     const dr = this.driverRace();
-    if (p.prize !== undefined && dr?.result && this.paidRun !== p.runId) {
+    if (!this.spectator && p.prize !== undefined && dr?.result && this.paidRun !== p.runId) {
       this.paidRun = p.runId;
       const share = Math.round(p.prize * NAVIGATOR_SHARE);
       const paid = career.credit(`nav:${net.room?.code}:${p.runId}:${dr.result.finishedAt}`, share);
@@ -187,6 +202,9 @@ export class NavigatorApp {
         const newRun = !this.race || this.race.runId !== s.runId;
         this.race = s;
         if (newRun) {
+          this.cond = stageConditions(this.stage, s.runId, this.weatherId as Parameters<typeof stageConditions>[2]);
+          this.map.conditions = this.cond;
+          this.view?.setConditions(this.cond);
           this.interp.clear();
           this.others.clear();
           this.map.clearTrail();
@@ -198,13 +216,13 @@ export class NavigatorApp {
         if (r.race.stageId !== this.stage.def.id || r.race.weather !== this.weatherId) return this.onReload();
         this.race = r.race;
         this.tab.code = r.code;
-        const f = net.followedDriverId();
+        const f = this.spectator && this.followed && r.race.drivers.some((d) => d.playerId === this.followed) ? this.followed : net.followedDriverId();
         if (f !== this.followed) {
           this.followed = f;
           this.interp.clear();
           this.others.clear();
           this.map.clearTrail();
-          toast(`Now navigating for ${this.driverName()}`, 'ok');
+          toast(this.spectator ? `Watching ${this.driverName()}` : `Now navigating for ${this.driverName()}`, 'ok');
         }
         this.updateConnection();
         this.applyRace();
@@ -233,13 +251,116 @@ export class NavigatorApp {
     );
   }
 
+  /** Spectator overlay: who you're watching, their time and gap, cameras, standings. */
+  private buildSpectatorHud(hud: HTMLElement) {
+    this.lookBtn.style.display = 'none';
+    const who = h('div', { class: 'spec-who' });
+    const time = h('div', { class: 'spec-time' }, '00:00.00');
+    const gap = h('div', { class: 'spec-gap' });
+    const speed = h('div', { class: 'spec-speed' });
+    const cam = h('button', { class: 'btn spec-btn', 'data-testid': 'spec-cam' }, '🎥 TV cameras') as HTMLButtonElement;
+    const modes = ['tv', 'chase', 'heli', 'incar'] as const;
+    const names = { tv: '🎥 TV cameras', chase: '🚗 Chase cam', heli: '🚁 Helicopter', incar: '👀 In the car' };
+    cam.onclick = () => {
+      if (!this.view) return;
+      const next = modes[(modes.indexOf(this.view.cameraMode) + 1) % modes.length];
+      this.view.cameraMode = next;
+      cam.textContent = names[next];
+    };
+    const prev = h('button', { class: 'btn spec-btn', 'data-testid': 'spec-prev', onclick: () => this.followNext(-1) }, '◀');
+    const next = h('button', { class: 'btn spec-btn', 'data-testid': 'spec-next', onclick: () => this.followNext(1) }, '▶');
+    const board = h('div', { class: 'spec-board' });
+    const panel = h('div', { class: 'spec-hud' },
+      h('div', { class: 'spec-top' }, h('div', { class: 'spec-tag' }, 'LIVE · SPECTATING'), who, time, gap),
+      h('div', { class: 'spec-bottom' }, prev, cam, next, speed),
+      board,
+    );
+    hud.append(panel);
+    this.spec = { hud: panel, who, time, gap, speed, cam, board };
+  }
+
+  /** Spectators: watch the next/previous driver. */
+  private followNext(step: number) {
+    const drivers = (this.race?.drivers ?? []).map((d) => d.playerId);
+    if (drivers.length < 2) return;
+    const i = Math.max(0, drivers.indexOf(this.followed ?? ''));
+    const id = drivers[(i + step + drivers.length) % drivers.length];
+    if (id === this.followed) return;
+    // keep everyone's buffered positions: swap the followed buffer with theirs
+    if (this.followed) this.others.set(this.followed, this.interp);
+    this.interp = this.others.get(id) ?? new Interpolator();
+    this.others.delete(id);
+    this.followed = id;
+    this.map.clearTrail();
+    this.updateConnection();
+    toast(`Watching ${this.driverName()}`, 'ok');
+  }
+
+  /** Live numbers for the spectator overlay. */
+  private updateSpectatorHud(now: number) {
+    const sp = this.spec;
+    const s = this.race;
+    if (!sp || !s) return;
+    const me = this.driverRace();
+    const t = this.interp.latest;
+    const progress = (pid: string) => (pid === this.followed ? t?.dist : this.others.get(pid)?.latest?.dist) ?? 0;
+    // order: finished by time, then by distance down the stage
+    const rows = s.drivers
+      .map((d) => ({ d, dist: progress(d.playerId) }))
+      .sort((a, b) => (a.d.result && b.d.result ? a.d.result.timeMs - b.d.result.timeMs : a.d.result ? -1 : b.d.result ? 1 : a.d.retired ? 1 : b.d.retired ? -1 : b.dist - a.dist));
+    const pos = rows.findIndex((r) => r.d.playerId === this.followed) + 1;
+    sp.who.textContent = `${pos ? `P${pos} · ` : ''}${this.driverName()}`;
+    let ms = 0;
+    if (s.phase === 'racing' && s.startAt) ms = Math.max(0, now - s.startAt);
+    if (me?.result) ms = me.result.timeMs;
+    sp.time.textContent = s.phase === 'countdown' && s.startAt ? `GO IN ${Math.max(0, Math.ceil((s.startAt - now) / 1000))}` : formatTime(ms);
+    const leader = rows[0];
+    if (me?.result) sp.gap.textContent = 'FINISHED';
+    else if (me?.retired) sp.gap.textContent = 'RETIRED';
+    else if (!leader || leader.d.playerId === this.followed || rows.length < 2) sp.gap.textContent = rows.length > 1 ? 'LEADING' : '';
+    else {
+      const behind = Math.max(0, leader.dist - progress(this.followed ?? ''));
+      sp.gap.textContent = `+${(behind / Math.max(8, Math.abs(t?.v ?? 0))).toFixed(1)}s to ${leader.d.name}`;
+    }
+    const spd = formatSpeed(t?.v ?? 0);
+    sp.speed.textContent = `${spd.value} ${spd.unit}`;
+    sp.board.replaceChildren(
+      ...rows.map((r, i) =>
+        h('div', { class: `spec-row ${r.d.playerId === this.followed ? 'me' : ''}` },
+          h('span', { class: 'p' }, String(i + 1)),
+          h('span', { class: 'n' }, r.d.name),
+          h('span', { class: 't' }, r.d.result ? formatTime(r.d.result.timeMs) : r.d.retired ? 'OUT' : `${Math.round((Math.max(0, r.dist - this.stage.startDistance) / (this.stage.finishDistance - this.stage.startDistance)) * 100)}%`),
+        ),
+      ),
+    );
+  }
+
   /** A tap on the tablet's screen (texture coordinates). */
   private tapTablet(u: number, v: number) {
     const b = this.screen.hit(u, v);
     if (!b) return;
     audio.click();
-    this.map.mode = b;
     this.lastTabletDraw = 0; // redraw right away
+    if (b === 'follow' || b === 'full') this.map.mode = b;
+    else if (b === 'tab-map') this.screen.page = 'map';
+    else if (b === 'tab-car') this.screen.page = 'car';
+    else {
+      // a car system: tell the driver's game, and show it straight away on the tablet
+      const s = this.tab.sys;
+      if (!s) return;
+      let cmd: SysCommand | null = null;
+      if (b === 'flaps') cmd = { key: 'flaps', value: !s.flaps };
+      else if (b === 'als') cmd = { key: 'als', value: !s.als };
+      else if (b.startsWith('map')) cmd = { key: 'map', value: Number(b.slice(3)) as 0 | 1 | 2 };
+      else if (b.startsWith('tyre')) cmd = { key: 'tyres', value: Number(b.slice(4)) as 0 | 1 | 2 };
+      else if (b.startsWith('fuse')) cmd = { key: 'fuse', value: Number(b.slice(4)) };
+      if (!cmd) return;
+      net.sendSys(cmd);
+      if (cmd.key === 'fuse') {
+        if (s.fuse === cmd.value) s.fuse = -1;
+      } else (s as unknown as Record<string, unknown>)[cmd.key] = cmd.value;
+      this.sysHoldUntil = performance.now() + 600; // don't let older telemetry flick it back
+    }
   }
 
   private toggleLook() {
@@ -263,7 +384,7 @@ export class NavigatorApp {
     this.tab.server = net.status === 'connected' ? 'ok' : net.status === 'disconnected' ? 'bad' : 'warn';
     const d = net.member(this.followed);
     this.tab.driverOk = !!d?.connected;
-    const name = d && d.name.length > 16 ? `${d.name.slice(0, 15)}…` : d?.name;
+    const name = d && d.name.length > 12 ? `${d.name.slice(0, 11)}…` : d?.name;
     this.tab.driverLabel = d ? (d.connected ? `DRIVER: ${name}` : 'DRIVER OFFLINE') : 'NO DRIVER';
   }
 
@@ -343,6 +464,10 @@ export class NavigatorApp {
     const dt = Math.min(0.1, (pnow - this.lastFrame) / 1000);
     this.lastFrame = pnow;
     this.view?.update(dt, t);
+    if (this.spectator && pnow - this.lastTabletDraw > 200) {
+      this.lastTabletDraw = pnow;
+      this.updateSpectatorHud(now);
+    }
     const tab = this.tab;
     // timer from the authoritative race state
     let ms = 0;
@@ -365,12 +490,34 @@ export class NavigatorApp {
       tab.pct = Math.min(100, Math.max(0, ((t.dist - this.stage.startDistance) / span) * 100));
       tab.remain = formatDistance(t.remain);
       tab.surface = SURFACES[surfaceAt(this.stage, t.dist)].name;
+      if (t.sys !== undefined && performance.now() > this.sysHoldUntil) tab.sys = decodeSystems(t.sys, t.tmp ?? 70);
+      else if (tab.sys && t.tmp !== undefined) tab.sys.temp = t.tmp;
+      // the next change of surface (for tyre pressures)
+      const nextSpan = this.stage.surfaceSpans.find((sp) => sp.from > t.dist && sp.surface !== surfaceAt(this.stage, t.dist));
+      const near = !!nextSpan && nextSpan.from - t.dist < 1500;
+      tab.nextSurface = near && nextSpan ? SURFACES[nextSpan.surface].name : null;
+      tab.nextSurfaceIn = near && nextSpan ? nextSpan.from - t.dist : null;
+      // the next thing to warn the driver about
+      tab.alert = null;
+      if (this.cond) {
+        const ob = this.cond.obstacles.find((o) => o.distance > t.dist - 5 && o.distance - t.dist < 700);
+        if (ob) {
+          const what = ob.kind === 'tree' ? 'TREE DOWN' : ob.kind === 'rocks' ? 'ROCKS ON ROAD' : 'ANIMALS CROSSING';
+          tab.alert = `${what} IN ${Math.max(0, Math.round((ob.distance - t.dist) / 10) * 10)} m – ${ob.side > 0 ? 'LEFT' : 'RIGHT'} BLOCKED, KEEP ${ob.side > 0 ? 'RIGHT' : 'LEFT'}`;
+        } else {
+          const w = this.cond.wet.find((z) => z.from > t.dist && z.from - t.dist < 600);
+          const f = this.cond.fog.find((z) => z.from > t.dist && z.from - t.dist < 600);
+          if (w) tab.alert = `RAIN SHOWER IN ${Math.round((w.from - t.dist) / 10) * 10} m – GRIP WILL DROP`;
+          else if (f) tab.alert = `FOG BANK IN ${Math.round((f.from - t.dist) / 10) * 10} m`;
+          else if (zoneAmount(this.cond.wet, t.dist) > 0.2) tab.alert = 'IN THE SHOWER – WIPERS ON, WET ROAD';
+        }
+      }
       const worst = t.dz ? Math.max(...t.dz) : t.dmg;
       tab.damage = worst < 0.05 ? 'OK' : `${Math.round(worst * 100)}%`;
       tab.damageLevel = worst > 0.6 ? 2 : worst > 0.2 ? 1 : 0;
     }
     // the tablet screen refreshes ~12 times a second (plenty for a map, and cheap)
-    if (pnow - this.lastTabletDraw > 80) {
+    if (!this.spectator && pnow - this.lastTabletDraw > 80) {
       this.lastTabletDraw = pnow;
       this.screen.setMapState(t, this.driverRace()?.checkpointsPassed ?? 0);
       this.screen.draw(tab);

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WEATHER, WHEELS, VEHICLES, sampleAt, decodeSwitches, defaultSwitches, SHARED_SWITCHES, type BuiltStage, type CarModelId, type CarSwitches, type RelayedTelemetry, type SharedSwitch, type WeatherDef, type WeatherId } from '@cdr/shared';
+import { WEATHER, WHEELS, VEHICLES, sampleAt, zoneAmount, decodeSwitches, defaultSwitches, SHARED_SWITCHES, type BuiltStage, type CarModelId, type CarSwitches, type RelayedTelemetry, type SharedSwitch, type StageConditions, type WeatherDef, type WeatherId } from '@cdr/shared';
 import { CockpitPicker } from '../game/vehicle/CockpitPicker';
 import type { ControlId } from '../game/vehicle/Controls';
 import { audio } from '../audio/AudioEngine';
@@ -238,6 +238,101 @@ export class CockpitView {
     this.tablet.quaternion.copy(this.tabletBaseQ).slerp(heldQ, lock);
   }
 
+  private cond: StageConditions | null = null;
+
+  // ---- spectating: TV cameras along the stage, chase cam, helicopter, in-car ----
+  private spectator = false;
+  cameraMode: 'tv' | 'chase' | 'heli' | 'incar' = 'tv';
+  private specCam = new THREE.PerspectiveCamera(50, 1, 0.1, 3000);
+  private specPos = new THREE.Vector3();
+  private specLook = new THREE.Vector3();
+  private specInit = false;
+  private tvCams: THREE.Vector3[] = [];
+  private tvDist: number[] = [];
+  private tvIndex = 0;
+
+  /** Watch instead of navigate: no tablet, cameras instead. */
+  setSpectator(on: boolean) {
+    this.spectator = on;
+    this.tablet.visible = !on;
+    this.setLookDown(false);
+    if (on && !this.tvCams.length) {
+      // TV cameras on the roadside every ~130 m, alternating sides, a few metres up
+      const st = this.stage;
+      const hw = st.def.roadWidth / 2;
+      let side = 1;
+      for (let d = st.startDistance + 40; d < st.finishDistance; d += 110 + Math.random() * 50) {
+        const c = sampleAt(st.samples, d);
+        const off = side * (hw + 3.2 + Math.random() * 2.5); // on the verge, in front of the trees
+        const x = c.x + Math.cos(c.h) * off, z = c.z - Math.sin(c.h) * off;
+        if (this.world.terrain.riverDistanceAt(x, z) < 12) continue;
+        this.tvCams.push(new THREE.Vector3(x, this.world.terrain.heightAt(x, z) + 3.5 + Math.random() * 2.5, z));
+        this.tvDist.push(d);
+        side = -side;
+      }
+    }
+    this.specInit = false;
+  }
+
+  /** Places the spectator camera for the current mode. Returns false for in-car. */
+  private placeSpectatorCam(dt: number, root: THREE.Object3D, carDist: number): boolean {
+    if (!this.spectator || this.cameraMode === 'incar') return false;
+    const cam = this.specCam;
+    const aspect = this.fp.camera.aspect;
+    if (cam.aspect !== aspect) {
+      cam.aspect = aspect;
+      cam.updateProjectionMatrix();
+    }
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(root.quaternion);
+    fwd.y = 0;
+    fwd.normalize();
+    const car = root.position;
+    let want: THREE.Vector3;
+    let look = car.clone().add(new THREE.Vector3(0, 0.6, 0));
+    let fov = 55;
+    let snap = !this.specInit;
+    if (this.cameraMode === 'tv' && this.tvCams.length) {
+      // the camera the car is coming up to (or just went past)
+      while (this.tvIndex < this.tvCams.length - 1 && carDist > this.tvDist[this.tvIndex] + 35) {
+        this.tvIndex++;
+        snap = true; // a TV cut
+      }
+      while (this.tvIndex > 0 && carDist < this.tvDist[this.tvIndex - 1] - 20) {
+        this.tvIndex--;
+        snap = true;
+      }
+      want = this.tvCams[this.tvIndex];
+      const dist = want.distanceTo(car);
+      fov = THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(2 * Math.atan(5 / Math.max(1, dist))), 10, 60); // zoom to keep the car framed
+      this.specPos.copy(want);
+    } else if (this.cameraMode === 'heli') {
+      want = car.clone().addScaledVector(fwd, -24).add(new THREE.Vector3(0, 16, 0));
+      look = car.clone().addScaledVector(fwd, 8);
+      fov = 50;
+      this.specPos.lerp(want, snap ? 1 : Math.min(1, dt * 1.5));
+    } else {
+      want = car.clone().addScaledVector(fwd, -6.5).add(new THREE.Vector3(0, 2.3, 0));
+      look = car.clone().addScaledVector(fwd, 4).add(new THREE.Vector3(0, 0.8, 0));
+      fov = 62;
+      this.specPos.lerp(want, snap ? 1 : Math.min(1, dt * 5));
+      // never under the ground
+      const gy = this.world.terrain.heightAt(this.specPos.x, this.specPos.z) + 0.8;
+      if (this.specPos.y < gy) this.specPos.y = gy;
+    }
+    this.specLook.lerp(look, snap ? 1 : Math.min(1, dt * 8));
+    this.specInit = true;
+    cam.fov += (fov - cam.fov) * (snap ? 1 : Math.min(1, dt * 3));
+    cam.updateProjectionMatrix();
+    cam.position.copy(this.specPos);
+    cam.lookAt(this.specLook);
+    return true;
+  }
+  /** This run's showers, fog banks and obstacles – shown in the 3D view too. */
+  setConditions(c: StageConditions) {
+    this.cond = c;
+    this.world.scenery.setObstacles(c.obstacles);
+  }
+
   /** Field of view that makes the held tablet fill most of the screen. */
   private tabletFov() {
     const portrait = this.screen.portrait;
@@ -417,14 +512,25 @@ export class CockpitView {
       this.fp.camera.updateProjectionMatrix();
     }
     this.fp.update(dt, root, this.accel, Math.min(1, Math.abs(this.accel.y) * 0.04));
-    this.world.update(dt, this.fp.camera.position, this.vel);
+    const outside = this.placeSpectatorCam(dt, root, this.lastDist);
+    this.car.setExteriorVisible(outside);
+    this.cockpit.group.visible = !outside;
+    const viewCam = outside ? this.specCam : this.fp.camera;
+    this.world.update(dt, viewCam.position, this.vel);
+    if (this.cond && t) {
+      this.world.scenery.updateObstacles(dt, t.dist);
+      const wet = zoneAmount(this.cond.wet, t.dist), fog = zoneAmount(this.cond.fog, t.dist);
+      const base = this.world.weather.rain;
+      this.world.rain?.setIntensity(Math.max(base, wet * 0.85) / Math.max(base, 0.9));
+      this.world.atmosphere.setFogMultiplier(fogMultiplier() * (1 + fog * 3.5));
+    }
     this.placeTablet(root, ease);
     if (this.tabletTex && this.screen.version !== this.tabletVersion) {
       this.tabletVersion = this.screen.version;
       this.tabletTex.needsUpdate = true;
     }
-    this.picker.enabled = !this.lookingDown;
-    this.renderer.render(this.scene, this.fp.camera);
+    this.picker.enabled = !this.lookingDown && !this.spectator;
+    this.renderer.render(this.scene, viewCam);
   }
 
   /** AI opponents shown where the driver's device says they are. */

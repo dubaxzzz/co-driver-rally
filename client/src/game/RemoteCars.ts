@@ -1,15 +1,16 @@
 /**
- * Other players' cars (and AI cars simulated on another player's machine)
- * shown as solid kinematic bodies. They follow the positions sent over the
- * network slightly in the past, and your car bounces off them – each player's
- * own game handles their side of the crash, so both cars take damage.
+ * Other players' cars shown as solid physics bodies. Each one is a *dynamic*
+ * body with the real car's mass that is steered towards the positions sent over
+ * the network (slightly in the past). Because it has a real mass, a crash
+ * shares the momentum like two real cars: you shove the car you hit instead of
+ * bouncing off it as if it were a wall. Each player's own game handles their
+ * side of the crash, so both cars take damage.
  */
 import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { INTERPOLATION_DELAY_MS, VEHICLES, WHEELS, type PaintOption } from '@cdr/shared';
 import type { PhysicsWorld } from './physics/PhysicsWorld';
 import { bakeCarModel, createCarModel, type CarModel } from './vehicle/CarModel';
-import { CAR_GROUPS } from './vehicle/Vehicle';
 
 interface Pose {
   t: number; // server time
@@ -40,6 +41,7 @@ const FALLBACK: PaintOption[] = [
 export class RemoteCar {
   readonly model: CarModel;
   readonly body: RAPIER.RigidBody;
+  private readonly collider: RAPIER.Collider;
   private buf: Pose[] = [];
   private look = '';
   name: string;
@@ -59,13 +61,22 @@ export class RemoteCar {
     this.name = name;
     this.model = this.buildModel(paint, carIndex);
     const R = physics.R;
-    this.body = physics.world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(0, -500, 0));
+    this.body = physics.world.createRigidBody(
+      R.RigidBodyDesc.dynamic().setTranslation(0, -500, 0).setGravityScale(0).setCcdEnabled(true).setLinearDamping(0).setAngularDamping(2),
+    );
     const def = VEHICLES[carIndex] ?? VEHICLES[0];
-    // same footprint as a real car's chassis, scaled by the body
+    // same footprint and mass as a real car's chassis
     const hw = 0.86 * def.body.width;
     const hl = 1.95 * def.body.length;
-    physics.world.createCollider(
-      R.ColliderDesc.cuboid(hw, 0.45, hl).setTranslation(0, 0.2, 0).setFriction(0.4).setRestitution(0.15).setCollisionGroups(CAR_GROUPS),
+    this.collider = physics.world.createCollider(
+      R.ColliderDesc.cuboid(hw, 0.45, hl)
+        .setTranslation(0, 0.2, 0)
+        .setMass(def.massKg)
+        .setFriction(0.3)
+        .setRestitution(0) // crashes don't bounce: the cars push and scrape
+        .setRestitutionCombineRule(R.CoefficientCombineRule.Min)
+        // only touches cars (the real car follows its own ground; this one just follows the network)
+        .setCollisionGroups((0x2 << 16) | 0x2),
       this.body,
     );
   }
@@ -133,19 +144,59 @@ export class RemoteCar {
     return { ...last, x: last.x + (last.x - prev.x) * ahead, z: last.z + (last.z - prev.z) * ahead, y: last.y + (last.y - prev.y) * ahead };
   }
 
-  private q = new THREE.Quaternion();
   private e = new THREE.Euler();
 
-  /** Moves the physics body (call every fixed step). */
-  stepBody(serverNow: number) {
+  private tq = new THREE.Quaternion();
+  private cq = new THREE.Quaternion();
+  private parked = true;
+
+  /**
+   * Steers the body towards where the network says the car is (call every
+   * fixed step). It drives with velocities rather than teleporting, so a crash
+   * can nudge it for a moment, but it always settles back onto the real path.
+   */
+  stepBody(serverNow: number, dt = 1 / 60) {
     const s = this.active ? this.sample(serverNow) : null;
     if (!s) {
-      this.body.setNextKinematicTranslation({ x: 0, y: -500, z: 0 });
+      if (!this.parked) {
+        this.body.setTranslation({ x: 0, y: -500, z: 0 }, false);
+        this.body.setLinvel({ x: 0, y: 0, z: 0 }, false);
+        this.body.setAngvel({ x: 0, y: 0, z: 0 }, false);
+        this.body.sleep();
+        this.parked = true;
+      }
       return;
     }
-    this.q.setFromEuler(this.e.set(s.p, s.h, s.r, 'YXZ'));
-    this.body.setNextKinematicTranslation({ x: s.x, y: s.y, z: s.z });
-    this.body.setNextKinematicRotation({ x: this.q.x, y: this.q.y, z: this.q.z, w: this.q.w });
+    this.tq.setFromEuler(this.e.set(s.p, s.h, s.r, 'YXZ'));
+    const pos = this.body.translation();
+    const ex = s.x - pos.x, ey = s.y - pos.y, ez = s.z - pos.z;
+    // far off (first packet, reset, or knocked well away): just put it there
+    if (this.parked || ex * ex + ey * ey + ez * ez > 9) {
+      this.body.setTranslation({ x: s.x, y: s.y, z: s.z }, true);
+      this.body.setRotation({ x: this.tq.x, y: this.tq.y, z: this.tq.z, w: this.tq.w }, true);
+      this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      this.parked = false;
+      return;
+    }
+    this.body.wakeUp();
+    // while it's touching another car, follow the network gently: the crash
+    // itself decides how the cars move apart, not a rigid wall
+    let touching = false;
+    this.physics.world.contactPairsWith(this.collider, () => (touching = true));
+    const k = (touching ? 0.25 : 0.6) / dt;
+    const lv = this.body.linvel();
+    const blend = touching ? 0.12 : 0.5;
+    this.body.setLinvel({ x: lv.x + (ex * k - lv.x) * blend, y: lv.y + (ey * k - lv.y) * blend, z: lv.z + (ez * k - lv.z) * blend }, true);
+    // same for the rotation
+    const r = this.body.rotation();
+    this.cq.set(r.x, r.y, r.z, r.w).invert().premultiply(this.tq); // q_err = target * current⁻¹
+    if (this.cq.w < 0) this.cq.set(-this.cq.x, -this.cq.y, -this.cq.z, -this.cq.w);
+    const angle = 2 * Math.acos(Math.min(1, this.cq.w));
+    const sn = Math.sqrt(Math.max(1e-9, 1 - this.cq.w * this.cq.w));
+    const w = angle < 1e-4 ? 0 : (angle * 0.6) / dt / sn;
+    const av = this.body.angvel();
+    this.body.setAngvel({ x: av.x + (this.cq.x * w - av.x) * blend, y: av.y + (this.cq.y * w - av.y) * blend, z: av.z + (this.cq.z * w - av.z) * blend }, true);
   }
 
   /** Moves the visible model to where the body is. */

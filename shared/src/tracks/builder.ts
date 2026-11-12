@@ -385,9 +385,10 @@ export function surfaceAt(stage: BuiltStage, d: number): SurfaceId {
 }
 
 /** Distance from a point to the nearest river centre line (and that river). */
-export function riverDistance(stage: BuiltStage, x: number, z: number): { dist: number; river: River | null } {
+export function riverDistance(stage: BuiltStage, x: number, z: number): { dist: number; river: River | null; dirX: number; dirZ: number } {
   let best = Infinity;
   let bestRiver: River | null = null;
+  let dirX = 0, dirZ = 0;
   for (const r of stage.rivers) {
     const p = r.points;
     for (let i = 0; i < p.length - 1; i++) {
@@ -400,8 +401,11 @@ export function riverDistance(stage: BuiltStage, x: number, z: number): { dist: 
       if (d2 < best) {
         best = d2;
         bestRiver = r;
+        const l = Math.sqrt(len2);
+        dirX = ex / l; // downstream = along the point order
+        dirZ = ez / l;
       }
     }
   }
-  return { dist: Math.sqrt(best), river: bestRiver };
+  return { dist: Math.sqrt(best), river: bestRiver, dirX, dirZ };
 }

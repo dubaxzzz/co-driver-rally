@@ -113,7 +113,7 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 
 ## Career: money, cars and upgrades
 
-- **PLAY** → Solo: *Championship*, *Daily challenge*, *Quick stage*, *Limited events* · Multiplayer: *Create lobby*, *Join lobby*.
+- **PLAY** → Solo: *Championship*, *Daily challenge*, *Quick stage* · Multiplayer: *Create lobby*, *Join lobby*.
 - Every finished stage pays **prize money**: stage length, harder weather and a clean-run
   bonus – minus the **repair bill** for any crash damage.
 - The **navigator** earns a 40% share of their driver's prize on top (the driver keeps all of theirs).
@@ -127,8 +127,7 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 - **Personal bests** per stage and weather show in the lobby; beat one and the results say so.
 - Progress is saved in this browser (Settings → Reset career to start over).
 - **Every update resets everyone.** Each deploy gets a new build id; the first time a
-  player opens the game after an update, their money, cars, championship and limited-event
-  prizes start fresh (name and settings are kept) and a message tells them why.
+  player opens the game after an update, their money, cars and championship start fresh (name and settings are kept) and a message tells them why.
 
 ## Multiplayer lobbies (up to 4 players)
 
@@ -139,8 +138,11 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
   If the host leaves, the next player takes over; the room closes when the last one leaves.
 - Drivers start **side by side on a grid** (two abreast, rows 10 m apart). No AI cars –
   only real players (AI rivals only appear in the championship).
-- **Collisions are real**: other players' cars are solid physics bodies in your world, so
-  you bounce off each other and both cars take damage (each game handles its own side).
+- **Collisions are real**: other players' cars are solid bodies with their real mass in your
+  world, so a hit shoves the other car instead of bouncing you off it like a wall, and both
+  cars take damage (each game handles its own side). Because the other car is a copy of where
+  it was a moment ago, your speed and spin can only change by a realistic amount per moment
+  while the cars touch – nobody gets flung away.
 - Each driver has their **own clock, checkpoints and result**. Finished cars leave the road.
   The stage ends when every driver has finished or retired; the results list everyone
   and everyone is paid for their own finish.
@@ -172,25 +174,18 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 - The server forces today's stage and keeps a leaderboard from its own timing
   (in memory, so it clears when Render restarts the server).
 
-## Limited events
+## Rivers, bridges and roadside detail
 
-Special events made by the admin (see below). They show on the main menu and in
-**PLAY → Limited events** with a countdown until they end. Each has a set stage and weather,
-either a loan car for everyone or your own car, its own leaderboard (timed by the server)
-and a prize paid the first time you finish it.
-
-## Admin panel
-
-**Settings → Admin**: type the admin code and press *Unlock*. The code is checked by the
-server; it is **`RALLYBOSS`** unless you set your own (Render → your service → *Environment* →
-add `ADMIN_CODE` = your code → *Save changes*; no coding needed). After 8 wrong codes in a
-minute the server makes you wait. The admin panel can:
-
-- **Give me every car** – unlocks all 25 cars in your garage.
-- **+ $1,000,000** – adds a million dollars to your bank.
-- **Create a limited event** – name, stage, weather, loan car (or own car), how long it runs
-  (1 hour to 1 week) and the prize. It is live for everybody straight away; *End now* removes it.
-  Events live in the server's memory, so a restart or a new deploy clears them.
+- **Rivers are deadly.** Drive into one and the current drags the car downstream, deep water
+  lifts it off its tyres, and once water gets above the air intake the engine floods – the car
+  is finished for that stage (restart, or retire in the championship). Cross on the bridge!
+- **Bridges** have plank (or concrete, on tarmac stages) decks, steel girders, concrete piers
+  with foam where the current hits, stone abutments, kerbs, railings and warning signs.
+- **Roads** show their surface properly: packed tyre lines, loose stones on the crown and edges
+  for gravel; edge lines, centre dashes and patched repairs on tarmac.
+- **Roadside:** marker posts (tall orange snow poles on snow stages), hay bales or tyre walls on
+  the outside of tight corners (solid – you'll bounce off them), and telegraph poles with wires.
+- **Dirt:** mud, dust or snow builds up on the car as you drive – you can see it on the bonnet.
 
 ## Stages, weather and opponents
 
@@ -306,6 +301,55 @@ through the windscreen (drag to look around – the tablet stays in your lap, ta
 to look down again). While you look at it you hold it steady in front of your eyes, so it
 doesn't shake however rough the road is.
 
+## Spectating
+
+Anyone with the room code can **just watch**: on the join screen press **👀 Just watch**, or pick
+**👀 Watch** as your seat in the lobby. Spectators don't take one of the 4 player seats (up to 8
+can watch), can join while a stage is already running, and don't earn money.
+
+- **Cameras** (button at the bottom): 🎥 **TV cameras** placed along the roadside that cut from
+  one to the next and zoom to keep the car framed · 🚗 **chase cam** · 🚁 **helicopter** ·
+  👀 **in the car** (the co-driver's seat).
+- **◀ ▶** switch between the drivers in the rally.
+- Live overlay: position, stage time, gap to the leader, speed, and a running order with each
+  driver's progress (or finish time).
+
+## Changing conditions
+
+Every run of a stage is a little different (worked out from the stage and the run number, so
+everyone in the room – and the co-driver's tablet – gets the same):
+
+- **Showers** drift over part of a dry stage: rain on the windscreen, wipers needed, less grip.
+- **Fog banks** sit in sections of the stage and close the view right down.
+- **Things on the road:** a fallen tree across most of the road, a rock slide over one half, or
+  animals wandering across (sheep; moose on snow stages; kangaroos on red-earth stages). They're
+  solid – hit them and you'll know about it.
+- The co-driver sees all of it coming on the tablet map (blue = shower, grey = fog, red ! =
+  obstacle) and gets a flashing banner ("TREE DOWN IN 300 m – LEFT BLOCKED, KEEP RIGHT") to call
+  it in time. A driver without a co-driver only gets a late warning about 140 m before.
+- AI rivals in the championship steer for the gap and slow down for them too.
+
+## Co-driver jobs (tablet → CAR page)
+
+The co-driver keeps the car in its best shape while the driver drives. Tap **CAR** at the
+top of the tablet:
+
+- **Coolant temperature** gauge – blue = too cold (lazy engine, −6% power), green = good,
+  amber/red = too hot (the engine loses power, and above 120°C it starts to cook itself).
+- **Radiator** open/shut – open on long climbs and flat out; shut in snow and cold.
+- **Anti-lag** – +5% power and sharper throttle, but a lot more heat.
+- **Engine map** – ECO (cool, −8%), NORMAL, ATTACK (+7%, hotter).
+- **Tyre pressures** – LOW is fastest on gravel, mud, sand and snow; HIGH on tarmac. The tablet
+  tells you what surface is coming up and how far away it is.
+- **Fuse board** – most stages blow a fuse somewhere (lights, wipers, light pod, fan, demister
+  or horn). That circuit dies until the co-driver taps the blown fuse to replace it. A blown FAN
+  fuse makes the engine run hotter.
+
+The driver sees everything the co-driver sets in a strip above the damage display (temperature,
+map, ALS, tyres, radiator, blown fuse) plus a message for each change. **No co-driver?** The car
+runs on AUTO: radiator by thermostat, NORMAL map, MID tyres, no anti-lag, and a blown fuse resets
+itself after about 12 seconds – safe, but a sharp co-driver is worth several seconds a stage.
+
 ## Navigator tablet
 
 A rugged-case tablet held in the co-driver's hands inside the car – its screen is
@@ -340,7 +384,7 @@ server/src/
   config.ts            Environment configuration (+ .env loader)
   rooms/               RoomManager (rooms, seats, tokens, cleanup, room codes)
   players/             Seats and session tokens
-  daily/               Daily leaderboard + limited-time events
+  daily/               Daily challenge leaderboard
   networking/          Socket event handlers, rate limiting, relay
 
 client/src/

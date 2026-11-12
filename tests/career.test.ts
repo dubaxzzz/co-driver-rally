@@ -34,3 +34,27 @@ check(JSON.stringify(applyUpgrades(kestrel, noUpgrades())) === JSON.stringify(ke
 check(VEHICLES.filter((v) => v.price === 0).length === 1 && VEHICLES.length === 25, '25 cars, one free starter');
 
 if (failures) process.exit(1);
+
+// ---- car systems (co-driver jobs) model
+{
+  const { defaultSystems, systemsTargetTemp, systemsPower, systemsGrip, encodeSystems, decodeSystems } = await import('../shared/src/switches');
+  const s = defaultSystems();
+  const flatOut = { load: 1, speed: 25, ambient: 15, engineOn: true };
+  s.map = 2;
+  s.flaps = true;
+  const openT = systemsTargetTemp(s, flatOut);
+  s.flaps = false;
+  const shutT = systemsTargetTemp(s, flatOut);
+  check(openT < 104 && shutT > 112, `attack map flat out: radiator open ${openT.toFixed(0)}°C is fine, shut ${shutT.toFixed(0)}°C overheats`);
+  const snow = { load: 0.6, speed: 15, ambient: -5, engineOn: true };
+  s.map = 1;
+  s.flaps = true;
+  const cold = systemsTargetTemp(s, snow);
+  s.flaps = false;
+  check(cold < 62 && systemsTargetTemp(s, snow) > 62, 'in the snow the engine runs cold unless the radiator is shut');
+  s.temp = 90;
+  check(Math.abs(systemsPower({ ...s, map: 2, als: true }) / systemsPower({ ...s, map: 1, als: false }) - 1.1235) < 0.01, 'attack + anti-lag gives ~12% more power');
+  check(systemsGrip({ ...s, tyres: 0 }, 'gravel') > systemsGrip({ ...s, tyres: 2 }, 'gravel') && systemsGrip({ ...s, tyres: 2 }, 'tarmac') > systemsGrip({ ...s, tyres: 0 }, 'tarmac'), 'low pressures for gravel, high for tarmac');
+  const enc = decodeSystems(encodeSystems({ flaps: true, als: false, map: 2, tyres: 0, fuse: 3, temp: 0 }), 99);
+  check(enc.flaps && !enc.als && enc.map === 2 && enc.tyres === 0 && enc.fuse === 3 && enc.temp === 99, 'systems survive the telemetry round trip');
+}

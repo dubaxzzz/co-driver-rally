@@ -12,13 +12,12 @@ export interface RallyConfig {
   aiSkill: AiSkill;
   /** Set for the Daily Challenge (UTC date) – the server fixes stage/weather and records the time. */
   daily?: string;
-  /** Limited-time event id (the server locks stage + weather to the event). */
-  limited?: string;
   /** Single-driver event (championship round / daily): other people can only join as navigator. */
   soloEvent?: boolean;
 }
 
-export type Role = 'driver' | 'navigator';
+/** Spectators watch the rally (cameras, live splits) without taking one of the 4 seats. */
+export type Role = 'driver' | 'navigator' | 'spectator';
 
 export interface PlayerInfo {
   playerId: string;
@@ -138,6 +137,9 @@ export interface TelemetryPacket {
   dz?: number[];
   /** Cockpit switch state (see shared/src/switches.ts). */
   sw?: number;
+  /** Car systems (co-driver jobs) bitmask and coolant temperature (°C) – see switches.ts. */
+  sys?: number;
+  tmp?: number;
   /** What the car looks like for other players: [vehicle index, body colour, accent colour]. */
   look?: number[];
   /** Prize the driver earned this run (sent after the finish so the navigator gets their share). */
@@ -204,22 +206,4 @@ export interface CheckpointEvent {
   playerId: string;
   index: number;
   timeMs: number;
-}
-
-/** A limited-time event made by an admin – everybody sees it until it ends. */
-export interface LimitedEvent {
-  id: string;
-  name: string;
-  stageId: string;
-  weather: WeatherId;
-  /** Loan car everybody drives (stock), or null = bring your own car. */
-  carId: string | null;
-  /** Prize money for your first finish. */
-  prize: number;
-  createdAt: number;
-  endsAt: number;
-}
-
-export interface LimitedEventWithBoard extends LimitedEvent {
-  board: Array<{ name: string; timeMs: number }>;
 }

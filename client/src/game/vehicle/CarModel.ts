@@ -19,6 +19,8 @@ export interface CarModel {
   wheels: THREE.Group[];
   readonly modelId: CarModelId;
   setPaint(p: PaintOption): void;
+  /** How dirty the car is (0 = clean, 1 = caked in mud/dust/snow) and the colour of the muck. */
+  setDirt(level: number, color?: number): void;
   setWheels(w: WheelOption): void;
   setBrakeLights(on: boolean): void;
   /** Hide the outside of the car (first-person views show the cockpit instead). */
@@ -810,6 +812,16 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption, bodyDef?:
     podLens.emissiveIntensity = podOn && podOk ? 2.2 : 0.05;
   };
 
+  // dirt builds up on the paint as you drive (lerped toward the stage's muck colour)
+  let curPaint = paint;
+  let dirt = 0;
+  const dirtColor = new THREE.Color(0x6b5a44);
+  const tmpC = new THREE.Color();
+  function applyDirt() {
+    paintMat.color.copy(tmpC.setHex(curPaint.body)).lerp(dirtColor, dirt * 0.6);
+    accentMat.color.copy(tmpC.setHex(curPaint.accent)).lerp(dirtColor, dirt * 0.5);
+  }
+
   return {
     root,
     body,
@@ -850,8 +862,13 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption, bodyDef?:
       if (hazards) amber.emissiveIntensity = Math.floor(time * 2.4) % 2 ? 2.5 : 0.05;
     },
     setPaint(p) {
-      paintMat.color.setHex(p.body);
-      accentMat.color.setHex(p.accent);
+      curPaint = p;
+      applyDirt();
+    },
+    setDirt(level, color) {
+      dirt = Math.max(0, Math.min(1, level));
+      if (color !== undefined) dirtColor.setHex(color);
+      applyDirt();
     },
     setWheels(w) {
       rimMat.color.setHex(w.rim);

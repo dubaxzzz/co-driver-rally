@@ -104,8 +104,16 @@ export class RainSystem {
     this.pos[o + 5] = z + vz * 0.03;
   }
 
+  /** 0..1 of the streaks that are falling (for showers that come and go). */
+  setIntensity(x: number) {
+    const n = Math.round(this.count * Math.max(0, Math.min(1, x)));
+    this.lines.geometry.setDrawRange(0, n * 2);
+    this.lines.visible = n > 0;
+  }
+
   /** `center` = camera position, `carVel` = car velocity (rain streaks lean with speed). */
   update(dt: number, center: THREE.Vector3, carVel: THREE.Vector3) {
+    if (!this.lines.visible) return;
     const fall = 14 * dt;
     const b = this.box;
     for (let i = 0; i < this.count; i++) {

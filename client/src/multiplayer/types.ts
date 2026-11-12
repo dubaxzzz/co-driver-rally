@@ -4,6 +4,7 @@ import type {
   NavCall,
   NavCallRequest,
   SharedSwitch,
+  SysCommand,
   PlayerInfo,
   Role,
   RaceResult,
@@ -32,6 +33,7 @@ export interface NetEvents {
   resumeFailed: { message: string };
   /** A navigator flipped one of my car's switches. */
   switch: { id: SharedSwitch; down: boolean; from: string };
+  sys: SysCommand & { from: string };
 }
 
 type Handler<T> = (payload: T) => void;
@@ -107,4 +109,6 @@ export abstract class NetBase {
   abstract sendTelemetry(p: TelemetryPacket): void;
   /** Navigator: flip a shared switch in my driver's car. */
   abstract sendSwitch(id: SharedSwitch, down?: boolean): void;
+  /** Navigator: change one of my driver's car systems (co-driver jobs). */
+  abstract sendSys(cmd: SysCommand): void;
 }

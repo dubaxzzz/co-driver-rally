@@ -98,6 +98,13 @@ export class Cockpit {
   private readonly dx = SEATS.driver.x;
   // damage visuals
   private bonnetPivot = new THREE.Group();
+  private paintMat!: THREE.MeshStandardMaterial;
+  private paintBody = 0xffffff;
+  /** Muck on the bonnet you can see through the windscreen. */
+  setDirt(level: number, color: number) {
+    this.paintMat.color.setHex(this.paintBody).lerp(new THREE.Color(color), Math.min(1, level) * 0.6);
+    this.paintMat.roughness = 0.4 + level * 0.5;
+  }
   private bonnetCrease: THREE.Mesh | null = null;
   private doorCards: Record<'left' | 'right', THREE.Mesh | null> = { left: null, right: null };
   private crackCanvas: HTMLCanvasElement;
@@ -118,6 +125,8 @@ export class Cockpit {
   constructor(paint: PaintOption, readonly seat: Seat, readonly model: CarModelId = 'kestrel') {
     const mat = (o: THREE.MeshStandardMaterialParameters) => this.track(new THREE.MeshStandardMaterial(o));
     const paintMat = mat({ color: paint.body, metalness: 0.4, roughness: 0.4 });
+    this.paintMat = paintMat;
+    this.paintBody = paint.body;
     const plastic = mat({ color: 0x3a3d43, roughness: 0.8 });
     const darkPlastic = mat({ color: 0x24262b, roughness: 0.85 });
     const suit = mat({ color: 0x1d3f7a, roughness: 0.85 });

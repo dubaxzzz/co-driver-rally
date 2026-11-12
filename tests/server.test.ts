@@ -141,6 +141,16 @@ for (let d = stage.spawnDistance + 2; d <= stage.finishDistance + 5; d += 3.4) {
 const [rn, rd] = await Promise.all([finished, driverFinished]);
 check(!!rn && !!rd && rn.timeMs === rd.timeMs && rn.splits.length === 3 && rn.name === 'Tester', `both players receive the same result (${rn ? (rn.timeMs / 1000).toFixed(2) : '-'} s, ${rn?.splits.length} splits)`);
 
+// spectators: join any time, don't take a seat, can't send telemetry
+{
+  const fan = await connect();
+  const watch = await call<JoinResult>((a) => fan.emit('room:join', { code, name: 'Fan', role: 'spectator' }, a));
+  check(watch.ok && watch.data.session.role === 'spectator', 'a spectator can join mid-rally');
+  const before = watch.ok ? watch.data.room.members.filter((m) => m.role !== 'spectator').length : -1;
+  check(before <= 4 && watch.ok && watch.data.room.members.some((m) => m.role === 'spectator'), 'spectators are listed but do not take one of the 4 seats');
+  fan.disconnect();
+}
+
 // host leaving hands the rally to the next player; last one out closes it
 const newHost = waitFor<{ hostId: string }>(nav2, 'room:update', 3000, (x) => x.hostId === (resumed.ok ? resumed.data.session.playerId : ''));
 driver.emit('room:leave');

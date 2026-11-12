@@ -10,6 +10,7 @@ import {
   type RallyConfig,
   type Role,
   type SharedSwitch,
+  type SysCommand,
   type RoomSnapshot,
   type ServerToClientEvents,
   type TelemetryPacket,
@@ -70,6 +71,7 @@ export class SocketNetClient extends NetBase {
     s.on('race:warning', (w) => this.emit('warning', w));
     s.on('race:finished', (r) => this.emit('finished', r));
     s.on('car:switch', (e) => this.emit('switch', e));
+    s.on('car:sys', (e) => this.emit('sys', e));
     s.on('room:closed', (p) => {
       this.clearSession();
       this.emit('closed', p);
@@ -222,6 +224,9 @@ export class SocketNetClient extends NetBase {
   sendSwitch(id: SharedSwitch, down = true) {
     // socket.io buffers this during a brief reconnect, so a click isn't lost
     this.socket.emit('car:switch', { id, down });
+  }
+  sendSys(cmd: SysCommand) {
+    this.socket.emit('car:sys', cmd);
   }
   sendTelemetry(p: TelemetryPacket) {
     if (this.socket.connected) this.socket.volatile.emit('telemetry', p);
