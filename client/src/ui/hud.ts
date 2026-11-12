@@ -1,6 +1,6 @@
 import type { BuiltStage } from '@cdr/shared';
 import type { DamageZones } from '../game/vehicle/Vehicle';
-import { formatDistance, formatSpeed, formatTime, settings } from '../settings';
+import { formatDistance, formatSpeed, formatTime } from '../settings';
 import { h } from './dom';
 
 /** Driver head-up display (DOM overlay). */
@@ -54,15 +54,6 @@ export class Hud {
     this.navEl = h('div', { class: 'hud-chip' }, h('span', { class: 'status-dot' }), 'NAVIGATOR');
     this.codeEl = h('span', { class: 'code' }, '----');
 
-    const help = settings.get().showHelp
-      ? h(
-          'div',
-          { class: 'hud-controls-help' },
-          h('div', { html: '<b>W/↑</b> Throttle &nbsp; <b>S/↓</b> Brake/Reverse &nbsp; <b>A D</b> Steer' }),
-          h('div', { html: '<b>Space</b> Handbrake &nbsp; <b>R</b> Reset &nbsp; <b>Esc</b> Menu &nbsp; <b>Mouse</b> click the switches in the car' }),
-        )
-      : null;
-
     this.root = h(
       'div',
       { class: 'hud' },
@@ -71,25 +62,7 @@ export class Hud {
       h('div', { class: 'hud-progress' }, track, h('div', { class: 'labels' }, this.progLeft, this.progRight)),
       this.centerEl,
       this.warnEl,
-      this.checkEl,
       h('div', { class: 'hud-dash' }, h('div', {}, this.gearEl, h('span', { class: 'hud-speed' }, this.speedEl, this.unitEl)), rpm, this.dmgEl),
-      help,
-    );
-  }
-
-  private checkEl = h('div', { class: 'hud-checklist', 'data-testid': 'checklist' });
-  private lastCheck = '';
-  /** Pre-stage checklist (ignition, start, lights…). `null` hides it. */
-  setChecklist(title: string, items: Array<{ label: string; done: boolean }> | null) {
-    const key = items ? title + items.map((i) => `${i.label}${i.done}`).join() : '';
-    if (key === this.lastCheck) return;
-    this.lastCheck = key;
-    this.checkEl.innerHTML = '';
-    this.checkEl.style.display = items ? 'block' : 'none';
-    if (!items) return;
-    this.checkEl.append(
-      h('div', { class: 'cl-title' }, title),
-      ...items.map((i) => h('div', { class: `cl-item ${i.done ? 'done' : ''}` }, h('span', { class: 'cl-box' }, i.done ? '✓' : ''), i.label)),
     );
   }
 

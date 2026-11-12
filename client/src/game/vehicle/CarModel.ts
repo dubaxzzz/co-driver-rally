@@ -889,12 +889,18 @@ export function bakeCarModel(model: CarModel): void {
   };
 }
 
-function mergeByMaterial(root: THREE.Object3D, made: THREE.BufferGeometry[]) {
+/** Merges every mesh under `root` into one mesh per material (skipping `keep` subtrees). */
+export function mergeByMaterial(root: THREE.Object3D, made: THREE.BufferGeometry[], keep?: (o: THREE.Object3D) => boolean) {
   root.updateMatrixWorld(true);
   const inv = root.matrixWorld.clone().invert();
   const groups = new Map<THREE.Material, { geos: THREE.BufferGeometry[]; shadow: boolean }>();
   const merged: THREE.Mesh[] = [];
+  const skipped = new Set<THREE.Object3D>();
   root.traverse((o) => {
+    if (keep && o !== root && (keep(o) || (o.parent && skipped.has(o.parent)))) {
+      skipped.add(o);
+      return;
+    }
     const m = o as THREE.Mesh;
     if (!m.isMesh || Array.isArray(m.material) || (m as unknown as THREE.InstancedMesh).isInstancedMesh || !m.visible) return;
     const geo = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()) as THREE.BufferGeometry;

@@ -369,8 +369,8 @@ export class NavigatorApp {
       tab.damage = worst < 0.05 ? 'OK' : `${Math.round(worst * 100)}%`;
       tab.damageLevel = worst > 0.6 ? 2 : worst > 0.2 ? 1 : 0;
     }
-    // the tablet screen refreshes ~20 times a second (like a real one, and cheap)
-    if (pnow - this.lastTabletDraw > 50) {
+    // the tablet screen refreshes ~12 times a second (plenty for a map, and cheap)
+    if (pnow - this.lastTabletDraw > 80) {
       this.lastTabletDraw = pnow;
       this.screen.setMapState(t, this.driverRace()?.checkpointsPassed ?? 0);
       this.screen.draw(tab);

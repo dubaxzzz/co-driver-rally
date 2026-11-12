@@ -74,6 +74,7 @@ export function buildStageWorld(
     water: track.water,
     roadColliderHandle,
     update(dt, camera, carVel) {
+      scenery.cull(camera);
       rain?.update(dt, camera, carVel);
       snow?.update(dt, camera, carVel);
       for (const w of track.water) w.update(dt);

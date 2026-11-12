@@ -123,7 +123,10 @@ export class Game {
 
       // Renderer
       this.renderer = new THREE.WebGLRenderer({ antialias: quality === 'high', powerPreference: 'high-performance' });
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality === 'high' ? 2 : 1));
+      // sharp but not wasteful: very high-DPI screens cost 4× the pixels for little gain
+      this.maxPixelRatio = Math.min(window.devicePixelRatio, quality === 'high' ? 1.5 : 1);
+      this.pixelRatio = this.maxPixelRatio;
+      this.renderer.setPixelRatio(this.pixelRatio);
       this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
       this.renderer.shadowMap.enabled = quality === 'high' && !this.weather.night;
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -416,15 +419,7 @@ export class Game {
     m.setHazards(this.sw.hazards);
     m.tick(this.clock);
 
-    // pre-stage checklist until everything that matters is done
     const phase = this.raceState?.phase;
-    const items = [
-      { label: 'Ignition on (glowing switch)', done: this.sw.ignition },
-      { label: this.cranking > 0 ? 'Starting… keep holding' : 'Hold START until it fires', done: this.sw.engine },
-    ];
-    if (this.weather.headlights) items.push({ label: 'Headlights', done: this.sw.headlights });
-    if (this.weather.rain > 0 || this.weather.snow > 0) items.push({ label: 'Wipers', done: this.sw.wipers > 0 });
-    const allDone = items.every((i) => i.done);
 
     // point at the next switch to use (glowing ring + label in the car)
     const raceOn = phase === 'countdown' || phase === 'racing';
@@ -437,8 +432,6 @@ export class Game {
       else if ((this.weather.rain > 0 || this.weather.snow > 0) && this.sw.wipers === 0) [next, text] = ['wipers', 'CLICK: WIPERS'];
     }
     this.cockpit.setGuide(next, text);
-    const show = !this.myRace()?.result && (phase === 'countdown' || (phase === 'racing' && !allDone));
-    this.hud.setChecklist(phase === 'countdown' ? 'PRE-STAGE CHECKS' : 'CAR NOT READY', show ? items : null);
   }
 
   private watchMs() {
@@ -812,11 +805,45 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- loop
+  private maxPixelRatio = 1;
+  private pixelRatio = 1;
+  private frameAvg = 16;
+  private perfCheckAt = 0;
+
+  /**
+   * Keeps the game smooth: if frames get slow the picture is drawn at a lower
+   * resolution (and shadows switch off), then sharpened again when there is room.
+   * A smooth frame rate matters more than sharpness – at low frame rates the car
+   * seems to jump along the road.
+   */
+  private adaptQuality(frameMs: number, now: number) {
+    this.frameAvg += (Math.min(frameMs, 100) - this.frameAvg) * 0.05;
+    if (now < this.perfCheckAt) return;
+    this.perfCheckAt = now + 1500;
+    if (this.frameAvg > 22) {
+      if (this.renderer.shadowMap.enabled) {
+        this.renderer.shadowMap.enabled = false;
+        this.scene.traverse((o) => {
+          const m = (o as THREE.Mesh).material as THREE.Material | undefined;
+          if (m && !Array.isArray(m)) m.needsUpdate = true;
+        });
+      } else if (this.pixelRatio > 0.6) {
+        this.pixelRatio = Math.max(0.6, this.pixelRatio - 0.15);
+        this.renderer.setPixelRatio(this.pixelRatio);
+      }
+    } else if (this.frameAvg < 13 && this.pixelRatio < this.maxPixelRatio) {
+      this.pixelRatio = Math.min(this.maxPixelRatio, this.pixelRatio + 0.1);
+      this.renderer.setPixelRatio(this.pixelRatio);
+    }
+  }
+
   private loop = (now: number) => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.loop);
-    const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
+    const frameMs = now - this.lastFrame;
+    const dt = Math.min(0.1, frameMs / 1000);
     this.lastFrame = now;
+    if (this.lastFrame > 0 && frameMs > 0) this.adaptQuality(frameMs, now);
     const v = this.vehicle;
 
     this.input.update(dt, v.telemetry.speed);

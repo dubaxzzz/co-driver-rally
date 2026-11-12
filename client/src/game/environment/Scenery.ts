@@ -75,6 +75,55 @@ export class Scenery {
     this.buildBridges();
   }
 
+  /** Chunks of instanced scenery, for frustum + distance culling. */
+  private chunks: THREE.InstancedMesh[] = [];
+
+  /**
+   * Splits an instanced mesh into 200 m grid cells, each with its own bounds, so
+   * the GPU only draws the trees/rocks/grass near and in front of the camera
+   * (one mesh for the whole stage was drawn in full every frame).
+   */
+  private addChunked(src: THREE.InstancedMesh) {
+    const CELL = 200;
+    const cells = new Map<string, number[]>();
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < src.count; i++) {
+      src.getMatrixAt(i, m);
+      const key = `${Math.floor(m.elements[12] / CELL)},${Math.floor(m.elements[14] / CELL)}`;
+      let list = cells.get(key);
+      if (!list) cells.set(key, (list = []));
+      list.push(i);
+    }
+    const col = new THREE.Color();
+    for (const list of cells.values()) {
+      const c = new THREE.InstancedMesh(src.geometry, src.material, list.length);
+      c.castShadow = src.castShadow;
+      c.receiveShadow = src.receiveShadow;
+      list.forEach((idx, j) => {
+        src.getMatrixAt(idx, m);
+        c.setMatrixAt(j, m);
+        if (src.instanceColor) {
+          src.getColorAt(idx, col);
+          c.setColorAt(j, col);
+        }
+      });
+      c.instanceMatrix.needsUpdate = true;
+      if (c.instanceColor) c.instanceColor.needsUpdate = true;
+      c.computeBoundingSphere();
+      this.group.add(c);
+      this.chunks.push(c);
+    }
+    src.dispose();
+  }
+
+  /** Hides scenery chunks far beyond what fog lets you see. */
+  cull(camera: THREE.Vector3, maxDist = 650) {
+    for (const c of this.chunks) {
+      const b = c.boundingSphere;
+      if (b) c.visible = b.center.distanceTo(camera) - b.radius < maxDist;
+    }
+  }
+
   private track<T extends { dispose(): void }>(o: T) {
     this.disposables.push(o);
     return o;
@@ -138,7 +187,8 @@ export class Scenery {
     trunks.count = leaves.count = placed;
     trunks.instanceMatrix.needsUpdate = leaves.instanceMatrix.needsUpdate = true;
     if (leaves.instanceColor) leaves.instanceColor.needsUpdate = true;
-    this.group.add(trunks, leaves);
+    this.addChunked(trunks);
+    this.addChunked(leaves);
   }
 
   private buildRocks(rand: () => number, count: number) {
@@ -179,7 +229,7 @@ export class Scenery {
     }
     rocks.count = placed;
     rocks.instanceMatrix.needsUpdate = true;
-    this.group.add(rocks);
+    this.addChunked(rocks);
   }
 
   private buildGrass(rand: () => number, count: number) {
@@ -199,7 +249,8 @@ export class Scenery {
       grass.setMatrixAt(placed++, m);
     }
     grass.count = placed;
-    this.group.add(grass);
+    grass.instanceMatrix.needsUpdate = true;
+    this.addChunked(grass);
   }
 
   private buildBarriersAndSigns() {

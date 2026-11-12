@@ -545,7 +545,6 @@ export function settingsScreen(nav: Nav): Screen {
           row('Driver visibility', 'Night fog on the stage – Very low means you must trust your co-driver', seg('visibility', [['verylow', 'Very low'], ['low', 'Low'], ['normal', 'Normal']])),
           row('Quality', 'Low: no shadows, fewer trees – for older laptops', seg('quality', [['high', 'High'], ['low', 'Low']])),
           row('Speed units', 'Shown on the dashboards and HUD', seg('units', [['kmh', 'km/h'], ['mph', 'mph']])),
-          row('Controls help', 'Key hints at the bottom of the driving screen', seg('showHelp', [[true, 'Show'], [false, 'Hide']])),
         ),
         section('Career', row('Reset career', `Bank ${money(career.get().money)} · ${Object.keys(career.get().owned).length} car(s). Starts again with ${money(STARTING_MONEY)} and the Kestrel R5.`, resetBtn)),
         adminSection(nav, section, row),

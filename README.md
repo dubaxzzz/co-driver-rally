@@ -274,8 +274,18 @@ catches – a damaged engine takes longer), HEADLIGHTS, LIGHT POD, WIPERS (off/s
 HAZARDS, DEMISTER (clears the condensation that builds up inside the glass in
 wet weather), CABIN light (helps reading, but reflects in the windscreen),, and the HORN
 on the steering-wheel hub.
-Each stage starts with the car switched off – the HUD shows a pre-stage checklist
-during the 10-second countdown.
+Each stage starts with the car switched off – a glowing ring in the car points at the
+next switch to use (ignition, START, lights, wipers) during the 10-second countdown.
+The driving screen has no checklist or key-hint boxes – just the timer, progress and dash.
+
+**Hands:** proper gloves on the wheel; on every gear change the right hand leaves the wheel,
+grabs the gear stick, knocks it and comes back (it stays on the stick for quick double
+shifts), and it goes to the hydraulic handbrake while you pull it.
+
+**Smooth frame rate:** the game watches its own frame rate and lowers the resolution (and
+turns shadows off) when frames get slow, then sharpens again when there is room. Trees,
+rocks and grass are drawn in 200 m chunks so only what's near and in view is drawn, and the
+car interior's fixed parts are merged into a few meshes.
 
 The **navigator** can reach over and flip the shared switches (wipers, lights,
 pod, hazards, demister, cabin light, horn) in their driver's car – but not the

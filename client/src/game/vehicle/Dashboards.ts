@@ -360,7 +360,7 @@ export function buildDashboard(model: CarModelId, group: THREE.Group, track: Tra
     handle.position.set(-DX - 0.05, 0.64, 0.46);
     handle.rotation.x = -0.4;
     add(handle);
-    box(0.02, 0.12, 0.02, mat({ color: 0xffc400, roughness: 0.5 }), 0.06, 0.2, 0.2);
+    box(0.02, 0.12, 0.02, mat({ color: 0xffc400, roughness: 0.5 }), -0.07, 0.2, 0.2);
     tripComputer(group, { ...st, scale: 1, cap: 0x333333 }, { bg: '#100a00', fg: '#ffb000', font: 'monospace' }, mat({ color: 0x171a16, roughness: 0.9 }), 0.04);
   } else if (model === 'bruno') {
     // ---------------- 80s Group B: angular dash, orange tacho + LCD, satellite pods

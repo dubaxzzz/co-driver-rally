@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { CarModelId, PaintOption } from '@cdr/shared';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeByMaterial } from './CarModel';
 
 /**
  * Interior trim for each car: bucket seats with harnesses, roll cage (with
@@ -138,6 +139,10 @@ export function buildInterior(
   const red = mat({ color: 0xc8141c, roughness: 0.4, metalness: 0.2 });
   const alu = mat({ color: 0xffffff, map: track(checkerTex([3, 3])), roughness: 0.45, metalness: 0.7 });
 
+  // everything that never moves goes in here and is merged into a few meshes at the end
+  const cockpit = group;
+  group = new THREE.Group();
+  cockpit.add(group);
   const add = (geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number, parent: THREE.Object3D = group) => {
     const mesh = new THREE.Mesh(track(geo), m);
     mesh.position.set(x, y, z);
@@ -323,5 +328,19 @@ export function buildInterior(
     add(new THREE.TubeGeometry(curve, 20, 0.005, 5, false), black, 0, 0, 0);
   }
 
+  // ---- Roof vent (pop-up hatch) and the kill switch + fire-system pull on the lower dash ----
+  rbox(0.32, 0.02, 0.26, 0.008, black, 0, 0.885, 0.05);
+  const flap = rbox(0.28, 0.012, 0.22, 0.005, accent, 0, 0.872, 0.06);
+  flap.rotation.x = 0.12;
+  const kill = add(new THREE.CylinderGeometry(0.03, 0.03, 0.012, 18), red, -0.02, 0.29, 0.55);
+  kill.rotation.x = Math.PI / 2 - 0.4;
+  rbox(0.07, 0.07, 0.008, 0.004, mat({ color: 0x1546c0, roughness: 0.6 }), -0.02, 0.29, 0.558).rotation.x = -0.4; // blue spark-triangle plate
+  const pull = add(new THREE.TorusGeometry(0.022, 0.006, 6, 14), red, 0.07, 0.29, 0.54);
+  pull.rotation.x = -0.4;
+
+  // one draw call per material instead of hundreds (doors stay separate: they dent)
+  const made: THREE.BufferGeometry[] = [];
+  mergeByMaterial(group, made, (o) => o === doors.left || o === doors.right);
+  made.forEach((g) => track(g));
   return { doors };
 }

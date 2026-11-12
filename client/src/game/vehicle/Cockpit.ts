@@ -4,6 +4,7 @@ import { noDamage, type DamageZones } from './Vehicle';
 import { buildDashboard, type Dashboard } from './Dashboards';
 import type { Control, ControlId } from './Controls';
 import { buildInterior } from './Interior';
+import { mergeByMaterial } from './CarModel';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
 export type Seat = 'driver' | 'navigator';
@@ -54,6 +55,10 @@ const WHEEL_CENTER_Y = 0.42;
 const WHEEL_CENTER_Z = 0.17;
 const WHEEL_TILT = 0.42;
 const WHEEL_RADIUS = 0.17;
+/** Gear change hand movement (s): reach for the stick, hold it, go back to the wheel. */
+const SHIFT_REACH = 0.15;
+const SHIFT_HOLD = 0.24;
+const SHIFT_BACK = 0.2;
 const WHEEL_LOCK = 2.4; // wheel rotation (rad) at full steering input
 
 /**
@@ -77,7 +82,15 @@ export class Cockpit {
   private gearKickVel = 0;
   private lastGear = 1;
   private handbrakeLever = new THREE.Group();
-  private arms: Array<{ upper: THREE.Mesh; fore: THREE.Mesh; glove: THREE.Mesh; side: number }> = [];
+  private knob!: THREE.Mesh;
+  private hbGrip!: THREE.Mesh;
+  private arms: Array<{ upper: THREE.Mesh; fore: THREE.Mesh; glove: THREE.Group; side: number }> = [];
+  /** The inner hand's trip to the gear stick: time since it left the wheel (s), or -1. */
+  private shiftT = -1;
+  private pendingKick = 0;
+  /** 0 = right hand on the wheel, 1 = on the handbrake. */
+  private hbReach = 0;
+  private readonly tmpLever = new THREE.Vector3();
   private driverBody = new THREE.Group();
   private navBody = new THREE.Group();
   private navHead = new THREE.Group();
@@ -107,10 +120,11 @@ export class Cockpit {
     const paintMat = mat({ color: paint.body, metalness: 0.4, roughness: 0.4 });
     const plastic = mat({ color: 0x3a3d43, roughness: 0.8 });
     const darkPlastic = mat({ color: 0x24262b, roughness: 0.85 });
-    const cage = mat({ color: 0x8d949c, metalness: 0.6, roughness: 0.35 });
     const suit = mat({ color: 0x1d3f7a, roughness: 0.85 });
     const navSuit = mat({ color: 0x6b1d1d, roughness: 0.85 });
     const glove = mat({ color: 0x1f1f24, roughness: 0.8 });
+    const cuffMat = mat({ color: 0x2a2c33, roughness: 0.9 });
+    const logoMat = mat({ color: paint.accent, roughness: 0.6 });
     const helmet = mat({ color: 0xf2f2f2, roughness: 0.35, metalness: 0.1 });
     const visor = mat({ color: 0x0a0c10, roughness: 0.1, metalness: 0.8 });
 
@@ -224,17 +238,42 @@ export class Cockpit {
     });
     tube(v(this.dx, 0.36, 0.6), v(this.dx, WHEEL_CENTER_Y - 0.01, WHEEL_CENTER_Z + 0.03), 0.03, darkPlastic); // column
 
-    // ---- Gear lever (sequential) & hydraulic handbrake ----
-    this.gearLever.position.set(0.13, 0.2, -0.02);
+    // ---- Gear lever (tall sequential stick on the console) & hydraulic handbrake ----
+    // Both sit high enough to see from the seat, so you watch your hand go to them.
+    const leverMat = mat({ color: 0xb8bec6, metalness: 0.85, roughness: 0.25 });
+    const gaiterMat = mat({ color: 0x111215, roughness: 0.95 });
+    this.gearLever.position.set(0.05, 0.27, 0.33);
     this.group.add(this.gearLever);
-    tube(v(0, 0, 0), v(0, 0.2, -0.04), 0.011, cage, this.gearLever);
-    const knob = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.026, 10, 8)), darkPlastic);
-    knob.position.set(0, 0.21, -0.045);
+    // mounting plate + leather gaiter (the gaiter stays put, the stick rocks)
+    box(0.1, 0.012, 0.12, mat({ color: 0x2a2d32, metalness: 0.6, roughness: 0.4 }), 0.05, 0.266, 0.33);
+    const gaiter = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.012, 0.042, 0.07, 12)), gaiterMat);
+    gaiter.position.set(0.05, 0.305, 0.33);
+    this.group.add(gaiter);
+    tube(v(0, 0, 0), v(0.008, 0.16, -0.03), 0.0095, leverMat, this.gearLever);
+    const knobMat = model === 'sparrow' ? mat({ color: 0x5a3a22, roughness: 0.45 }) : mat({ color: 0x18191c, roughness: 0.5 });
+    const knob = new THREE.Mesh(this.track(model === 'sparrow' ? new THREE.SphereGeometry(0.028, 14, 10) : new THREE.CylinderGeometry(0.02, 0.016, 0.075, 14)), knobMat);
+    knob.position.set(0.008, 0.19, -0.035);
+    knob.rotation.x = model === 'sparrow' ? 0 : -0.16;
     this.gearLever.add(knob);
-    this.handbrakeLever.position.set(0.15, 0.16, 0.0);
+    if (model !== 'sparrow') {
+      const ring = new THREE.Mesh(this.track(new THREE.TorusGeometry(0.019, 0.004, 6, 16)), mat({ color: paint.accent, roughness: 0.4, metalness: 0.3 }));
+      ring.rotation.x = Math.PI / 2 - 0.16;
+      ring.position.set(0.008, 0.205, -0.037);
+      this.gearLever.add(ring);
+    }
+    this.knob = knob;
+    this.handbrakeLever.position.set(0.14, 0.2, 0.04);
     this.group.add(this.handbrakeLever);
-    tube(v(0, 0, 0), v(0, 0.24, 0.05), 0.013, cage, this.handbrakeLever);
-    box(0.03, 0.06, 0.03, darkPlastic, 0, 0.26, 0.055, this.handbrakeLever);
+    box(0.06, 0.04, 0.12, mat({ color: 0x2a2d32, metalness: 0.6, roughness: 0.4 }), 0.14, 0.19, 0.04); // master-cylinder housing
+    tube(v(0, 0, 0), v(0, 0.13, -0.05), 0.012, leverMat, this.handbrakeLever);
+    const hbGrip = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.016, 0.016, 0.07, 12)), mat({ color: 0x1a1b1e, roughness: 0.7 }));
+    hbGrip.position.set(0, 0.16, -0.06);
+    hbGrip.rotation.x = -0.29;
+    this.handbrakeLever.add(hbGrip);
+    const hbCap = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.018, 0.018, 0.012, 12)), mat({ color: 0xc8141c, roughness: 0.5 }));
+    hbCap.position.set(0, 0.035, 0);
+    hbGrip.add(hbCap);
+    this.hbGrip = hbGrip;
 
     // ---- Crew bodies: rounded torso, shoulders, HANS collar, legs down to the footwell ----
     const rb = (w: number, h: number, d: number, r: number, m: THREE.Material, x: number, y: number, z: number, parent: THREE.Object3D) => {
@@ -279,7 +318,19 @@ export class Cockpit {
     for (const side of [1, -1]) {
       const upper = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.05, 0.045, 1, 8)), suit);
       const fore = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.042, 0.038, 1, 8)), suit);
-      const gloveMesh = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.045, 10, 8)), glove);
+      // a proper glove: palm, curled fingers, thumb and a cuff (local +Z = along the forearm)
+      const gloveMesh = new THREE.Group();
+      gloveMesh.scale.setScalar(1.15);
+      const part = (w: number, hgt: number, d: number, r: number, m: THREE.Material, x: number, y: number, z: number, rx = 0) => {
+        const p = rb(w, hgt, d, r, m, x, y, z, gloveMesh);
+        p.rotation.x = rx;
+        return p;
+      };
+      part(0.075, 0.032, 0.08, 0.014, glove, 0, 0, 0); // palm + back of hand
+      part(0.072, 0.03, 0.05, 0.013, glove, 0, -0.016, 0.05, 0.9); // fingers curled round
+      part(0.026, 0.024, 0.05, 0.011, glove, side * 0.04, -0.004, 0.02, 0.3).rotation.y = side * 0.5; // thumb
+      part(0.08, 0.05, 0.035, 0.016, cuffMat, 0, 0.004, -0.05); // cuff
+      part(0.05, 0.005, 0.03, 0.0015, logoMat, 0, 0.017, -0.005); // logo patch
       // arms + gloves stay visible in the driver's own view
       this.group.add(upper, fore, gloveMesh);
       this.arms.push({ upper, fore, glove: gloveMesh, side });
@@ -315,6 +366,12 @@ export class Cockpit {
       g.position.copy(hand);
       this.navBody.add(g);
     }
+
+    // the crew bodies never change shape: merge them (the co-driver's head still moves)
+    const merged: THREE.BufferGeometry[] = [];
+    mergeByMaterial(this.driverBody, merged);
+    mergeByMaterial(this.navBody, merged, (o) => o === this.navHead);
+    merged.forEach((g) => this.track(g));
 
     // Hide yourself: the driver sees only their arms; the co-driver's own body
     // is replaced by the real tablet UI on their device.
@@ -500,6 +557,13 @@ export class Cockpit {
     gd.label.position.set(p.x, p.y + 0.1 + pulse * 0.008, p.z - 0.02);
   }
 
+  /** Where a point on a lever part is, in the cockpit's own space. */
+  private partInGroup(part: THREE.Object3D, offset: THREE.Vector3) {
+    part.updateWorldMatrix(true, false);
+    const p = part.localToWorld(this.tmpLever.copy(offset));
+    return this.group.worldToLocal(p).clone();
+  }
+
   update(dt: number, s: CockpitState) {
     this.time += dt;
 
@@ -510,6 +574,36 @@ export class Cockpit {
     const tiltAxis = new THREE.Vector3(1, 0, 0);
     const zAxis = new THREE.Vector3(0, 0, 1);
     const center = new THREE.Vector3(this.dx, WHEEL_CENTER_Y, WHEEL_CENTER_Z);
+    // ---- gear changes: the inner hand leaves the wheel, knocks the stick, comes back ----
+    if (s.gear !== this.lastGear) {
+      const dir = s.gear > this.lastGear || s.gear === -1 ? -1 : 1; // pull back = up a gear
+      this.lastGear = s.gear;
+      if (this.shiftT < 0 || this.shiftT > SHIFT_REACH + SHIFT_HOLD) this.shiftT = 0; // start a new reach
+      else this.shiftT = Math.min(this.shiftT, SHIFT_REACH); // already there: stay on the stick
+      this.pendingKick += dir;
+    }
+    if (this.shiftT >= 0) {
+      const before = this.shiftT;
+      this.shiftT += dt;
+      // the stick moves when the hand gets there
+      if (this.pendingKick && (this.shiftT >= SHIFT_REACH || before >= SHIFT_REACH)) {
+        this.gearKickVel += this.pendingKick * 9;
+        this.pendingKick = 0;
+      }
+      if (this.shiftT > SHIFT_REACH + SHIFT_HOLD + SHIFT_BACK) this.shiftT = -1;
+    }
+    this.gearKickVel += (-this.gearKick * 220 - this.gearKickVel * 18) * dt;
+    this.gearKick += this.gearKickVel * dt;
+    this.gearLever.rotation.x = this.gearKick;
+    const ease = (x: number) => x * x * (3 - 2 * x);
+    let shiftW = 0;
+    if (this.shiftT >= 0) {
+      const t = this.shiftT;
+      shiftW = t < SHIFT_REACH ? ease(t / SHIFT_REACH) : t < SHIFT_REACH + SHIFT_HOLD ? 1 : 1 - ease(Math.min(1, (t - SHIFT_REACH - SHIFT_HOLD) / SHIFT_BACK));
+    }
+    // handbrake: the same hand goes to the handbrake while it's pulled
+    this.hbReach += ((s.handbrake ? 1 : 0) - this.hbReach) * Math.min(1, dt * 14);
+
     for (const arm of this.arms) {
       // hands at roughly 9 and 3 o'clock, they slide a little at big lock
       const grip = new THREE.Vector3(arm.side * WHEEL_RADIUS, 0.02, 0)
@@ -517,20 +611,31 @@ export class Cockpit {
         .applyAxisAngle(tiltAxis, WHEEL_TILT)
         .add(center);
       const shoulder = new THREE.Vector3(this.dx + arm.side * 0.2, 0.52, -0.56);
-      const elbow = shoulder.clone().lerp(grip, 0.5).add(new THREE.Vector3(arm.side * 0.09, -0.13, -0.02));
+      let hand = grip;
+      let bend = new THREE.Vector3(arm.side * 0.09, -0.13, -0.02);
+      const up = new THREE.Vector3(0, 1, 0);
+      if (arm.side < 0) {
+        // inner hand: to the gear knob (palm on top) or the handbrake grip
+        const toKnob = this.partInGroup(this.knob, new THREE.Vector3(0, 0.045, -0.01));
+        const toHb = this.partInGroup(this.hbGrip, new THREE.Vector3(0, 0, -0.02));
+        const w = Math.max(shiftW, this.hbReach);
+        if (w > 0.001) {
+          const target = this.hbReach > shiftW ? toHb : toKnob;
+          // arc over the gap rather than sliding through things
+          const lift = Math.sin(Math.PI * Math.min(1, w)) * 0.05 * (1 - w);
+          hand = grip.clone().lerp(target, w).add(new THREE.Vector3(0, lift, 0));
+          bend = bend.clone().lerp(this.hbReach > shiftW ? new THREE.Vector3(0.04, -0.12, -0.04) : new THREE.Vector3(-0.1, -0.22, 0.1), w);
+        }
+      }
+      const elbow = shoulder.clone().lerp(hand, 0.5).add(bend);
       placeLimb(arm.upper, shoulder, elbow);
-      placeLimb(arm.fore, elbow, grip);
-      arm.glove.position.copy(grip);
+      placeLimb(arm.fore, elbow, hand);
+      // the glove points along the forearm, back of the hand up
+      arm.glove.position.copy(hand);
+      const m = new THREE.Matrix4().lookAt(hand, elbow, up);
+      arm.glove.quaternion.setFromRotationMatrix(m);
     }
 
-    // Gear lever kicks on each shift (spring back)
-    if (s.gear !== this.lastGear) {
-      this.gearKickVel += s.gear > this.lastGear || s.gear === -1 ? -9 : 9;
-      this.lastGear = s.gear;
-    }
-    this.gearKickVel += (-this.gearKick * 220 - this.gearKickVel * 18) * dt;
-    this.gearKick += this.gearKickVel * dt;
-    this.gearLever.rotation.x = this.gearKick;
     const hbTarget = s.handbrake ? -0.55 : 0;
     this.handbrakeLever.rotation.x += (hbTarget - this.handbrakeLever.rotation.x) * Math.min(1, dt * 18);
 

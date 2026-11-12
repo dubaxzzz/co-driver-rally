@@ -332,7 +332,26 @@ export class CockpitView {
     }
   }
 
+  private pr = Math.min(window.devicePixelRatio, 1.5);
+  private frameAvg = 16;
+  private perfAt = 0;
+  private lastNow = 0;
+  /** Lower the resolution when frames get slow (and raise it again when there's room). */
+  private adapt() {
+    const now = performance.now();
+    if (this.lastNow) this.frameAvg += (Math.min(100, now - this.lastNow) - this.frameAvg) * 0.05;
+    this.lastNow = now;
+    if (now < this.perfAt) return;
+    this.perfAt = now + 1500;
+    const max = Math.min(window.devicePixelRatio, 1.5);
+    if (this.frameAvg > 24 && this.pr > 0.6) this.pr = Math.max(0.6, this.pr - 0.15);
+    else if (this.frameAvg < 13 && this.pr < max) this.pr = Math.min(max, this.pr + 0.1);
+    else return;
+    this.renderer.setPixelRatio(this.pr);
+  }
+
   update(dt: number, t: RelayedTelemetry | null) {
+    this.adapt();
     if (dt <= 0) return;
     const root = this.car.root;
     if (t) {
