@@ -181,8 +181,8 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
   is finished for that stage (restart, or retire in the championship). Cross on the bridge!
 - **Bridges** have plank (or concrete, on tarmac stages) decks, steel girders, concrete piers
   with foam where the current hits, stone abutments, kerbs, railings and warning signs.
-- **Roads** show their surface properly: packed tyre lines, loose stones on the crown and edges
-  for gravel; edge lines, centre dashes and patched repairs on tarmac.
+- **Roads** are plain, single colours: gravel in the stage's own earth colour, dark grey tarmac,
+  white snow, brown mud, sandy sand.
 - **Roadside:** marker posts (tall orange snow poles on snow stages), hay bales or tyre walls on
   the outside of tight corners (solid – you'll bounce off them), and telegraph poles with wires.
 - **Dirt:** mud, dust or snow builds up on the car as you drive – you can see it on the bonnet.

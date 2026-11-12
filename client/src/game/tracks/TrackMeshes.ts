@@ -39,121 +39,7 @@ export function mulberry32(seed: number) {
   };
 }
 
-const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
 
-/** Procedural road textures, one per surface. */
-function surfaceTexture(surface: SurfaceId, tint: number): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = 256;
-  c.height = 256;
-  const g = c.getContext('2d')!;
-  const rnd = mulberry32(surface.length * 97 + tint);
-  const speckle = (n: number, colors: string[], maxSize: number) => {
-    for (let i = 0; i < n; i++) {
-      g.fillStyle = colors[Math.floor(rnd() * colors.length)];
-      const s = rnd() * maxSize + 0.6;
-      g.fillRect(rnd() * 256, rnd() * 256, s, s);
-    }
-  };
-  const tracks = (color: string) => {
-    for (const x of [70, 186]) {
-      const grad = g.createLinearGradient(x - 26, 0, x + 26, 0);
-      grad.addColorStop(0, 'rgba(0,0,0,0)');
-      grad.addColorStop(0.5, color);
-      grad.addColorStop(1, 'rgba(0,0,0,0)');
-      g.fillStyle = grad;
-      g.fillRect(x - 26, 0, 52, 256);
-    }
-  };
-  switch (surface) {
-    case 'tarmac':
-      g.fillStyle = '#4b4d51';
-      g.fillRect(0, 0, 256, 256);
-      speckle(9000, ['rgba(105,107,112,0.5)', 'rgba(35,36,38,0.5)', 'rgba(140,140,140,0.3)'], 1.4);
-      tracks('rgba(22,22,24,0.4)'); // rubbered-in racing lines
-      // patched repairs
-      for (let i = 0; i < 5; i++) {
-        g.fillStyle = 'rgba(30,31,34,0.35)';
-        g.fillRect(40 + rnd() * 160, rnd() * 256, 20 + rnd() * 40, 10 + rnd() * 30);
-      }
-      g.fillStyle = 'rgba(235,235,225,0.85)'; // edge lines
-      g.fillRect(14, 0, 5, 256);
-      g.fillRect(237, 0, 5, 256);
-      g.fillStyle = 'rgba(235,225,180,0.7)'; // dashed centre line
-      for (let y = 0; y < 256; y += 64) g.fillRect(126, y, 4, 34);
-      break;
-    case 'mud':
-      g.fillStyle = '#4a3622';
-      g.fillRect(0, 0, 256, 256);
-      speckle(4000, ['rgba(70,52,32,0.6)', 'rgba(35,25,16,0.6)'], 4);
-      tracks('rgba(25,18,10,0.55)');
-      for (let i = 0; i < 18; i++) {
-        g.fillStyle = 'rgba(110,100,85,0.35)'; // puddles
-        g.beginPath();
-        g.ellipse(rnd() * 256, rnd() * 256, 8 + rnd() * 20, 4 + rnd() * 8, 0, 0, Math.PI * 2);
-        g.fill();
-      }
-      break;
-    case 'snow':
-      g.fillStyle = '#e4eaee';
-      g.fillRect(0, 0, 256, 256);
-      speckle(3000, ['rgba(200,210,220,0.6)', 'rgba(255,255,255,0.8)'], 2.5);
-      tracks('rgba(150,165,180,0.5)'); // icy ruts
-      break;
-    case 'sand':
-      g.fillStyle = hex(tint);
-      g.fillRect(0, 0, 256, 256);
-      speckle(6000, ['rgba(220,150,90,0.4)', 'rgba(120,60,30,0.35)'], 2);
-      tracks('rgba(90,40,20,0.25)');
-      break;
-    case 'wood':
-      g.fillStyle = '#6b4a2e';
-      g.fillRect(0, 0, 256, 256);
-      for (let y = 0; y < 256; y += 16) {
-        g.fillStyle = y % 32 ? '#7a5534' : '#62432a';
-        g.fillRect(0, y, 256, 14);
-        g.fillStyle = 'rgba(20,12,6,0.6)';
-        g.fillRect(0, y + 14, 256, 2);
-      }
-      speckle(800, ['rgba(40,25,12,0.4)'], 2);
-      break;
-    default: {
-      // gravel, tinted per stage (grey Finnish, red Australian…): packed tyre lines,
-      // a ridge of loose stones down the middle and berms of loose gravel at the edges
-      const base = new THREE.Color(tint).lerp(new THREE.Color(0xb8ad9c), 0.35);
-      g.fillStyle = hex(base.getHex());
-      g.fillRect(0, 0, 256, 256);
-      speckle(5000, ['rgba(255,245,230,0.22)', 'rgba(0,0,0,0.22)', 'rgba(150,140,128,0.35)'], 1.6);
-      tracks('rgba(45,35,25,0.38)');
-      // loose stones: bigger, lighter, mostly on the ridge and berms
-      for (let i = 0; i < 1400; i++) {
-        const zone = rnd();
-        const x = zone < 0.35 ? 128 + (rnd() - 0.5) * 50 : zone < 0.7 ? (rnd() < 0.5 ? rnd() * 34 : 222 + rnd() * 34) : rnd() * 256;
-        const y = rnd() * 256;
-        const r = 0.6 + rnd() * 1.4;
-        g.fillStyle = rnd() < 0.5 ? 'rgba(215,205,190,0.5)' : 'rgba(95,88,80,0.5)';
-        g.beginPath();
-        g.ellipse(x, y, r, r * (0.6 + rnd() * 0.4), rnd() * 3, 0, Math.PI * 2);
-        g.fill();
-        g.fillStyle = 'rgba(0,0,0,0.25)'; // tiny shadow under each stone
-        g.fillRect(x - r * 0.4, y + r * 0.6, r, 0.8);
-      }
-      // the outer edge fades into the verge
-      for (const [x0, x1] of [[0, 20], [256, 236]]) {
-        const grad = g.createLinearGradient(x0, 0, x1, 0);
-        grad.addColorStop(0, 'rgba(60,70,40,0.55)');
-        grad.addColorStop(1, 'rgba(60,70,40,0)');
-        g.fillStyle = grad;
-        g.fillRect(Math.min(x0, x1), 0, 20, 256);
-      }
-    }
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
-  return t;
-}
 
 export interface TerrainData {
   heightAt(x: number, z: number): number;
@@ -246,7 +132,9 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
   roadGeo.computeVertexNormals();
   const roadMats = surfaceList.map((sf) => {
     const wet = sf === 'mud' ? 0.45 : sf === 'snow' ? 0.6 : sf === 'tarmac' ? 0.75 : 1;
-    return new THREE.MeshStandardMaterial({ map: surfaceTexture(sf, sc.verge), roughness: wet, metalness: 0 });
+    // plain, single-colour road surfaces (no texture detail)
+    const color = sf === 'tarmac' ? 0x4a4c50 : sf === 'snow' ? 0xe4e9ee : sf === 'mud' ? 0x4f3d2b : sf === 'sand' ? 0xc9a46a : sf === 'wood' ? 0x6b4a2e : sc.verge;
+    return new THREE.MeshStandardMaterial({ color, roughness: wet, metalness: 0 });
   });
   const road = new THREE.Mesh(roadGeo, roadMats);
   road.receiveShadow = true;
@@ -324,7 +212,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
       tmp.copy(grassA).lerp(grassB, nv);
       if (noise(x * 0.012 + 9, z * 0.012, 2) > 0.62) tmp.lerp(patch, 0.6);
       const d = dists[i];
-      if (d < hw + 5) tmp.lerp(verge, (1 - Math.max(0, (d - hw) / 5)) * 0.55);
+      if (d < hw + 5) tmp.lerp(verge, 1 - Math.max(0, (d - hw) / 5));
       if (rdists[i] < 22) tmp.lerp(riverBank, Math.max(0, 1 - rdists[i] / 22) * 0.8);
       tCol[i * 3] = tmp.r;
       tCol[i * 3 + 1] = tmp.g;
