@@ -53,4 +53,6 @@ export interface ServerToClientEvents {
   'nav:call': (call: NavCall) => void;
   /** A navigator flipped one of your switches. */
   'car:switch': (payload: { id: SharedSwitch; down: boolean; from: string }) => void;
+  /** An admin created or removed a limited-time event – fetch /api/limited again. */
+  'limited:changed': () => void;
 }

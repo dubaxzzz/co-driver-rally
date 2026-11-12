@@ -21,7 +21,7 @@ export const noUpgrades = (): UpgradeLevels => ({ engine: 0, gearbox: 0, tyres: 
 /** Price of buying `level` (1..3) of an upgrade for a car. Faster cars cost more to upgrade. */
 export function upgradeCost(car: VehicleDef, kind: UpgradeKind, level: number): number {
   const base = UPGRADES.find((u) => u.kind === kind)!.baseCost;
-  const tier = 1 + car.price / 100000;
+  const tier = 1 + car.price / 250000;
   const mult = [0, 1, 2.2, 4][level] ?? 4;
   return Math.round((base * tier * mult) / 100) * 100;
 }

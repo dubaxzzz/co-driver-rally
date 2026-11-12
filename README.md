@@ -113,44 +113,48 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 
 ## Career: money, cars and upgrades
 
-- **PLAY** → Solo: *Championship*, *Daily challenge*, *Quick stage* · Multiplayer: *Create lobby*, *Join lobby*.
-- Every finished stage pays **prize money**: stage length, harder weather,
-  your position against AI rivals (more for harder AI) and a clean-run bonus –
-  minus the **repair bill** for any crash damage.
+- **PLAY** → Solo: *Championship*, *Daily challenge*, *Quick stage*, *Limited events* · Multiplayer: *Create lobby*, *Join lobby*.
+- Every finished stage pays **prize money**: stage length, harder weather and a clean-run
+  bonus – minus the **repair bill** for any crash damage.
 - The **navigator** earns a 40% share of their driver's prize on top (the driver keeps all of theirs).
-- **Garage → Dealership:** Kestrel R5 (4WD, free starter), Sparrow R2 $35,000, Dune Raider $120,000,
-  Bruno 300 $180,000 and Vortex RX $300,000. You start with $5,000, a stage pays roughly
-  $600 per km (more for harder AI and worse weather) and repairs cost $1,500 per fully
-  wrecked zone – so a new car is a real goal. Upgrades cost $6,000–$12,000 for level 1.
+- **Garage → Dealership: 25 cars**, from the free Kestrel R5 starter through $45,000 club
+  cars up to the $2,500,000 Tempest Prototype (see the table below). You start with $5,000,
+  a stage pays roughly $600 per km (more in worse weather) and repairs cost $1,500 per fully
+  wrecked zone – so every new car is a real goal. Upgrade prices grow with the car's price.
+  Cars you don't own yet are shown in their factory livery.
 - **Garage → Upgrades:** engine, gearbox, tyres, suspension, brakes and armour, 3 levels each –
   they change the physics (power, shift time, grip, stiffness, braking, crash resistance).
 - **Personal bests** per stage and weather show in the lobby; beat one and the results say so.
 - Progress is saved in this browser (Settings → Reset career to start over).
-  The new economy came with a one-time reset: everyone's money, cars and championship
-  start fresh the first time they open the game after the update.
+- **Every update resets everyone.** Each deploy gets a new build id; the first time a
+  player opens the game after an update, their money, cars, championship and limited-event
+  prizes start fresh (name and settings are kept) and a message tells them why.
 
 ## Multiplayer lobbies (up to 4 players)
 
 - **PLAY → Create lobby** makes a room; friends use **Join lobby** with the code.
 - Every seat is a **driver** (own car) or a **navigator** for one driver. New players
   are seated sensibly (a driver without a navigator gets one first) and can switch in the lobby.
-- The **host** picks stage, weather and AI, and starts once everyone has ticked **ready**.
+- The **host** picks stage and weather, and starts once everyone has ticked **ready**.
   If the host leaves, the next player takes over; the room closes when the last one leaves.
-- Drivers start **side by side on a grid** (two abreast, rows 10 m apart), AI cars behind.
+- Drivers start **side by side on a grid** (two abreast, rows 10 m apart). No AI cars –
+  only real players (AI rivals only appear in the championship).
 - **Collisions are real**: other players' cars are solid physics bodies in your world, so
   you bounce off each other and both cars take damage (each game handles its own side).
-- **AI cars** are driven on the first driver's computer and shown to everyone else.
 - Each driver has their **own clock, checkpoints and result**. Finished cars leave the road.
   The stage ends when every driver has finished or retired; the results list everyone
-  (players and AI) and prize money depends on your position in the whole field.
+  and everyone is paid for their own finish.
 - Restart and back-to-lobby are the host's call.
 
 ## Championship career
 
-- Six-round seasons (every stage once, weather set per round) against a field of
+- Six-round seasons (each season visits the next six stages on the calendar, in their
+  signature weather) against a field of
   **11 named drivers** in four teams. Points 25-18-15-12-10-8-6-4-2-1.
-- Three rivals closest to you in the standings race you **on the stage** as real AI cars;
-  the rest get times simulated from how fast those AI really drove.
+- The championship is the **only mode with AI rivals**: the three drivers closest to you in
+  the standings race you on the stage as real AI cars; the rest get times simulated from how
+  fast those AI really drove. Rival cars are merged into a few meshes each and not drawn when
+  far away, so they no longer slow the game down.
 - **Service park** between rounds: damage carries over. Privateers pay for repairs;
   repairs happen at the service park between rounds.
 - **Team contracts:** good results bring offers – Kallio Motorsport (tier 1), Northern Lights
@@ -168,6 +172,26 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 - The server forces today's stage and keeps a leaderboard from its own timing
   (in memory, so it clears when Render restarts the server).
 
+## Limited events
+
+Special events made by the admin (see below). They show on the main menu and in
+**PLAY → Limited events** with a countdown until they end. Each has a set stage and weather,
+either a loan car for everyone or your own car, its own leaderboard (timed by the server)
+and a prize paid the first time you finish it.
+
+## Admin panel
+
+**Settings → Admin**: type the admin code and press *Unlock*. The code is checked by the
+server; it is **`RALLYBOSS`** unless you set your own (Render → your service → *Environment* →
+add `ADMIN_CODE` = your code → *Save changes*; no coding needed). After 8 wrong codes in a
+minute the server makes you wait. The admin panel can:
+
+- **Give me every car** – unlocks all 25 cars in your garage.
+- **+ $1,000,000** – adds a million dollars to your bank.
+- **Create a limited event** – name, stage, weather, loan car (or own car), how long it runs
+  (1 hour to 1 week) and the prize. It is live for everybody straight away; *End now* removes it.
+  Events live in the server's memory, so a restart or a new deploy clears them.
+
 ## Stages, weather and opponents
 
 The driver picks everything in the **lobby** (the navigator's screen follows):
@@ -180,6 +204,35 @@ The driver picks everything in the **lobby** (the navigator's screen follows):
 | Red Centre | Western Australia | red gravel, soft sand, creek bridge |
 | Hafren Mud | Wales | gravel and mud, two river bridges |
 | Derwent Highlands | Tasmania | tarmac, then gravel after the bridge |
+| Highland Pass | Scotland | moorland gravel, mud, river bridge |
+| Atlas Dunes | Morocco | fast desert piste, soft sand, jumps |
+| Lapland Night | Finland | snow and snowbanks, jumps |
+| Corsican Coast | Corsica | narrow, twisty cliff-top tarmac |
+| Andes Switchbacks | Argentina | rocky mountain gravel, bridge |
+| Black Forest | Germany | wet tarmac with muddy cuts |
+| Savannah Sunset | Kenya | red gravel, mud and sand, river bridge, jumps |
+| Otago Gorge | New Zealand | flowing gravel, two bridges |
+| Frozen Lake | Norway | snow in a blizzard |
+| Sardinia Ridge | Sardinia | sandy gravel full of jumps |
+| Mojave Run | USA | very fast desert gravel, big jumps |
+| Moorland Mud | Yorkshire | gravel and deep mud, bridge |
+
+The twelve newer stages are laid out from a seed (`shared/src/tracks/stages/more.ts`):
+corners alternate so the road always makes progress and can never cross itself.
+
+### The cars
+
+| Chassis | Cars (price) |
+|---|---|
+| Small hatch (Sparrow) | Pipit 1300 $45k (FWD historic) · Sparrow R2 $50k · Finch Rallye $70k · Wren GT $85k (RWD) · Sparrow R4 Kit $140k (4WD) |
+| Modern hatch (Kestrel) | Kestrel R5 (free starter) · Merlin S1600 $95k (FWD) · Kestrel R5 Evo $160k · Osprey Rally2 $230k · Harrier WRC $420k |
+| Rally-raid truck (Dune) | Bushman 4x4 $110k · Dune Raider $260k · Dune Raider LR $340k · Mesa T1 $480k · Sandstorm Pro $650k |
+| 80s coupé (Bruno) | Bruno 300 $380k · Corvo RS $520k · Bruno 300 Evo 2 $720k · Vela Turbo $900k (4WD) · Mamba Quattro $1.1M (4WD) |
+| Top class (Vortex) | Vortex RX $950k · Zenith Hybrid $1.2M · Vortex RX Evo $1.4M · Apex Rally1 $1.6M · Tempest Prototype $2.5M |
+
+Each car has its own tune (power, weight, grip, gearbox, brakes, armour), door number and
+sponsor, and many have bolt-on parts: roof racks with spare tyres, lamp bars, roof scoops,
+mud guards, snorkels and wide arches.
 
 **Weather:** Clear, Overcast, Rain, Night storm (fog + rain), Snowfall, Dusk.
 Weather changes light, fog, rain/snow on the windscreen and tyre grip.
@@ -188,7 +241,7 @@ Weather changes light, fog, rain/snow on the windscreen and tyre grip.
 are slippery *and* slow you down; leaving the road onto grass, snowbanks or sand
 costs a lot of speed; miss a bridge and you're wading through a fast river.
 
-**AI opponents (0–3, Easy/Medium/Hard):** fast, upgraded physics cars that race
+**AI opponents (championship only):** fast, upgraded physics cars that race
 the same stage at the same time. They collide with you, steer round slower cars,
 and appear on the navigator's map and in the final leaderboard.
 
@@ -240,7 +293,8 @@ The **navigator** sits in the passenger seat, seeing the real car's position
 in 3D from the driver's telemetry, holding a real **tablet** in their gloved hands.
 **Look at tablet** (↓) looks down and zooms in on it; **Look at road** (↑) looks up
 through the windscreen (drag to look around – the tablet stays in your lap, tap it
-to look down again).
+to look down again). While you look at it you hold it steady in front of your eyes, so it
+doesn't shake however rough the road is.
 
 ## Navigator tablet
 
@@ -267,15 +321,16 @@ shared/src/            Code used by BOTH client and server
   tracks/              Stage definitions + centreline/pace-note generator
     stages/forest.ts   "Kallio Forest" – the pace-note book that generates the road
   validation.ts        Runtime validation of untrusted socket payloads
-  vehicles.ts          Garage data (cars, paints, wheels)
+  vehicles.ts          Garage data (25 cars, paints, wheels)
+  race/                RaceController – server-authoritative countdown,
+                       checkpoints, anti-teleport, finish & results (run by the server)
 
 server/src/
   index.ts             Express + Socket.IO bootstrap (serves client/dist in prod)
   config.ts            Environment configuration (+ .env loader)
-  rooms/               RoomManager (rooms, seats, tokens, cleanup) + code generator
+  rooms/               RoomManager (rooms, seats, tokens, cleanup, room codes)
   players/             Seats and session tokens
-  race/                RaceController – server-authoritative countdown,
-                       checkpoints, anti-teleport, finish & results
+  daily/               Daily leaderboard + limited-time events
   networking/          Socket event handlers, rate limiting, relay
 
 client/src/

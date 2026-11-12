@@ -94,7 +94,7 @@ check(lobbyRole.ok, 'staying a driver is fine');
 // ---- start: grid of two drivers, AI run by the first on the grid
 const racingP = waitFor<RaceState>(s4, 'race:state', 15000, (s) => s.phase === 'racing');
 const st = await call<RaceState>((a) => host.emit('race:start', a as never));
-check(st.ok && st.data.drivers.map((d) => d.name).join(',') === 'Alice,Cara' && st.data.aiHost === alice, 'grid: Alice then Cara, Alice\'s game runs the AI');
+check(st.ok && st.data.drivers.map((d) => d.name).join(',') === 'Alice,Cara' && st.data.aiHost === alice, 'grid: Alice then Cara');
 const runId = st.ok ? st.data.runId : 1;
 const g0 = gridSpot(stage, 0, 2);
 const g1 = gridSpot(stage, 1, 2);

@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { INTERPOLATION_DELAY_MS, VEHICLES, WHEELS, type PaintOption } from '@cdr/shared';
 import type { PhysicsWorld } from './physics/PhysicsWorld';
-import { createCarModel, type CarModel } from './vehicle/CarModel';
+import { bakeCarModel, createCarModel, type CarModel } from './vehicle/CarModel';
 import { CAR_GROUPS } from './vehicle/Vehicle';
 
 interface Pose {
@@ -73,6 +73,7 @@ export class RemoteCar {
   private buildModel(paint: PaintOption, carIndex: number) {
     const def = VEHICLES[carIndex] ?? VEHICLES[0];
     const m = createCarModel(paint, WHEELS[0], def.body);
+    bakeCarModel(m); // a handful of draw calls instead of hundreds
     this.scene.add(m.root);
     m.root.visible = false;
     return m;

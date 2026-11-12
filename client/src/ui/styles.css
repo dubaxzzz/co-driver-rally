@@ -1041,3 +1041,24 @@ input[type='range'] { accent-color: var(--accent); width: 180px; }
   .garage-side { border-left: none; padding: 18px var(--pad); min-width: 0; }
   .garage-tabs button { font-size: 11px; padding: 10px 4px; letter-spacing: .04em; }
 }
+
+/* ---- limited events + admin panel ---- */
+.play-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .play-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 820px) { .play-grid.four { grid-template-columns: 1fr; } }
+.play-card.limited, .mm-card.limited { border-color: rgba(255, 196, 0, 0.55); background: linear-gradient(160deg, rgba(255, 196, 0, 0.18), rgba(255, 75, 31, 0.06)); }
+.play-card.limited .k, .mm-card.limited .mm-card-k { color: #ffc400; }
+.limited-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px; width: min(1200px, 100%); margin: 0 auto; }
+.limited-card { display: flex; flex-direction: column; gap: 10px; border-top: 3px solid #ffc400; }
+.limited-top { display: flex; justify-content: space-between; align-items: center; }
+.limited-badge { background: #ffc400; color: #111; font-weight: 900; font-size: 11px; letter-spacing: 0.18em; padding: 4px 10px; }
+.limited-left { color: #ffc400; font-weight: 800; font-variant-numeric: tabular-nums; }
+.admin-unlock { display: flex; gap: 8px; }
+.admin-create { padding: 14px 0 6px; border-top: 1px solid var(--line); margin-top: 8px; display: flex; flex-direction: column; gap: 10px; }
+.admin-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 14px; }
+.admin-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.admin-field .input, .admin-select { width: 100%; font-size: 15px; }
+.admin-select { background: #111418; color: var(--text); }
+.admin-create > .btn { align-self: flex-start; }
+.admin-events { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.admin-ev { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03); }

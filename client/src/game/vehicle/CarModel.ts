@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { CarModelId, PaintOption, VehicleDef, WheelOption } from '@cdr/shared';
 
 /** Wheel layout shared by the model and the physics. Car faces +Z, left is +X. */
@@ -206,11 +207,11 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption, bodyDef?:
   const carbon = M({ color: 0x15171a, roughness: 0.35, metalness: 0.4 });
   const grilleTex = track(grilleTexture());
   const grilleMat = M({ map: grilleTex, roughness: 0.8 });
-  const numTex = track(numberTexture(spec.number));
+  const numTex = track(numberTexture(bodyDef?.number ?? spec.number));
   const numMat = M({ map: numTex, transparent: true, roughness: 0.6 });
   const plateTex = track(plateTexture(spec.plate));
   const plateMat = M({ map: plateTex, roughness: 0.6 });
-  const sponsorTex = track(sponsorTexture(...spec.sponsor));
+  const sponsorTex = track(sponsorTexture(...(bodyDef?.sponsor ?? spec.sponsor)));
   const sponsorMat = M({ map: sponsorTex, roughness: 0.5 });
 
   const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x = 0, y = 0, z = 0, parent: THREE.Object3D = body) => {
@@ -723,6 +724,65 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption, bodyDef?:
     wheels.push(steerGroup);
   }
 
+  boltOns();
+  if (bodyDef?.widthScale) body.scale.x = bodyDef.widthScale;
+
+  /** Variant parts: roof rack + spares, lamp bar, roof scoop, mud guards, snorkel. */
+  function boltOns() {
+    const extras = bodyDef?.extras ?? [];
+    if (!extras.length) return;
+    // roof: [front z, height] of the roof line and the body width, per chassis
+    const ROOF: Record<CarModelId, [number, number, number]> = {
+      kestrel: [0.36, 0.91, 1.72],
+      sparrow: [0.32, 0.96, 1.62],
+      dune: [0.55, 1.1, 1.84],
+      bruno: [0.15, 0.86, 1.8],
+      vortex: [0.3, 0.9, 1.84],
+    };
+    const [rz, ry, W] = ROOF[modelId];
+    const y = ry; // body space (the body group carries the ride height)
+    if (extras.includes('rack')) {
+      for (const sx of [-1, 1]) {
+        add(new THREE.BoxGeometry(0.04, 0.04, 1.2), satin, sx * 0.5, y + 0.06, rz - 0.75);
+        for (const z of [rz - 0.25, rz - 1.25]) add(new THREE.BoxGeometry(0.03, 0.08, 0.03), satin, sx * 0.5, y + 0.02, z);
+      }
+      for (const z of [rz - 0.3, rz - 0.75, rz - 1.2]) add(new THREE.BoxGeometry(1.04, 0.03, 0.04), satin, 0, y + 0.07, z);
+      // two spare tyres strapped flat
+      for (const z of [rz - 0.55, rz - 1.0]) {
+        const tyre = add(new THREE.CylinderGeometry(0.3, 0.3, 0.2, 20), tyreMat, 0, y + 0.18, z);
+        tyre.scale.set(1, 1, 0.75);
+        add(new THREE.BoxGeometry(0.66, 0.205, 0.05), accentMat, 0, y + 0.18, z);
+      }
+    }
+    if (extras.includes('lightbar')) {
+      add(new THREE.BoxGeometry(1.1, 0.06, 0.08), black, 0, y + 0.08, rz - 0.08);
+      for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.04, 0.1, 0.04), black, sx * 0.48, y + 0.02, rz - 0.1);
+      for (let i = 0; i < 4; i++) {
+        const x = -0.39 + i * 0.26;
+        const can = add(new THREE.CylinderGeometry(0.075, 0.08, 0.09, 16), black, x, y + 0.15, rz - 0.04);
+        can.rotation.x = Math.PI / 2;
+        const l = add(new THREE.CircleGeometry(0.068, 16), podLens, x, y + 0.15, rz + 0.006);
+        l.rotation.y = 0;
+      }
+    }
+    if (extras.includes('scoop')) {
+      add(new THREE.BoxGeometry(0.42, 0.09, 0.4), paintMat, 0, y + 0.04, rz - 0.4);
+      add(new THREE.BoxGeometry(0.36, 0.06, 0.02), black, 0, y + 0.05, rz - 0.195);
+    }
+    if (extras.includes('mudguards')) {
+      for (const [x, z] of positions) {
+        const flap = add(new THREE.BoxGeometry(0.3, 0.32, 0.02), accentMat, x / (bodyDef?.widthScale ?? 1), WHEEL_LAYOUT.connectionY - 0.12 - spec.rideY, z - WHEEL_LAYOUT.radius - 0.08);
+        flap.rotation.x = 0.08;
+      }
+    }
+    if (extras.includes('snorkel')) {
+      const sx = -(W / 2 + 0.02);
+      add(new THREE.CylinderGeometry(0.05, 0.05, 0.7, 12), black, sx, y - 0.32, rz + 0.25);
+      const top = add(new THREE.BoxGeometry(0.12, 0.12, 0.16), black, sx, y + 0.06, rz + 0.25);
+      top.rotation.x = 0.2;
+    }
+  }
+
   // --------------------------------------------------------- lights
   const lightRig = new THREE.Group();
   root.add(lightRig);
@@ -807,4 +867,57 @@ export function createCarModel(paint: PaintOption, wheel: WheelOption, bodyDef?:
       rimGeos.forEach((g) => g.dispose());
     },
   };
+}
+
+/**
+ * Merges the hundreds of little parts of a car into one mesh per material
+ * (and one per wheel), so a rival car costs a few draw calls instead of
+ * hundreds. Lights, paint and damage still work – they only change materials.
+ * Only for cars nobody edits afterwards (AI and other players' cars).
+ */
+export function bakeCarModel(model: CarModel): void {
+  const made: THREE.BufferGeometry[] = [];
+  mergeByMaterial(model.body, made);
+  for (const w of model.wheels) {
+    const spin = w.getObjectByName('spin');
+    if (spin) mergeByMaterial(spin, made);
+  }
+  const dispose = model.dispose.bind(model);
+  model.dispose = () => {
+    dispose();
+    made.forEach((g) => g.dispose());
+  };
+}
+
+function mergeByMaterial(root: THREE.Object3D, made: THREE.BufferGeometry[]) {
+  root.updateMatrixWorld(true);
+  const inv = root.matrixWorld.clone().invert();
+  const groups = new Map<THREE.Material, { geos: THREE.BufferGeometry[]; shadow: boolean }>();
+  const merged: THREE.Mesh[] = [];
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || Array.isArray(m.material) || (m as unknown as THREE.InstancedMesh).isInstancedMesh || !m.visible) return;
+    const geo = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()) as THREE.BufferGeometry;
+    for (const name of Object.keys(geo.attributes)) if (name !== 'position' && name !== 'normal' && name !== 'uv') geo.deleteAttribute(name);
+    if (!geo.attributes.normal) geo.computeVertexNormals();
+    if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array((geo.attributes.position.count) * 2), 2));
+    geo.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
+    let g = groups.get(m.material);
+    if (!g) groups.set(m.material, (g = { geos: [], shadow: false }));
+    g.geos.push(geo);
+    g.shadow ||= m.castShadow;
+    merged.push(m);
+  });
+  if (merged.length < 2) return;
+  for (const m of merged) m.removeFromParent();
+  for (const [mat, g] of groups) {
+    const geo = mergeGeometries(g.geos, false);
+    g.geos.forEach((x) => x.dispose());
+    if (!geo) continue;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = g.shadow;
+    mesh.userData.baked = true;
+    made.push(geo);
+    root.add(mesh);
+  }
 }

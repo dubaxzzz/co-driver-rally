@@ -34,4 +34,9 @@ export const config = {
   roomIdleMaxMs: num(process.env.ROOM_IDLE_MAX_MS, DEFAULT_ROOM_IDLE_MAX_MS),
   maxRooms: num(process.env.MAX_ROOMS, 500),
   cleanupIntervalMs: 10_000,
+  /**
+   * Code that unlocks the admin panel (Settings → Admin). Change it by setting
+   * ADMIN_CODE in Render → your service → Environment.
+   */
+  adminCode: process.env.ADMIN_CODE || 'RALLYBOSS',
 };

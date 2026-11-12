@@ -8,7 +8,7 @@ import { DustSystem } from '../game/environment/Atmosphere';
 import { DAMAGE_KEYS, noDamage, type DamageZones } from '../game/vehicle/Vehicle';
 import { fogMultiplier, garageStore, settings } from '../settings';
 import { FirstPersonCamera } from '../game/camera/FirstPersonCamera';
-import { createCarModel, type CarModel } from '../game/vehicle/CarModel';
+import { bakeCarModel, createCarModel, type CarModel } from '../game/vehicle/CarModel';
 import { Cockpit } from '../game/vehicle/Cockpit';
 import { buildStageWorld, type StageWorld } from '../game/world/StageWorld';
 import { SEATS } from '../game/vehicle/Cockpit';
@@ -211,7 +211,31 @@ export class CockpitView {
     this.tabletBase.set(seat.x, seat.eyeY, seat.eyeZ).addScaledVector(dir, TABLET_DIST);
     this.tablet.position.copy(this.tabletBase);
     this.tablet.quaternion.setFromEuler(new THREE.Euler(p, Math.PI + y, 0, 'YXZ'));
+    this.tabletBaseQ.copy(this.tablet.quaternion);
     // the plane faces the camera's +Z, i.e. back at the eyes
+  }
+
+  private tabletBaseQ = new THREE.Quaternion();
+  private tmpV = new THREE.Vector3();
+  private tmpQ = new THREE.Quaternion();
+  private tmpQ2 = new THREE.Quaternion();
+
+  /**
+   * While you look at the tablet you hold it steady in front of your eyes (like
+   * a real co-driver bracing their arms), so it is locked to the view and
+   * never shakes. Looking at the road it rests in your lap, moving with the car.
+   */
+  private placeTablet(root: THREE.Object3D, lock: number) {
+    const cam = this.fp.camera;
+    cam.updateMatrixWorld();
+    root.updateMatrixWorld();
+    // where the tablet sits when held in front of the eyes, in the car's frame
+    const held = this.tmpV.set(0, 0, -TABLET_DIST).applyMatrix4(cam.matrixWorld);
+    root.worldToLocal(held);
+    const heldQ = this.tmpQ.copy(root.getWorldQuaternion(this.tmpQ2)).invert().multiply(cam.getWorldQuaternion(this.tmpQ2));
+    // in the lap: the fixed spot, moving with the body
+    this.tablet.position.copy(this.tabletBase).addScaledVector(this.fp.head, 0.85).lerp(held, lock);
+    this.tablet.quaternion.copy(this.tabletBaseQ).slerp(heldQ, lock);
   }
 
   /** Field of view that makes the held tablet fill most of the screen. */
@@ -365,8 +389,6 @@ export class CockpitView {
     this.car.setLightPod(this.sw.pod);
     this.car.setHazards(this.sw.hazards);
     this.car.tick(performance.now() / 1000);
-    // the tablet is held in the hands, so it moves with the head (mostly)
-    this.tablet.position.copy(this.tabletBase).addScaledVector(this.fp.head, 0.85);
     // zoom in on the tablet when looking at it, wide angle when looking at the road
     const k = THREE.MathUtils.clamp((this.fp.pitch - LOOK_UP_PITCH) / (LOOK_DOWN_PITCH - LOOK_UP_PITCH), 0, 1);
     const ease = k * k * (3 - 2 * k);
@@ -377,6 +399,7 @@ export class CockpitView {
     }
     this.fp.update(dt, root, this.accel, Math.min(1, Math.abs(this.accel.y) * 0.04));
     this.world.update(dt, this.fp.camera.position, this.vel);
+    this.placeTablet(root, ease);
     if (this.tabletTex && this.screen.version !== this.tabletVersion) {
       this.tabletVersion = this.screen.version;
       this.tabletTex.needsUpdate = true;
@@ -391,6 +414,7 @@ export class CockpitView {
     while (this.aiCars.length < n) {
       const crew = AI_CREWS[this.aiCars.length % AI_CREWS.length];
       const m = createCarModel(crew.paint, WHEELS[0]);
+      bakeCarModel(m);
       this.scene.add(m.root);
       this.aiCars.push(m);
     }

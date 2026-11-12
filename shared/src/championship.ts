@@ -85,12 +85,18 @@ export interface Round {
   weather: WeatherId;
 }
 
-/** The season: every stage once, in its signature weather. */
+export const ROUNDS_PER_SEASON = 6;
+
+/** The season: six stages in their signature weather – each season visits the next six on the calendar. */
 export function seasonSchedule(season: number): Round[] {
-  const order = [...STAGE_DEFS];
-  // later seasons shuffle the order a little
-  for (let i = 0; i < season - 1 && i < order.length - 1; i++) order.push(order.shift()!);
-  return order.map((d) => ({ stageId: d.id, weather: d.defaultWeather }));
+  const n = STAGE_DEFS.length;
+  const start = ((season - 1) * ROUNDS_PER_SEASON) % n;
+  const out: Round[] = [];
+  for (let i = 0; i < Math.min(ROUNDS_PER_SEASON, n); i++) {
+    const d = STAGE_DEFS[(start + i) % n];
+    out.push({ stageId: d.id, weather: d.defaultWeather });
+  }
+  return out;
 }
 
 export function mulberry(seed: number) {

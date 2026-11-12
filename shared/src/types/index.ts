@@ -12,6 +12,8 @@ export interface RallyConfig {
   aiSkill: AiSkill;
   /** Set for the Daily Challenge (UTC date) – the server fixes stage/weather and records the time. */
   daily?: string;
+  /** Limited-time event id (the server locks stage + weather to the event). */
+  limited?: string;
   /** Single-driver event (championship round / daily): other people can only join as navigator. */
   soloEvent?: boolean;
 }
@@ -202,4 +204,22 @@ export interface CheckpointEvent {
   playerId: string;
   index: number;
   timeMs: number;
+}
+
+/** A limited-time event made by an admin – everybody sees it until it ends. */
+export interface LimitedEvent {
+  id: string;
+  name: string;
+  stageId: string;
+  weather: WeatherId;
+  /** Loan car everybody drives (stock), or null = bring your own car. */
+  carId: string | null;
+  /** Prize money for your first finish. */
+  prize: number;
+  createdAt: number;
+  endsAt: number;
+}
+
+export interface LimitedEventWithBoard extends LimitedEvent {
+  board: Array<{ name: string; timeMs: number }>;
 }

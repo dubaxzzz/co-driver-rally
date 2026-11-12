@@ -10,6 +10,8 @@ import {
   repairCost,
   vehicleById,
   type DailyChallenge,
+  type LimitedEvent,
+  type LimitedEventWithBoard,
   type RallyConfig,
   type TeamId,
 } from '@cdr/shared';
@@ -318,4 +320,104 @@ export function dailyScreen(nav: Nav): Screen {
     }
   })();
   return { el, dispose: () => (disposed = true) };
+}
+
+// ------------------------------------------------------------------ limited-time events
+const apiBase = () => import.meta.env.VITE_SERVER_URL || '';
+
+/** Active limited-time events (with their leaderboards). Empty when offline. */
+export async function fetchLimited(): Promise<LimitedEventWithBoard[]> {
+  try {
+    const res = await fetch(`${apiBase()}/api/limited`);
+    const data = (await res.json()) as { events: LimitedEventWithBoard[] };
+    return data.events.filter((e) => e.endsAt > Date.now());
+  } catch {
+    return [];
+  }
+}
+
+/** POSTs to the admin API with the admin code. */
+export async function adminCall<T = { ok: boolean }>(path: string, code: string, body: object = {}): Promise<T & { ok: boolean; message?: string }> {
+  try {
+    const res = await fetch(`${apiBase()}/api/admin/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, ...body }),
+    });
+    return (await res.json()) as T & { ok: boolean; message?: string };
+  } catch {
+    return { ok: false, message: 'Could not reach the server.' } as T & { ok: boolean; message?: string };
+  }
+}
+
+export function timeLeft(endsAt: number): string {
+  const ms = Math.max(0, endsAt - Date.now());
+  const m = Math.floor(ms / 60000);
+  const d = Math.floor(m / 1440), hr = Math.floor((m % 1440) / 60), mi = m % 60;
+  if (ms <= 0) return 'Ended';
+  if (d) return `${d}d ${hr}h left`;
+  if (hr) return `${hr}h ${mi}m left`;
+  return `${Math.max(1, mi)}m ${Math.floor((ms % 60000) / 1000)}s left`;
+}
+
+export function startLimited(nav: Nav, ev: LimitedEvent) {
+  const stage = getStage(ev.stageId)!;
+  eventCtx.set({ kind: 'limited', id: ev.id, name: ev.name, carId: ev.carId, prize: ev.prize });
+  void launch(nav, { stageId: ev.stageId, weather: ev.weather, aiCount: 0, aiSkill: 'medium', limited: ev.id }, `${ev.name} – ${stage.def.name}`);
+}
+
+export function limitedScreen(nav: Nav): Screen {
+  const body = h('div', { class: 'champ-wrap' }, h('div', { class: 'panel' }, 'Loading events…'));
+  const el = h('div', { class: 'screen' }, header(nav, 'Limited events'), body);
+  let disposed = false;
+  const timers: HTMLElement[] = [];
+  const myName = () => settings.get().playerName.trim() || 'Driver';
+
+  const show = (events: LimitedEventWithBoard[]) => {
+    if (disposed) return;
+    timers.length = 0;
+    if (!events.length) {
+      body.replaceChildren(h('div', { class: 'panel' }, h('div', { class: 'panel-title' }, 'No limited events right now'), h('p', { class: 'setup-desc' }, 'Limited-time events appear here when they are on. Check back soon!')));
+      return;
+    }
+    body.replaceChildren(
+      h('div', { class: 'limited-grid' },
+        ...events.map((ev) => {
+          const stage = getStage(ev.stageId)!;
+          const left = h('span', { class: 'limited-left' }, timeLeft(ev.endsAt));
+          left.dataset.ends = String(ev.endsAt);
+          timers.push(left);
+          const done = career.limitedDone(ev.id);
+          const go = h('button', { class: 'btn primary big', 'data-testid': `limited-go-${ev.id}` }, done ? 'Drive it again' : 'Enter the event');
+          go.onclick = () => startLimited(nav, ev);
+          const board = h('div', { class: 'leaderboard' }, h('div', { class: 'panel-title' }, 'Leaderboard'));
+          if (!ev.board.length) board.append(h('div', { class: 'setup-desc' }, 'No times yet – be the first!'));
+          ev.board.slice(0, 8).forEach((r, i) =>
+            board.append(h('div', { class: `lb-row ${r.name === myName() ? 'you' : ''}` }, h('span', { class: 'pos' }, String(i + 1)), h('span', { class: 'who' }, r.name), h('span', { class: 't' }, formatTime(r.timeMs)))),
+          );
+          return h('div', { class: 'panel limited-card' },
+            h('div', { class: 'limited-top' }, h('span', { class: 'limited-badge' }, 'LIMITED'), left),
+            h('div', { class: 'stage-name', style: 'font-size:26px' }, ev.name),
+            h('div', { class: 'stage-meta' }, `${stage.def.name} · ${stage.def.location} · ${((stage.finishDistance - stage.startDistance) / 1000).toFixed(1)} km · ${WEATHER[ev.weather].name}`),
+            h('div', { class: 'setup-desc' }, ev.carId ? `Everyone drives a stock ${vehicleById(ev.carId).name} (loan car).` : 'Bring your own car – upgrades count.'),
+            h('div', { class: 'prize-line' }, h('span', {}, done ? 'Prize (collected)' : 'Prize for finishing'), h('span', {}, `+${money(ev.prize)}`)),
+            go,
+            board,
+          );
+        }),
+      ),
+    );
+  };
+  const load = async () => show(await fetchLimited());
+  void load();
+  const tick = setInterval(() => timers.forEach((t) => (t.textContent = timeLeft(Number(t.dataset.ends)))), 1000);
+  const reload = setInterval(() => void load(), 20000);
+  return {
+    el,
+    dispose: () => {
+      disposed = true;
+      clearInterval(tick);
+      clearInterval(reload);
+    },
+  };
 }

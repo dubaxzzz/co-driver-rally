@@ -96,6 +96,36 @@ export const career = {
     commit();
     return { ok: true };
   },
+  /** Admin panel: every car in the dealership, for free. */
+  adminGiveAllCars(): number {
+    const owned = { ...save.owned };
+    let added = 0;
+    for (const v of VEHICLES) if (!owned[v.id]) (owned[v.id] = noUpgrades(), added++);
+    save = { ...save, owned };
+    commit();
+    return added;
+  },
+  /** Admin panel: free money. */
+  adminAddMoney(amount: number) {
+    save = { ...save, money: save.money + Math.round(amount) };
+    commit();
+  },
+  /** Limited events pay their prize once per event. */
+  limitedDone(id: string): boolean {
+    try {
+      return (JSON.parse(localStorage.getItem('cdr.limitedDone') ?? '[]') as string[]).includes(id);
+    } catch {
+      return false;
+    }
+  },
+  markLimitedDone(id: string) {
+    try {
+      const list = JSON.parse(localStorage.getItem('cdr.limitedDone') ?? '[]') as string[];
+      localStorage.setItem('cdr.limitedDone', JSON.stringify([...list.slice(-50), id]));
+    } catch {
+      /* ignore */
+    }
+  },
   nextUpgradeCost(carId: string, kind: UpgradeKind): number | null {
     const level = career.upgrades(carId)[kind];
     if (level >= MAX_UPGRADE_LEVEL) return null;

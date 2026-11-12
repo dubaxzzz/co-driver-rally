@@ -55,11 +55,13 @@ check(created2.ok && created2.data.room.code !== code, 'second room gets a diffe
 
 // lobby configuration (stage / weather / AI) – on the second room
 const cfg = await call<{ stageId: string; weather: string; aiCount: number }>((a) => driver2.emit('room:configure', { stageId: 'snow-varmland', weather: 'snow', aiCount: 2 }, a as never));
-check(cfg.ok && cfg.data.stageId === 'snow-varmland' && cfg.data.weather === 'snow' && cfg.data.aiCount === 2, 'driver can choose stage, weather and AI opponents');
+check(cfg.ok && cfg.data.stageId === 'snow-varmland' && cfg.data.weather === 'snow' && cfg.data.aiCount === 0, 'driver can choose stage and weather – no AI outside the championship');
 const badCfg = await call((a) => driver2.emit('room:configure', { stageId: 'nope' }, a as never));
 check(!badCfg.ok && !badCfg.ok && badCfg.code === 'BAD_PAYLOAD', 'unknown stage rejected');
 const badAi = await call((a) => driver2.emit('room:configure', { aiCount: 9 }, a as never));
 check(!badAi.ok, 'too many AI opponents rejected');
+const champRoom = await call<JoinResult>((a) => driver2.emit('room:create', { config: { soloEvent: true, aiCount: 3, aiSkill: 'hard' } }, a));
+check(champRoom.ok && champRoom.data.room.race.aiCount === 3, 'championship rounds keep their AI rivals');
 const created3 = await call<JoinResult>((a) => driver2.emit('room:create', { config: { stageId: 'tarmac-turini', weather: 'dusk' } }, a));
 check(created3.ok && created3.data.room.race.stageId === 'tarmac-turini' && created3.data.room.race.weather === 'dusk', 'room can be created with a chosen stage and weather');
 

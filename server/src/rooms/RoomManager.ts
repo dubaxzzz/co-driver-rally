@@ -10,11 +10,14 @@ import {
   type RelayedTelemetry,
   type Role,
   type RoomSnapshot,
+  RaceController,
+  ROOM_CODE_ALPHABET,
+  ROOM_CODE_LENGTH,
+  type RaceEvents,
 } from '@cdr/shared';
 import { config } from '../config';
 import { createSeat, seatInfo, type Seat } from '../players/sessions';
-import { RaceController, type RaceEvents } from '../race/RaceController';
-import { generateRoomCode } from './codes';
+import { randomInt } from 'node:crypto';
 
 export interface Room {
   code: string;
@@ -356,4 +359,14 @@ export class RoomManager {
       callLog: room.callLog,
     };
   }
+}
+
+/** Generates a 4-character code that is not currently in use. */
+function generateRoomCode(isTaken: (code: string) => boolean): string | null {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    let code = '';
+    for (let i = 0; i < ROOM_CODE_LENGTH; i++) code += ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)];
+    if (!isTaken(code)) return code;
+  }
+  return null; // code space exhausted (practically never with MAX_ROOMS)
 }

@@ -7,8 +7,11 @@ export default defineConfig(({ mode }) => {
   // Load the shared .env from the repository root.
   const env = loadEnv(mode, rootDir, '');
   const target = env.VITE_DEV_SERVER_TARGET || 'http://localhost:3001';
+  // Every deploy gets a new build id – the game wipes everyone's progress when it changes.
+  const buildId = mode === 'production' ? process.env.RENDER_GIT_COMMIT || String(Date.now()) : 'dev';
   return {
     envDir: rootDir,
+    define: { __BUILD_ID__: JSON.stringify(buildId) },
     base: '/',
     server: {
       host: true, // expose on LAN so a tablet can join

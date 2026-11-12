@@ -21,7 +21,7 @@ import {
 } from '@cdr/shared';
 import { config } from '../config';
 import { RoomManager, type Room } from '../rooms/RoomManager';
-import { dailyBoard } from '../daily/DailyBoard';
+import { dailyBoard, limitedEvents } from '../daily/DailyBoard';
 
 /** Daily Challenge: the server decides stage + weather (no AI) for today's date. */
 function applyDaily(cfg: Partial<RallyConfig>): Partial<RallyConfig> | string {
@@ -29,6 +29,20 @@ function applyDaily(cfg: Partial<RallyConfig>): Partial<RallyConfig> | string {
   if (cfg.daily !== dailyKey()) return 'That Daily Challenge has ended – a new one is up.';
   const dc = dailyChallenge(cfg.daily);
   return { ...cfg, stageId: dc.stageId, weather: dc.weather, aiCount: 0, soloEvent: true };
+}
+
+/** AI rivals only race in championship rounds (solo events that aren't the daily). */
+function onlyChampionshipAi<T extends Partial<RallyConfig>>(cfg: T, soloEvent: boolean): T {
+  if (!soloEvent || cfg.daily || cfg.limited) cfg.aiCount = 0;
+  return cfg;
+}
+
+/** Limited event: the server locks stage + weather to the event while it runs. */
+function applyLimited(cfg: Partial<RallyConfig>): Partial<RallyConfig> | string {
+  if (!cfg.limited) return cfg;
+  const ev = limitedEvents.active(cfg.limited);
+  if (!ev) return 'That limited event has ended.';
+  return { ...cfg, stageId: ev.stageId, weather: ev.weather, aiCount: 0, soloEvent: true, daily: undefined };
 }
 
 type IO = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -61,8 +75,9 @@ export function registerHandlers(io: IO) {
     },
     onFinished: (r) => {
       io.to(code).emit('race:finished', r);
-      const daily = rooms.get(code)?.race.state.daily;
-      if (daily) dailyBoard.add(daily, r.name, r.timeMs);
+      const st = rooms.get(code)?.race.state;
+      if (st?.daily) dailyBoard.add(st.daily, r.name, r.timeMs);
+      if (st?.limited) limitedEvents.addResult(st.limited, r.name, r.timeMs);
     },
   }));
 
@@ -100,8 +115,11 @@ export function registerHandlers(io: IO) {
       const name = sanitiseName(payload && (payload as { name?: unknown }).name, 'Driver');
       const raw = payload?.config === undefined ? {} : validateConfig(payload.config);
       if (!raw) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
-      const config = applyDaily(raw);
+      const dailied = applyDaily(raw);
+      if (typeof dailied === 'string') return ack(err('BAD_PAYLOAD', dailied));
+      const config = applyLimited(dailied);
       if (typeof config === 'string') return ack(err('BAD_PAYLOAD', config));
+      onlyChampionshipAi(config, !!config.soloEvent);
       leaveCurrent();
       const res = rooms.createRoom(socket.id, name, config);
       if (res.ok) {
@@ -220,8 +238,14 @@ export function registerHandlers(io: IO) {
       if (!raw) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));
       delete raw.soloEvent; // fixed when the room is created
       // a daily room stays locked to today's challenge
-      const cfg = applyDaily(ctx.room.race.state.daily ? { ...raw, daily: ctx.room.race.state.daily } : raw);
+      delete raw.limited;
+      const st = ctx.room.race.state;
+      const cfg0 = applyDaily(st.daily ? { ...raw, daily: st.daily } : raw);
+      if (typeof cfg0 === 'string') return ack(err('BAD_PAYLOAD', cfg0));
+      // a limited-event room stays locked to its event
+      const cfg = applyLimited(st.limited ? { ...cfg0, limited: st.limited } : cfg0);
       if (typeof cfg === 'string') return ack(err('BAD_PAYLOAD', cfg));
+      onlyChampionshipAi(cfg, !!ctx.room.race.state.soloEvent);
       ack({ ok: true, data: ctx.room.race.configure(cfg) });
     });
     socket.on('race:start', (ack) => raceAction('start', ack));

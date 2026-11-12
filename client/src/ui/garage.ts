@@ -47,7 +47,10 @@ export function garageScreen(back: () => void): { el: HTMLElement; dispose: () =
       car.dispose();
     }
     const sel = garageStore.resolve();
-    car = createCarModel(sel.paint, sel.wheel, def.body);
+    // cars you don't own yet are shown in their factory livery
+    const sp = def.body.sponsor;
+    const paint = tab === 'dealer' && !career.owns(def.id) && sp ? { id: 'factory', name: 'Factory', body: parseInt(sp[1].slice(1), 16), accent: parseInt(sp[2].slice(1), 16) } : sel.paint;
+    car = createCarModel(paint, sel.wheel, def.body);
     car.wheels.forEach((w) => (w.position.y = -0.12 - 0.22));
     car.root.traverse((o) => ((o as THREE.Mesh).castShadow = true));
     scene.add(car.root);
@@ -125,6 +128,10 @@ export function garageScreen(back: () => void): { el: HTMLElement; dispose: () =
     const save = career.get();
     moneyEl.textContent = money(save.money);
     tabsEl.querySelectorAll('button').forEach((b, i) => b.classList.toggle('sel', tabs[i][0] === tab));
+    // keep the list where it was (the dealership is long)
+    const scrollers = [body, body.parentElement, body.parentElement?.parentElement].filter((e): e is HTMLElement => !!e);
+    const scrolls = scrollers.map((e) => e.scrollTop);
+    requestAnimationFrame(() => scrollers.forEach((e, i) => (e.scrollTop = scrolls[i])));
     body.innerHTML = '';
     const def = vehicleById(previewId);
     showCar(def);
@@ -145,7 +152,8 @@ export function garageScreen(back: () => void): { el: HTMLElement; dispose: () =
       body.append(h('div', { class: 'panel-title', style: 'margin-top:18px' }, `${def.name} – stats`), statBlock(def, applyUpgrades(def, career.upgrades(def.id))));
       body.append(h('div', { class: 'setup-desc' }, `Stages driven: ${save.stats.stages} · Wins: ${save.stats.wins} · Total earned: ${money(save.stats.earned)}`));
     } else if (tab === 'dealer') {
-      body.append(h('div', { class: 'panel-title' }, 'Dealership'));
+      body.append(h('div', { class: 'panel-title' }, `${def.name} – stats`), statBlock(def));
+      body.append(h('div', { class: 'panel-title', style: 'margin-top:18px' }, `Dealership · ${VEHICLES.length} cars`));
       for (const v of VEHICLES) {
         const owned = career.owns(v.id);
         const buy = h('button', { class: 'btn primary', disabled: owned || save.money < v.price, 'data-testid': `buy-${v.id}` }, owned ? 'Owned' : save.money < v.price ? `Need ${money(v.price - save.money)}` : `Buy ${money(v.price)}`);
@@ -158,7 +166,6 @@ export function garageScreen(back: () => void): { el: HTMLElement; dispose: () =
         };
         body.append(carCard(v, [buy], previewId === v.id));
       }
-      body.append(h('div', { class: 'panel-title', style: 'margin-top:18px' }, `${def.name} – stats`), statBlock(def));
     } else if (tab === 'upgrades') {
       const active = vehicleById(save.active);
       const lv = career.upgrades(active.id);

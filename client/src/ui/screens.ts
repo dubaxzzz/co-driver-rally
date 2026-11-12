@@ -1,5 +1,4 @@
 import {
-  MAX_AI,
   ROOM_CODE_LENGTH,
   STAGE_DEFS,
   SURFACES,
@@ -13,8 +12,9 @@ import { net, type NetError } from '../multiplayer/NetClient';
 import { MapView } from '../navigator/MapView';
 import { formatTime, settings, type Settings } from '../settings';
 import { career, money } from '../career';
-import { bestKey, TEAMS, dailyChallenge, dailyKey, vehicleById, MEDAL_PAY, STARTING_MONEY } from '@cdr/shared';
+import { bestKey, TEAMS, VEHICLES, dailyChallenge, dailyKey, vehicleById, MEDAL_PAY, STARTING_MONEY } from '@cdr/shared';
 import { champ } from '../championship/state';
+import { adminCall, fetchLimited, timeLeft } from './events';
 import { h, screenHeader, toast } from './dom';
 
 export interface Screen {
@@ -103,6 +103,16 @@ export function menuScreen(nav: Nav): Screen {
     ),
   );
 
+  // a limited event on? show it first in the cards
+  void fetchLimited().then((evs) => {
+    if (!evs.length) return;
+    const ev = evs[0];
+    const c = card('LIMITED EVENT', ev.name, [h('div', { class: 'mm-card-m' }, `${getStage(ev.stageId)?.def.name ?? ''} · prize ${money(ev.prize)}`), h('div', { class: 'mm-card-m strong' }, evs.length > 1 ? `${timeLeft(ev.endsAt)} · +${evs.length - 1} more` : timeLeft(ev.endsAt))], 'limited', 0, 'menu-limited');
+    c.classList.add('limited');
+    el.querySelector('[data-testid=menu-car]')?.remove(); // keep three cards
+    el.querySelector('.mm-cards')?.prepend(c);
+  });
+
   // 3D backdrop loads after the menu is on screen (Three.js is a big download)
   let scene: { dispose(): void } | null = null;
   let disposed = false;
@@ -175,34 +185,14 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
     weatherRow.append(b);
   }
   const weatherDesc = h('div', { class: 'setup-desc' }, '');
-  const aiRow = h('div', { class: 'chip-row' });
-  const aiBtns: HTMLElement[] = [];
-  for (let n = 0; n <= MAX_AI; n++) {
-    const b = h('button', { class: 'chip-btn', 'data-testid': `ai-${n}` }, n === 0 ? 'None' : `${n} AI`);
-    b.onclick = () => choose({ aiCount: n });
-    aiBtns.push(b);
-    aiRow.append(b);
-  }
-  const skillRow = h('div', { class: 'chip-row' });
-  const skillBtns = new Map<string, HTMLElement>();
-  for (const sk of ['easy', 'medium', 'hard'] as const) {
-    const b = h('button', { class: 'chip-btn' }, sk[0].toUpperCase() + sk.slice(1));
-    b.onclick = () => choose({ aiSkill: sk });
-    skillBtns.set(sk, b);
-    skillRow.append(b);
-  }
-
   const showConfig = (c: RallyConfig) => {
     bestEls.forEach((el, id) => {
       const b = career.best(bestKey(id, c.weather));
       el.textContent = b === null ? '' : `Best (${WEATHER[c.weather].name}): ${formatTime(b)}`;
     });
-    current = { stageId: c.stageId, weather: c.weather, aiCount: c.aiCount, aiSkill: c.aiSkill };
+    current = { stageId: c.stageId, weather: c.weather, aiCount: 0, aiSkill: c.aiSkill };
     stageCards.forEach((el, id) => el.classList.toggle('sel', id === c.stageId));
     weatherBtns.forEach((el, id) => el.classList.toggle('sel', id === c.weather));
-    aiBtns.forEach((el, n) => el.classList.toggle('sel', n === c.aiCount));
-    skillBtns.forEach((el, id) => el.classList.toggle('sel', id === c.aiSkill));
-    skillRow.style.opacity = c.aiCount ? '1' : '0.35';
     weatherDesc.textContent = WEATHER[c.weather].description;
   };
   const choose = async (patch: Partial<RallyConfig>) => {
@@ -347,7 +337,7 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
           ? h('div', { class: 'panel lobby-card' },
               h('div', { class: 'panel-title' }, 'Quick stage'),
               h('div', { class: 'lobby-car' }, career.activeDef().name),
-              h('p', { class: 'setup-desc' }, 'Pick a stage, the weather and AI rivals, then go. Every finish earns prize money.'),
+              h('p', { class: 'setup-desc' }, 'Pick a stage and the weather, then go. Every finish earns prize money.'),
               startBtn,
             )
           : h('div', { class: 'panel lobby-card' },
@@ -368,10 +358,7 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
       (setupPanel.append(
         h('div', { class: 'panel-title' }, 'Stage'),
         stageGrid,
-        h('div', { class: 'setup-cols' },
-          h('div', {}, h('div', { class: 'panel-title' }, 'Weather'), weatherRow, weatherDesc),
-          h('div', {}, h('div', { class: 'panel-title' }, 'AI opponents'), aiRow, h('div', { style: 'height:8px' }), skillRow),
-        ),
+        h('div', {}, h('div', { class: 'panel-title' }, 'Weather'), weatherRow, weatherDesc),
       ), setupPanel),
     ),
   );
@@ -396,6 +383,12 @@ function dailySub() {
 export function playScreen(nav: Nav): Screen {
   const card = (k: string, title: string, desc: string, route: string, primary = false, id = '') =>
     h('button', { class: `play-card ${primary ? 'primary' : ''}`, onclick: () => nav.go(route), 'data-testid': id }, h('div', { class: 'k' }, k), h('div', { class: 't' }, title), h('div', { class: 'd' }, desc));
+  const limitedCard = card('LIMITED TIME', 'Limited events', 'Special events that only run for a while – each pays a prize for finishing.', 'limited', false, 'play-limited');
+  limitedCard.classList.add('limited');
+  void fetchLimited().then((evs) => {
+    const d = limitedCard.querySelector('.d');
+    if (d) d.textContent = evs.length ? `${evs.length} on now: ${evs.map((e) => `${e.name} (${timeLeft(e.endsAt)})`).join(' · ')}` : 'No limited events on right now – check back soon.';
+  });
   const el = h(
     'div',
     { class: 'screen' },
@@ -406,10 +399,11 @@ export function playScreen(nav: Nav): Screen {
       h('div', { class: 'play-row-title' }, 'Solo'),
       h(
         'div',
-        { class: 'play-grid' },
+        { class: 'play-grid four' },
         card('SOLO', 'Championship', champSub(), 'championship', true, 'play-championship'),
         card('SOLO', 'Daily challenge', dailySub(), 'daily', false, 'play-daily'),
-        card('SOLO', 'Quick stage', 'Any stage, any weather, up to 3 AI rivals. Prize money for every finish.', 'solo', false, 'play-solo'),
+        card('SOLO', 'Quick stage', 'Any stage, any weather, just you against the clock. Prize money for every finish.', 'solo', false, 'play-solo'),
+        limitedCard,
       ),
       h('div', { class: 'play-row-title' }, 'Multiplayer'),
       h(
@@ -554,6 +548,7 @@ export function settingsScreen(nav: Nav): Screen {
           row('Controls help', 'Key hints at the bottom of the driving screen', seg('showHelp', [[true, 'Show'], [false, 'Hide']])),
         ),
         section('Career', row('Reset career', `Bank ${money(career.get().money)} · ${Object.keys(career.get().owned).length} car(s). Starts again with ${money(STARTING_MONEY)} and the Kestrel R5.`, resetBtn)),
+        adminSection(nav, section, row),
         section('Controls',
           h('div', { class: 'keys' },
             keyRow('Drive', 'W / ↑ throttle · S / ↓ brake & reverse · A D / ← → steer'),
@@ -568,4 +563,126 @@ export function settingsScreen(nav: Nav): Screen {
     ),
   );
   return { el };
+}
+
+// ------------------------------------------------------------------ admin panel
+const ADMIN_KEY = 'cdr.admin';
+
+/** Settings → Admin: unlock with the admin code (checked by the server). */
+function adminSection(
+  nav: Nav,
+  section: (title: string, ...rows: HTMLElement[]) => HTMLElement,
+  row: (title: string, desc: string, control: HTMLElement) => HTMLElement,
+): HTMLElement {
+  const code = (() => {
+    try {
+      return sessionStorage.getItem(ADMIN_KEY);
+    } catch {
+      return null;
+    }
+  })();
+  if (!code) {
+    const input = h('input', { class: 'input', type: 'password', placeholder: 'Admin code', maxlength: 40, style: 'width:180px;font-size:16px', 'data-testid': 'admin-code' }) as HTMLInputElement;
+    const unlock = h('button', { class: 'btn', 'data-testid': 'admin-unlock' }, 'Unlock') as HTMLButtonElement;
+    const tryUnlock = async () => {
+      if (!input.value.trim()) return;
+      unlock.disabled = true;
+      const r = await adminCall('login', input.value.trim());
+      unlock.disabled = false;
+      if (!r.ok) return toast(r.message ?? 'Wrong admin code.', 'bad');
+      try {
+        sessionStorage.setItem(ADMIN_KEY, input.value.trim());
+      } catch {
+        /* ignore */
+      }
+      toast('Admin panel unlocked', 'ok');
+      nav.go('settings');
+    };
+    unlock.onclick = () => void tryUnlock();
+    input.addEventListener('keydown', (e) => e.key === 'Enter' && void tryUnlock());
+    return section('Admin', row('Admin code', 'Enter the admin code to open the admin panel', h('div', { class: 'admin-unlock' }, input, unlock)));
+  }
+
+  const cars = h('button', { class: 'btn primary', 'data-testid': 'admin-cars' }, 'Give me every car');
+  cars.onclick = () => {
+    const n = career.adminGiveAllCars();
+    toast(n ? `${n} cars added to your garage` : 'You already own every car', 'ok');
+    nav.go('settings');
+  };
+  const cash = h('button', { class: 'btn primary', 'data-testid': 'admin-money' }, '+ $1,000,000');
+  cash.onclick = () => {
+    career.adminAddMoney(1_000_000);
+    toast('$1,000,000 added', 'ok');
+    nav.go('settings');
+  };
+  const lock = h('button', { class: 'btn' }, 'Lock');
+  lock.onclick = () => {
+    try {
+      sessionStorage.removeItem(ADMIN_KEY);
+    } catch {
+      /* ignore */
+    }
+    nav.go('settings');
+  };
+
+  // ---- create a limited event ----
+  const sel = (opts: Array<[string, string]>, testid: string) => {
+    const s = h('select', { class: 'input admin-select', 'data-testid': testid }) as HTMLSelectElement;
+    for (const [v, l] of opts) s.append(h('option', { value: v }, l));
+    return s;
+  };
+  const name = h('input', { class: 'input', maxlength: 40, placeholder: 'Event name, e.g. Midnight Madness', 'data-testid': 'admin-ev-name' }) as HTMLInputElement;
+  const stageSel = sel(STAGE_DEFS.map((d) => [d.id, `${d.name} (${d.location})`]), 'admin-ev-stage');
+  const weatherSel = sel(WEATHER_IDS.map((w) => [w, WEATHER[w].name]), 'admin-ev-weather');
+  const carSel = sel([['', 'Players bring their own car'], ...VEHICLES.map((v): [string, string] => [v.id, `Loan car: ${v.name}`])], 'admin-ev-car');
+  const hoursSel = sel([['1', '1 hour'], ['3', '3 hours'], ['6', '6 hours'], ['24', '1 day'], ['72', '3 days'], ['168', '1 week']], 'admin-ev-hours');
+  hoursSel.value = '24';
+  const prize = h('input', { class: 'input', type: 'number', min: 0, max: 10000000, step: 1000, value: '25000', 'data-testid': 'admin-ev-prize' }) as HTMLInputElement;
+  stageSel.onchange = () => (weatherSel.value = STAGE_DEFS.find((d) => d.id === stageSel.value)?.defaultWeather ?? 'clear');
+  stageSel.onchange(new Event('change'));
+  const create = h('button', { class: 'btn primary', 'data-testid': 'admin-ev-create' }, 'Create event') as HTMLButtonElement;
+  const list = h('div', { class: 'admin-events' });
+  const field = (label: string, control: HTMLElement) => h('label', { class: 'admin-field' }, h('span', {}, label), control);
+  const refresh = async () => {
+    const evs = await fetchLimited();
+    list.replaceChildren(...(evs.length ? [] : [h('div', { class: 'desc' }, 'No limited events running.')]));
+    for (const ev of evs) {
+      const del = h('button', { class: 'btn danger' }, 'End now');
+      del.onclick = async () => {
+        const r = await adminCall('events/delete', code, { id: ev.id });
+        toast(r.ok ? `${ev.name} ended` : r.message ?? 'Could not end it', r.ok ? 'ok' : 'bad');
+        void refresh();
+      };
+      list.append(h('div', { class: 'admin-ev' }, h('div', {}, h('b', {}, ev.name), h('div', { class: 'desc' }, `${getStage(ev.stageId)?.def.name} · ${WEATHER[ev.weather].name} · ${ev.carId ? vehicleById(ev.carId).name : 'own car'} · ${money(ev.prize)} · ${timeLeft(ev.endsAt)} · ${ev.board.length} driver(s)`)), del));
+    }
+  };
+  create.onclick = async () => {
+    if (!name.value.trim()) return toast('Give the event a name', 'bad');
+    create.disabled = true;
+    const r = await adminCall('events', code, {
+      event: { name: name.value.trim(), stageId: stageSel.value, weather: weatherSel.value, carId: carSel.value || null, prize: Math.max(0, Number(prize.value) || 0), hours: Number(hoursSel.value) },
+    });
+    create.disabled = false;
+    if (!r.ok) return toast(r.message ?? 'Could not create the event', 'bad');
+    toast(`${name.value.trim()} is live for everyone!`, 'ok');
+    name.value = '';
+    void refresh();
+  };
+  void refresh();
+
+  return section('Admin',
+    row('Garage', 'Unlock every car in the dealership', cars),
+    row('Money', 'Add a million dollars to your bank', cash),
+    h('div', { class: 'admin-create' },
+      h('div', { class: 'setting-title' }, 'Create a limited event'),
+      h('div', { class: 'desc' }, 'Everyone sees it on their menu until it ends, with its own leaderboard and a prize for finishing.'),
+      h('div', { class: 'admin-form' },
+        field('Name', name), field('Stage', stageSel), field('Weather', weatherSel), field('Car', carSel), field('Runs for', hoursSel), field('Prize ($)', prize),
+      ),
+      create,
+    ),
+    h('div', { class: 'setting-title', style: 'margin-top:14px' }, 'Running events'),
+    list,
+    row('Admin mode', 'Lock the panel again on this device', lock),
+  );
 }

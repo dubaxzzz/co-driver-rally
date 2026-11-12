@@ -31,6 +31,6 @@ check(upgradeCost(kestrel, 'engine', 3) > upgradeCost(kestrel, 'engine', 2) && u
 const maxed = applyUpgrades(kestrel, { engine: 3, gearbox: 3, tyres: 3, suspension: 3, brakes: 3, armour: 3 });
 check(maxed.enginePowerN > kestrel.enginePowerN * 1.2 && maxed.grip > kestrel.grip && maxed.brakeForce > kestrel.brakeForce && maxed.armour > kestrel.armour && maxed.shiftTime < kestrel.shiftTime, 'upgrades improve power, grip, brakes, armour and shift time');
 check(JSON.stringify(applyUpgrades(kestrel, noUpgrades())) === JSON.stringify(kestrel), 'no upgrades = stock car');
-check(VEHICLES.filter((v) => v.price === 0).length === 1 && VEHICLES.length === 5, 'five cars, one free starter');
+check(VEHICLES.filter((v) => v.price === 0).length === 1 && VEHICLES.length === 25, '25 cars, one free starter');
 
 if (failures) process.exit(1);

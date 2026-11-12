@@ -42,13 +42,13 @@ import { FirstPersonCamera } from './camera/FirstPersonCamera';
 import { Input } from './input/Input';
 import { loadRapier, PhysicsWorld } from './physics/PhysicsWorld';
 import { RaceClient } from './race/RaceClient';
-import { createCarModel } from './vehicle/CarModel';
+import { bakeCarModel, createCarModel } from './vehicle/CarModel';
 import { Cockpit } from './vehicle/Cockpit';
 import { DAMAGE_KEYS, Vehicle } from './vehicle/Vehicle';
 import type { AIDriver as AIDriverT } from './ai/AIDriver';
 import { buildStageWorld, type StageWorld } from './world/StageWorld';
 
-export type GameExit = 'menu' | 'lobby' | 'service' | 'daily';
+export type GameExit = 'menu' | 'lobby' | 'service' | 'daily' | 'limited';
 
 /**
  * The driver's game: owns the renderer, physics world, vehicle, stage and
@@ -148,6 +148,8 @@ export class Game {
         if (team.carId) sel.paint = { id: team.id, name: team.name, body: team.colour, accent: team.accent };
       } else if (ctx.kind === 'daily') {
         sel.vehicle = vehicleById(ctx.carId); // loan car, stock – same for everyone
+      } else if (ctx.kind === 'limited' && ctx.carId) {
+        sel.vehicle = vehicleById(ctx.carId); // the event's loan car, stock
       }
       const model = createCarModel(sel.paint, sel.wheel, sel.vehicle.body);
       this.scene.add(model.root);
@@ -180,6 +182,7 @@ export class Game {
         const champEntrant = entrant ? FIELD.find((f) => f.id === entrant.entrantId) : undefined;
         const bodyCar = champEntrant ? vehicleById(TEAMS[champEntrant.team].carId ?? VEHICLES[(i + 1) % VEHICLES.length].id) : VEHICLES[(i + 1) % VEHICLES.length];
         const aiModel = createCarModel(crew.paint, WHEELS[0], bodyCar.body);
+        bakeCarModel(aiModel); // merged into a few meshes – rivals used to cost hundreds of draw calls each
         this.scene.add(aiModel.root);
         const skill = entrant?.skill ?? room?.race.aiSkill ?? 'medium';
         const driver = new AIDriver(this.physics, stage, crew.name, aiModel, skill, aiGridOffset(i, driverCount), this.weather);
@@ -536,6 +539,7 @@ export class Game {
     this.hud.center('FINISH');
     if (this.ctx.kind === 'championship') return this.finishChampionship(r);
     if (this.ctx.kind === 'daily') return this.finishDaily(r, this.ctx.date);
+    if (this.ctx.kind === 'limited') return this.finishLimited(r, this.ctx);
 
     // ---- prize money + personal best ----
     const state = this.raceState!;
@@ -719,6 +723,34 @@ export class Game {
     }, 1200);
   }
 
+  private finishLimited(r: RaceResult, ev: { id: string; name: string; prize: number }) {
+    const first = !career.limitedDone(ev.id);
+    if (first) {
+      career.markLimitedDone(ev.id);
+      if (ev.prize > 0) career.credit(`limited:${ev.id}`, ev.prize, false);
+    }
+    this.prize = { runId: this.raceState?.runId ?? 0, total: first ? ev.prize : 0 };
+    const extra = h(
+      'div',
+      { class: 'rewards', 'data-testid': 'rewards' },
+      h('div', { class: 'new-record' }, ev.name.toUpperCase()),
+      h('div', { class: 'panel-title', style: 'margin:14px 0 6px' }, 'Prize money'),
+      h('div', { class: 'prize-line' }, h('span', {}, first ? 'Event finished' : 'Prize already collected'), h('span', {}, `+${money(first ? ev.prize : 0)}`)),
+      h('div', { class: 'prize-line' }, h('span', {}, 'Balance'), h('span', {}, money(career.get().money))),
+      h('div', { class: 'sub' }, 'Your time is on the event leaderboard.'),
+    );
+    setTimeout(() => {
+      if (this.disposed || this.raceState?.phase !== 'finished') return;
+      this.showOverlay(
+        resultsOverlay(r, this.stage, [
+          { label: 'Try again', primary: true, onClick: () => this.restart() },
+          { label: 'Event leaderboard', onClick: () => void this.leaveTo('limited') },
+          { label: 'Main menu', onClick: () => this.leave() },
+        ], undefined, extra),
+      );
+    }, 1200);
+  }
+
   private async leaveTo(to: GameExit) {
     this.closeOverlay();
     await net.leave().catch(() => undefined);
@@ -770,7 +802,7 @@ export class Game {
           this.ctx.kind === 'quick' && net.isHost ? h('button', { class: 'btn', onclick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) }, 'Back to lobby') : null,
           champRound
             ? h('button', { class: 'btn danger', onclick: () => this.retire() }, 'Retire from round (0 pts)')
-            : h('button', { class: 'btn danger', onclick: () => void (this.ctx.kind === 'daily' ? this.leaveTo('daily') : this.leave()) }, 'Quit rally'),
+            : h('button', { class: 'btn danger', onclick: () => void (this.ctx.kind === 'daily' ? this.leaveTo('daily') : this.ctx.kind === 'limited' ? this.leaveTo('limited') : this.leave()) }, 'Quit rally'),
         ),
       ),
     );
@@ -832,6 +864,9 @@ export class Game {
     for (const a of this.ai) {
       a.afterStep();
       a.vehicle.syncVisuals(alpha);
+      // rivals far away (hidden by night/fog anyway) aren't drawn at all
+      const ap = a.vehicle.model.root.position;
+      a.vehicle.model.root.visible = Math.abs(ap.x - p0.x) + Math.abs(ap.z - p0.z) < 400;
     }
     v.model.setHeadlightDamage(v.damage.front);
     for (const r of this.remotes.values()) {
