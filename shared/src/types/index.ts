@@ -140,6 +140,9 @@ export interface TelemetryPacket {
   /** Car systems (co-driver jobs) bitmask and coolant temperature (°C) – see switches.ts. */
   sys?: number;
   tmp?: number;
+  /** Tyre wear 0..100 % and spare fuses left (only the co-driver's panel shows these). */
+  tw?: number;
+  fsp?: number;
   /** What the car looks like for other players: [vehicle index, body colour, accent colour]. */
   look?: number[];
   /** Prize the driver earned this run (sent after the finish so the navigator gets their share). */

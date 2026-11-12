@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
-import { SURFACES, type SurfaceDef, type VehicleDef, type WheelOption } from '@cdr/shared';
+import { SURFACES, tyreWearStep, wornGrip, type SurfaceDef, type VehicleDef, type WheelOption } from '@cdr/shared';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 import type { DriveInput } from '../input/Input';
 import { WHEEL_LAYOUT, type CarModel } from './CarModel';
@@ -84,6 +84,10 @@ export class Vehicle {
   flooded = false;
   /** Weather grip multiplier (rain, snow…). */
   weatherGrip = 1;
+  /** 0..1: how far the rear tyres have let go (over the grip limit = oversteer). */
+  rearLoose = 0;
+  /** 0..1 how worn the tyres are (new each stage; costs grip as it goes up). */
+  tyreWear = 0;
   /** Name of the surface most wheels are on (for sound/HUD). */
   surfaceName: SurfaceDef = SURFACES.gravel;
   /** Collider handles considered "road" (gravel). Others = grass/verge. */
@@ -309,6 +313,32 @@ export class Vehicle {
     c.setWheelSteering(0, steerAngle);
     c.setWheelSteering(1, steerAngle);
 
+    // --- Over the limit: the rear lets go (oversteer) ---
+    // Grip you can use = surface × weather (rain, wet zones) × tyre pressures × the car's tyres.
+    // Asking for more cornering than that (too fast, too much steering, power on in the
+    // wet) makes the back step out. Below the limit the car stays planted; steer into
+    // the slide (or lift) and the rear bites again.
+    {
+      const roadSurf = this.inWater ? SURFACES.water : this.roadSurface;
+      const avail = 18 * roadSurf.grip * this.weatherGrip * this.sysGrip(roadSurf.id) * wornGrip(this.tyreWear) * (this.def.grip / 2.05) * (1 + Math.max(0, absSpeed - 20) * 0.02); // downforce helps at speed
+      const upV = new THREE.Vector3(0, 1, 0).applyQuaternion(this.tmpQ);
+      const av0 = this.body.angvel();
+      const yawRate = av0.x * upV.x + av0.y * upV.y + av0.z * upV.z;
+      const asked = (speed * speed * Math.abs(Math.tan(steerAngle))) / 2.5; // what the steering asks for (m/s²)
+      // (judged on what the driver asks for, so a slide doesn't feed itself)
+      let demand = asked;
+      // power oversteer: lots of throttle while turning uses up rear grip (worse when wet)
+      if (absSpeed > 8 && Math.abs(steerAngle) > 0.05) demand += throttle * (1.2 + 4 * (1 - this.weatherGrip)) * (1 - def.frontDriveShare);
+      let over = absSpeed > 13 && !handbrake ? THREE.MathUtils.clamp((demand - avail) / avail, 0, 1) : 0;
+      // a big slide scrubs speed and the rear finds grip again – a slide, not an endless spin
+      const beta = Math.atan2(Math.abs(lateral), Math.max(1, absSpeed));
+      over *= THREE.MathUtils.clamp(1 - (beta - 0.25) / 0.2, 0, 1);
+      // it builds up over a moment (a quick tap won't do it); counter-steering (front wheels pointing out of the slide) catches it quicker
+      const catching = steerAngle * yawRate < 0 && Math.abs(yawRate) > 0.2;
+      if (over > this.rearLoose) this.rearLoose = Math.min(over, this.rearLoose + dt * 1.2);
+      else this.rearLoose = Math.max(over, this.rearLoose - dt * (catching || beta > 0.35 ? 5 : 1.6));
+    }
+
     // --- Tyre grip: gravel vs verge, handbrake slides the rear ---
     let onGravel = 0;
     let grounded = 0;
@@ -321,13 +351,14 @@ export class Vehicle {
       const rearWheel = i >= 2;
       const surf = this.inWater ? SURFACES.water : isRoad ? this.roadSurface : this.offroadSurface;
       wheelSurfaces[i] = surf;
-      let grip = this.gripBase * surf.grip * this.weatherGrip * this.sysGrip(surf.id) * (rearWheel ? CHASSIS.rearGripBias : 1);
+      let grip = this.gripBase * surf.grip * this.weatherGrip * this.sysGrip(surf.id) * wornGrip(this.tyreWear) * (rearWheel ? CHASSIS.rearGripBias : 1);
       if (rearWheel && handbrake) grip *= 0.45;
+      if (rearWheel) grip *= 1 - 0.3 * this.rearLoose;
       // deep water lifts the car: the tyres barely touch the river bed
       if (this.inWater) grip *= Math.max(0.05, 1 - this.submerged * 1.1);
       c.setWheelFrictionSlip(i, grip);
       const side = (rearWheel ? CHASSIS.sideFrictionRear : CHASSIS.sideFrictionFront) * (this.inWater ? Math.max(0.05, 1 - this.submerged * 1.1) : 1);
-      c.setWheelSideFrictionStiffness(i, rearWheel && handbrake ? side * 0.55 : side);
+      c.setWheelSideFrictionStiffness(i, rearWheel && handbrake ? side * 0.55 : rearWheel ? side * (1 - 0.62 * this.rearLoose) : side);
     }
 
     // Safety: when the car is tipped well over, the wheels must not keep pushing
@@ -390,6 +421,18 @@ export class Vehicle {
     this.body.addTorque({ x: fwd.x * tq, y: fwd.y * tq, z: fwd.z * tq }, true);
     // Yaw damping: resists the car rotating faster than its steering asks for
     // (stops small steering inputs turning into spins; the handbrake bypasses it).
+    // Past ~20° of slide the rear tyres bite again (unless the handbrake is on), so
+    // an over-driven corner is a big slide you can catch – not an endless spin.
+    {
+      const beta = Math.atan2(Math.abs(lateral), Math.max(1, absSpeed));
+      const bite = handbrake || absSpeed < 6 ? 0 : THREE.MathUtils.clamp((beta - 0.35) / 0.35, 0, 1);
+      if (bite > 0) {
+        const yawRate = av.x * up.x + av.y * up.y + av.z * up.z;
+        const expected = (speed * Math.tan(steerAngle)) / 2.5;
+        const yq = -(yawRate - expected) * 2600 * bite * (def.massKg / 1200);
+        this.body.addTorque({ x: up.x * yq, y: up.y * yq, z: up.z * yq }, true);
+      }
+    }
     if (CHASSIS.yawDamping > 0 && !handbrake) {
       const yawRate = av.x * up.x + av.y * up.y + av.z * up.z;
       const expected = absSpeed > 1 ? (speed * Math.tan(steerAngle)) / 2.5 : 0; // kinematic bicycle model
@@ -454,6 +497,11 @@ export class Vehicle {
     t.speed = speed;
     t.gear = this.gear;
     t.slip = Math.min(1.5, Math.abs(lateral) / Math.max(4, absSpeed * 0.5) + (handbrake && absSpeed > 3 ? 0.3 : 0));
+    // tyres wear with distance, and much faster when sliding or spinning them up
+    if (grounded >= 2 && !this.frozen && !this.inWater) {
+      const surfId = this.surfaceName.id;
+      this.tyreWear = Math.min(1, this.tyreWear + tyreWearStep(dt, { speed, slip: t.slip, loose: this.rearLoose, handbrake, surface: surfId, pressureGrip: this.sysGrip(surfId) }));
+    }
     t.grounded = grounded >= 2;
     t.onGravel = onGravel >= 2;
     t.throttle = input.throttle;

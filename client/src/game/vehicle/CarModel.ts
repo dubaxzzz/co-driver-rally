@@ -944,3 +944,21 @@ export function mergeByMaterial(root: THREE.Object3D, made: THREE.BufferGeometry
     root.add(mesh);
   }
 }
+
+/**
+ * Turns the front wheels with the steering and rolls all four with the speed –
+ * for cars that aren't simulated here (other players, the car a co-driver or
+ * spectator is watching), so they look like they're really being driven.
+ * steer: -1..1 (positive = left), speed in m/s.
+ */
+export function rollWheels(model: CarModel, steer: number, speed: number, dt: number, maxSteerRad = 0.55) {
+  const w = model.wheels;
+  if (w.length < 4) return;
+  const target = steer * maxSteerRad;
+  for (let i = 0; i < 4; i++) {
+    const g = w[i];
+    if (i < 2) g.rotation.y += (target - g.rotation.y) * Math.min(1, dt * 12);
+    const spin = g.children[0];
+    if (spin) spin.rotation.x = (spin.rotation.x + (speed / WHEEL_LAYOUT.radius) * dt) % (Math.PI * 2);
+  }
+}

@@ -173,6 +173,7 @@ export const champ = {
     onTrack: Array<{ entrantId: string; timeMs: number | null }>,
     damage: { zones: number[]; wheels: number[] },
     resets: number,
+    extras: PrizeLine[] = [],
   ): RoundSummary | null {
     if (!save || save.round >= save.schedule.length) return null;
     const s = save;
@@ -227,6 +228,7 @@ export const champ = {
             wheels: damage.wheels,
             resets,
             includeRepairs: false,
+            extras,
           });
     if (team.salary) {
       prize.lines.push({ label: `${team.name} salary`, amount: team.salary });

@@ -44,6 +44,9 @@ import { applySharedSwitch, decodeSwitches, defaultSwitches,
   systemsPower,
   systemsGrip,
   FUSES,
+  SPARE_FUSES,
+  FUSE_COST,
+  TYRE_SET_COST,
   type CarSystems, encodeSwitches, SHARED_SWITCHES, type CarSwitches, type SharedSwitch } from '@cdr/shared';
 import { CockpitPicker } from './vehicle/CockpitPicker';
 import type { ControlId } from './vehicle/Controls';
@@ -109,6 +112,7 @@ export class Game {
   private sw: CarSwitches = defaultSwitches();
   /** Co-driver jobs: radiator flaps, anti-lag, engine map, tyre pressures, fuses, temperature. */
   private sys: CarSystems = defaultSystems();
+  private fuseSpares = SPARE_FUSES;
   private fuseAt = -1; // stage distance where a fuse will blow this run (-1 = none)
   private fuseBlownFor = 0;
   private held = new Set<ControlId>();
@@ -255,16 +259,14 @@ export class Game {
         else if (e.key === 'map') s.map = e.value;
         else if (e.key === 'tyres') s.tyres = e.value;
         else if (e.key === 'fuse') {
-          if (s.fuse === e.value) {
-            s.fuse = -1;
-            this.hud.warn(`${e.from.toUpperCase()} REPLACED THE ${FUSES[e.value]} FUSE`, 2);
-            audio.click();
-            return;
-          }
+          // the co-driver fits a spare – if there's one left (each costs money)
+          if (s.fuse !== e.value || this.fuseSpares <= 0) return;
+          s.fuse = -1;
+          this.fuseSpares--;
         }
+        // Only the co-driver can see the car's systems (the panel on their side of
+        // the dash) – the driver gets no read-out, just a quiet click.
         audio.click();
-        const label = e.key === 'map' ? `MAP ${['ECO', 'NORMAL', 'ATTACK'][s.map]}` : e.key === 'tyres' ? `TYRES ${['LOW', 'MID', 'HIGH'][s.tyres]}` : e.key === 'flaps' ? `RADIATOR ${s.flaps ? 'OPEN' : 'SHUT'}` : e.key === 'als' ? `ANTI-LAG ${s.als ? 'ON' : 'OFF'}` : '';
-        if (label) this.hud.warn(`${e.from.toUpperCase()}: ${label}`, 1.2);
       }),
       net.on('switch', (e) => {
         if (import.meta.env.DEV) console.debug('[switch]', e.id, e.down, e.from);
@@ -347,6 +349,8 @@ export class Game {
     this.floodTimer = 0;
     this.drownShown = false;
     this.vehicle.resetDamage();
+    this.vehicle.tyreWear = 0; // fresh tyres for every stage
+    this.fuseSpares = SPARE_FUSES;
     if (this.ctx.kind === 'championship' && !this.carryApplied) {
       this.vehicle.setDamage(this.ctx.carry.zones);
       this.carryApplied = true;
@@ -512,7 +516,7 @@ export class Game {
     if (!d) return;
     const car = this.remote(p.pid, d.name, d.slot);
     if (p.look) car.setLook(p.look[0], p.look[1], p.look[2]);
-    car.push({ t: p.serverTime, x: p.x, y: p.y, z: p.z, h: p.h, p: p.p, r: p.r });
+    car.push({ t: p.serverTime, x: p.x, y: p.y, z: p.z, h: p.h, p: p.p, r: p.r, steer: p.steer, v: p.v });
     car.distance = p.dist;
     car.model.setBrakeLights(p.brake > 0.1 || p.handbrake); // so you can see them stop in the dark
     if (p.sw !== undefined) {
@@ -597,6 +601,7 @@ export class Game {
       fieldSize: standings.length,
       zones: DAMAGE_KEYS.map((k) => v.damage[k]),
       resets: r.resets,
+      extras: this.runningCosts(),
     });
     this.prize = { runId: state.runId, total: prize.total };
     const runKey = `${net.room?.code}:${state.runId}:${r.finishedAt}`;
@@ -679,8 +684,18 @@ export class Game {
     });
   }
 
+  /** Spare fuses fitted and rubber used this stage – they come off the prize. */
+  private runningCosts() {
+    const used = SPARE_FUSES - this.fuseSpares;
+    const wear = this.vehicle.tyreWear;
+    return [
+      { label: `Spare fuses (${used} × ${money(FUSE_COST)})`, amount: -used * FUSE_COST },
+      { label: `Tyres (${Math.round(wear * 100)}% worn)`, amount: -Math.round((wear * TYRE_SET_COST) / 10) * 10 },
+    ];
+  }
+
   private finishChampionship(r: RaceResult | null) {
-    const summary = champ.finishRound(r?.timeMs ?? null, this.onTrackTimes(r?.timeMs ?? null), this.damageNow(), r?.resets ?? this.resets);
+    const summary = champ.finishRound(r?.timeMs ?? null, this.onTrackTimes(r?.timeMs ?? null), this.damageNow(), r?.resets ?? this.resets, this.runningCosts());
     if (summary) this.prize = { runId: this.raceState?.runId ?? 0, total: summary.prize.total };
     const save = champ.get();
     const rec = save?.results[save.results.length - 1];
@@ -855,12 +870,11 @@ export class Game {
     if (!crewed) autoSystems(s);
     stepSystems(s, dt, { load, speed: Math.abs(t.speed), ambient, engineOn: v.engineOn });
     v.sysPower = systemsPower(s);
-    this.hud.setSystems({ ...s, fuse: FUSES[s.fuse] ?? null }, crewed);
     v.sysGrip = (surface) => systemsGrip(s, surface);
     // cooking the engine
     if (s.temp > 120 && racing) {
       v.damage.engine = Math.min(1, v.damage.engine + dt * 0.012);
-      if (Math.random() < dt * 0.5) this.hud.warn('ENGINE OVERHEATING – OPEN THE RADIATOR / EASE OFF', 1.5);
+      if (!crewed && Math.random() < dt * 0.5) this.hud.warn('ENGINE OVERHEATING – OPEN THE RADIATOR / EASE OFF', 1.5);
     }
     // a fuse blows somewhere on the stage
     if (racing && this.fuseAt > 0 && s.fuse < 0 && this.race.distance > this.fuseAt) {
@@ -868,7 +882,7 @@ export class Game {
       s.fuse = Math.floor(Math.random() * FUSES.length);
       this.fuseBlownFor = 0;
       audio.click();
-      this.hud.warn(`FUSE BLOWN: ${FUSES[s.fuse]}${crewed ? ' – CO-DRIVER, CHECK THE FUSE BOARD!' : ''}`, 3);
+      if (!crewed) this.hud.warn(`FUSE BLOWN: ${FUSES[s.fuse]}`, 3);
     }
     if (s.fuse >= 0) {
       this.fuseBlownFor += dt;
@@ -1277,6 +1291,8 @@ export class Game {
       sw: encodeSwitches(this.sw),
       sys: encodeSystems(this.sys),
       tmp: Math.round(this.sys.temp),
+      tw: Math.round(this.vehicle.tyreWear * 100),
+      fsp: this.fuseSpares,
       ai: this.ai.flatMap((a) => {
         const ap = a.vehicle.position;
         return [r2(ap.x), r2(ap.y), r2(ap.z), Math.round(a.vehicle.heading * 1000) / 1000, Math.round(a.distance), a.finishTimeMs ?? -1];

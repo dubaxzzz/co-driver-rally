@@ -122,6 +122,14 @@ export function validateTelemetry(p: unknown): TelemetryPacket | null {
     if (!isNum(p.tmp, -50, 200)) return null;
     out.tmp = Math.round(p.tmp);
   }
+  if (p.tw !== undefined) {
+    if (!isNum(p.tw, 0, 100)) return null;
+    out.tw = Math.round(p.tw);
+  }
+  if (p.fsp !== undefined) {
+    if (!isNum(p.fsp, 0, 9) || !Number.isInteger(p.fsp)) return null;
+    out.fsp = p.fsp;
+  }
   if (p.look !== undefined) {
     const look = p.look;
     if (!Array.isArray(look) || look.length !== 3 || !look.every((n) => isNum(n, 0, 0xffffff) && Number.isInteger(n))) return null;

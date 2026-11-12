@@ -60,6 +60,8 @@ export interface PrizeInput {
   resets: number;
   /** Championship rounds pay repairs at the service park instead. */
   includeRepairs?: boolean;
+  /** Running costs from the stage (spare fuses used, tyre wear). */
+  extras?: PrizeLine[];
 }
 
 export interface PrizeLine {
@@ -91,6 +93,7 @@ export function computePrize(p: PrizeInput): { lines: PrizeLine[]; total: number
   if (p.resets === 0 && damageTotal < 0.1) lines.push({ label: 'Clean run', amount: 400 });
   const repairs = p.includeRepairs === false ? 0 : repairCost(p.zones);
   if (repairs > 0) lines.push({ label: 'Repair bill', amount: -repairs });
+  for (const x of p.extras ?? []) if (x.amount) lines.push(x);
   const total = Math.max(0, lines.reduce((a, l) => a + l.amount, 0));
   return { lines, total };
 }

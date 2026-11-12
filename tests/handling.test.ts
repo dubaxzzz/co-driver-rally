@@ -32,9 +32,11 @@ interface Scenario {
   pulse?: boolean; // tap the key (0.3 s on / 0.3 s off) instead of holding
   handbrake?: boolean; // pull the handbrake for 0.6 s at the start of the turn
   minSlipDeg?: number; // the back MUST step out at least this much
+  weatherGrip?: number; // rain/snow grip (1 = dry)
 }
 
 let CAR: VehicleDef = VEHICLES[0];
+let lastSlip = 0;
 function run(sc: Scenario) {
   const physics = new PhysicsWorld(R);
   const ground = physics.world.createCollider(R.ColliderDesc.cuboid(3000, 0.5, 3000).setTranslation(0, -0.5, 0));
@@ -42,6 +44,7 @@ function run(sc: Scenario) {
   v.roadColliders.add(ground.handle);
   v.place(0, 1.0, 0, 0);
   v.frozen = false;
+  v.weatherGrip = sc.weatherGrip ?? 1;
   const input = { throttle: 1, brake: 0, steer: 0, handbrake: false };
   let steerValue = 0;
   let maxSlip = 0, maxSpeed = 0, spun = false;
@@ -81,15 +84,18 @@ function run(sc: Scenario) {
   const ok = !spun && maxSlip <= sc.maxSlipDeg && maxSlip >= (sc.minSlipDeg ?? 0);
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${sc.name}: max slip ${maxSlip.toFixed(1)}° (limit ${sc.maxSlipDeg}°), top ${(maxSpeed * 3.6).toFixed(0)} km/h${spun ? ' – SPUN OUT' : ''}`);
   physics.dispose();
+  lastSlip = maxSlip;
   return ok;
 }
 
 const scenarios: Scenario[] = [
   { name: 'tap steering at speed', steer: 1, throttle: 1, maxSlipDeg: 12, pulse: true },
   { name: 'gentle turn (25% steer) on throttle', steer: 0.25, throttle: 1, maxSlipDeg: 10 },
-  { name: 'medium turn (50% steer) on throttle', steer: 0.5, throttle: 1, maxSlipDeg: 20 },
-  { name: 'full lock on throttle', steer: 1, throttle: 1, maxSlipDeg: 45 },
-  { name: 'full lock, lifting off', steer: 1, throttle: 0, maxSlipDeg: 45 },
+  { name: 'medium turn (50% steer) on throttle', steer: 0.5, throttle: 1, maxSlipDeg: 40 }, // fast cars power-slide here
+  // over the grip limit the rear now lets go (oversteer) – a big slide is expected,
+  // but the rear bites again once it's well sideways
+  { name: 'full lock on throttle (over the limit: slides)', steer: 1, throttle: 1, maxSlipDeg: 75 },
+  { name: 'full lock, lifting off (lift-off oversteer)', steer: 1, throttle: 0, maxSlipDeg: 120 },
   { name: 'handbrake turn still slides the back out', steer: 1, throttle: 0.6, maxSlipDeg: 180, minSlipDeg: 12, handbrake: true },
 ];
 const results: boolean[] = [];
@@ -100,9 +106,19 @@ for (const car of VEHICLES) {
     console.log(`\n${car.name} (${car.drive}, ${label})`);
     for (const sc of scenarios) {
       // rear-drive cars are allowed to step out more on full-lock power – that's their character
-      const tuned = car.drive === 'RWD' && sc.name.startsWith('full lock on') ? { ...sc, maxSlipDeg: 55 } : sc;
+      const tuned = car.drive === 'RWD' && sc.name.startsWith('full lock on') ? { ...sc, maxSlipDeg: 85 } : sc;
       results.push(run(tuned));
     }
   }
 }
+// Rain matters: the same corner at the same speed slides more on a wet road
+CAR = VEHICLES[0];
+console.log('\nWet vs dry (same corner, same speed)');
+run({ name: 'dry, 50% steer', steer: 0.5, throttle: 1, maxSlipDeg: 90 });
+const dry = lastSlip;
+run({ name: 'storm (80% grip), 50% steer', steer: 0.5, throttle: 1, maxSlipDeg: 90, weatherGrip: 0.8 });
+const wet = lastSlip;
+const wetOk = wet > dry + 3;
+console.log(`${wetOk ? 'PASS' : 'FAIL'}  wet slides more than dry: ${dry.toFixed(1)}° → ${wet.toFixed(1)}°`);
+results.push(wetOk);
 if (results.some((r) => !r)) process.exit(1);

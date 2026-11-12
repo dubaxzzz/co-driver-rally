@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { INTERPOLATION_DELAY_MS, VEHICLES, WHEELS, type PaintOption } from '@cdr/shared';
 import type { PhysicsWorld } from './physics/PhysicsWorld';
-import { bakeCarModel, createCarModel, type CarModel } from './vehicle/CarModel';
+import { bakeCarModel, createCarModel, rollWheels, type CarModel } from './vehicle/CarModel';
 
 interface Pose {
   t: number; // server time
@@ -20,6 +20,9 @@ interface Pose {
   h: number;
   p: number;
   r: number;
+  /** Steering -1..1 and road speed (m/s), for turning and rolling the wheels. */
+  steer?: number;
+  v?: number;
 }
 
 const lerp = (a: number, b: number, u: number) => a + (b - a) * u;
@@ -200,6 +203,7 @@ export class RemoteCar {
   }
 
   /** Moves the visible model to where the body is. */
+  private lastVisual = 0;
   syncVisual(camera: THREE.Vector3) {
     const t = this.body.translation();
     const r = this.body.rotation();
@@ -208,6 +212,12 @@ export class RemoteCar {
     if (!visible) return;
     this.model.root.position.set(t.x, t.y, t.z);
     this.model.root.quaternion.set(r.x, r.y, r.z, r.w);
+    // turn the front wheels with the driver's steering, roll them with the speed
+    const now = performance.now();
+    const dt = this.lastVisual ? Math.min(0.1, (now - this.lastVisual) / 1000) : 0;
+    this.lastVisual = now;
+    const last = this.buf[this.buf.length - 1];
+    if (last) rollWheels(this.model, last.steer ?? 0, last.v ?? 0, dt);
   }
 
   dispose() {

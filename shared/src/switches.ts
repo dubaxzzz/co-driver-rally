@@ -79,6 +79,22 @@ export function applySharedSwitch(s: CarSwitches, id: SharedSwitch, down = true)
  */
 export const FUSES = ['LIGHTS', 'WIPERS', 'POD', 'FAN', 'DEMIST', 'HORN'] as const;
 export type FuseName = (typeof FUSES)[number];
+/** Spare fuses carried per stage – once they're gone, a blown circuit stays dead. */
+export const SPARE_FUSES = 2;
+/** What each spare fuse used costs (taken off the stage prize). */
+export const FUSE_COST = 350;
+/** A full set of new tyres; a stage's wear is charged pro rata. */
+export const TYRE_SET_COST = 1600;
+/** Tyre wear 0..1 for one fixed step: distance, sliding, wheelspin, surface and pressures. */
+export function tyreWearStep(dt: number, o: { speed: number; slip: number; loose: number; handbrake: boolean; surface: string; pressureGrip: number }) {
+  const abrasive = o.surface === 'tarmac' ? 1.35 : o.surface === 'gravel' ? 1 : o.surface === 'wood' ? 0.9 : 0.6;
+  const wrongPressure = o.pressureGrip < 0.99 ? 1.25 : 1;
+  const rolling = Math.min(40, Math.abs(o.speed)) * 0.000045; // ~4% per km of steady driving
+  const scrub = Math.min(1.5, o.slip) * 0.0035 + o.loose * 0.004 + (o.handbrake && Math.abs(o.speed) > 3 ? 0.003 : 0);
+  return dt * (rolling + scrub) * abrasive * wrongPressure;
+}
+/** Grip left on worn tyres (new = 1, bald ≈ 0.7). */
+export const wornGrip = (wear: number) => 1 - 0.3 * Math.min(1, Math.max(0, wear));
 export const ENGINE_MAPS = ['ECO', 'NORMAL', 'ATTACK'] as const;
 export const TYRE_PRESSURES = ['LOW', 'MID', 'HIGH'] as const;
 

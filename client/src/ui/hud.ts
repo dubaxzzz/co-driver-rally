@@ -23,8 +23,6 @@ export class Hud {
   private codeEl: HTMLElement;
   private dmgEl: HTMLElement;
   private warnTimer = 0;
-  private sysEl = h('div', { class: 'hud-sys' });
-  private lastSysKey = '';
 
   constructor(private stage: BuiltStage) {
     this.speedEl = h('span', {}, '0');
@@ -64,26 +62,7 @@ export class Hud {
       h('div', { class: 'hud-progress' }, track, h('div', { class: 'labels' }, this.progLeft, this.progRight)),
       this.centerEl,
       this.warnEl,
-      h('div', { class: 'hud-dash' }, h('div', {}, this.gearEl, h('span', { class: 'hud-speed' }, this.speedEl, this.unitEl)), rpm, this.sysEl, this.dmgEl),
-    );
-  }
-
-  /** Engine temperature + what the co-driver has set (map, anti-lag, tyres, radiator) + a blown fuse. */
-  setSystems(s: { temp: number; map: number; als: boolean; tyres: number; flaps: boolean; fuse: string | null }, crewed: boolean) {
-    const t = Math.round(s.temp);
-    const key = `${Math.round(t / 2)}|${s.map}|${s.als}|${s.tyres}|${s.flaps}|${s.fuse}|${crewed}`;
-    if (key === this.lastSysKey) return;
-    this.lastSysKey = key;
-    const tc = t > 112 ? 'b' : t > 104 || t < 62 ? 'w' : '';
-    const chip = (text: string, cls = '') => h('i', { class: cls }, text);
-    this.sysEl.replaceChildren(
-      chip(`${t}°C`, `temp ${tc}`),
-      chip(['ECO', 'NORM', 'ATTACK'][s.map], s.map === 2 ? 'on' : ''),
-      ...(s.als ? [chip('ALS', 'on')] : []),
-      chip(`TYRES ${['LOW', 'MID', 'HIGH'][s.tyres]}`),
-      chip(s.flaps ? 'RAD OPEN' : 'RAD SHUT'),
-      ...(s.fuse ? [chip(`FUSE: ${s.fuse}`, 'b blink')] : []),
-      ...(crewed ? [] : [chip('AUTO')]),
+      h('div', { class: 'hud-dash' }, h('div', {}, this.gearEl, h('span', { class: 'hud-speed' }, this.speedEl, this.unitEl)), rpm, this.dmgEl),
     );
   }
 

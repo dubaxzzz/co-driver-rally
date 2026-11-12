@@ -232,6 +232,18 @@ mud guards, snorkels and wide arches.
 **Weather:** Clear, Overcast, Rain, Night storm (fog + rain), Snowfall, Dusk.
 Weather changes light, fog, rain/snow on the windscreen and tyre grip.
 
+**Grip and oversteer:** every corner has a grip limit – surface × weather (rain, showers,
+snow) × tyre pressures × tyre wear × the car's tyres, plus a little downforce at speed.
+Stay under it and the car is planted; ask for more (too fast, too much steering, power on
+in the wet) and the rear lets go and the car slides. It builds up over a moment, so a
+quick tap of the steering won't do it; counter-steer or lift and the rear bites again.
+The same corner that's fine in the dry will slide you out in the rain.
+
+**Tyre wear:** tyres wear with distance (about 4–5% per km on gravel, more on tarmac) and
+much faster when you slide, spin the wheels or use the handbrake, or run the wrong
+pressures. Worn tyres lose up to 30% grip. You get fresh tyres every stage, and the rubber
+you used is charged off your prize (a full set is $1,600).
+
 **Surfaces matter:** tarmac grips best; gravel is looser; mud, snow and sand
 are slippery *and* slow you down; leaving the road onto grass, snowbanks or sand
 costs a lot of speed; miss a bridge and you're wading through a fast river.
@@ -306,6 +318,8 @@ doesn't shake however rough the road is.
 Anyone with the room code can **just watch**: on the join screen press **👀 Just watch**, or pick
 **👀 Watch** as your seat in the lobby. Spectators don't take one of the 4 player seats (up to 8
 can watch), can join while a stage is already running, and don't earn money.
+Cars you watch (and other players' cars on the stage) turn their front wheels with the
+driver's real steering and roll with the speed.
 
 - **Cameras** (button at the bottom): 🎥 **TV cameras** placed along the roadside that cut from
   one to the next and zoom to keep the car framed · 🚗 **chase cam** · 🚁 **helicopter** ·
@@ -329,26 +343,30 @@ everyone in the room – and the co-driver's tablet – gets the same):
   it in time. A driver without a co-driver only gets a late warning about 140 m before.
 - AI rivals in the championship steer for the gap and slow down for them too.
 
-## Co-driver jobs (tablet → CAR page)
+## Co-driver jobs (the car panel – only the co-driver can see it)
 
-The co-driver keeps the car in its best shape while the driver drives. Tap **CAR** at the
-top of the tablet:
+The co-driver keeps the car in its best shape while the driver drives. The **car panel** is
+an aluminium box bolted to the co-driver's side of the dashboard. Press **🔧 Car panel**
+(or **P**) to lean in and read it, or tap it in 3D. **The driver gets no read-out at all** –
+no temperature, no fuse warnings, no messages – so the co-driver has to call it.
 
 - **Coolant temperature** gauge – blue = too cold (lazy engine, −6% power), green = good,
   amber/red = too hot (the engine loses power, and above 120°C it starts to cook itself).
 - **Radiator** open/shut – open on long climbs and flat out; shut in snow and cold.
 - **Anti-lag** – +5% power and sharper throttle, but a lot more heat.
 - **Engine map** – ECO (cool, −8%), NORMAL, ATTACK (+7%, hotter).
-- **Tyre pressures** – LOW is fastest on gravel, mud, sand and snow; HIGH on tarmac. The tablet
-  tells you what surface is coming up and how far away it is.
+- **Tyre pressures** – LOW is fastest on gravel, mud, sand and snow; HIGH on tarmac. The panel
+  shows the surface now and what's coming up.
+- **Tyre wear** – a bar from green to red; tell the driver when grip is going.
 - **Fuse board** – most stages blow a fuse somewhere (lights, wipers, light pod, fan, demister
-  or horn). That circuit dies until the co-driver taps the blown fuse to replace it. A blown FAN
-  fuse makes the engine run hotter.
+  or horn). That circuit dies until the co-driver taps the blown fuse to fit a spare. The car
+  carries only **2 spare fuses** per stage and each one costs **$350** off the prize – once
+  they're gone, that circuit stays dead. A blown FAN fuse makes the engine run hotter.
 
-The driver sees everything the co-driver sets in a strip above the damage display (temperature,
-map, ALS, tyres, radiator, blown fuse) plus a message for each change. **No co-driver?** The car
-runs on AUTO: radiator by thermostat, NORMAL map, MID tyres, no anti-lag, and a blown fuse resets
-itself after about 12 seconds – safe, but a sharp co-driver is worth several seconds a stage.
+The tablet's banner also flashes up when a fuse blows or the engine overheats, so the co-driver
+knows to check the panel. **No co-driver?** The car runs on AUTO: radiator by thermostat,
+NORMAL map, MID tyres, no anti-lag, and a blown fuse's breaker resets itself after about 12
+seconds – safe, but a sharp co-driver is worth several seconds a stage.
 
 ## Navigator tablet
 

@@ -15,11 +15,11 @@ import { h, toast } from '../ui/dom';
 import { resultsOverlay, type Standing } from '../ui/results';
 import { AI_CREWS } from '../game/ai/AIDriver';
 import { career, money } from '../career';
-import { NAVIGATOR_SHARE, decodeSystems, stageConditions, zoneAmount, type StageConditions, type SysCommand } from '@cdr/shared';
+import { FUSES, SPARE_FUSES, NAVIGATOR_SHARE, decodeSystems, stageConditions, zoneAmount, type StageConditions, type SysCommand } from '@cdr/shared';
 import type { CockpitView } from './CockpitView';
 import { Interpolator } from './Interpolator';
 import { MapView } from './MapView';
-import { TabletScreen, type TabletData } from './TabletScreen';
+import { SystemsPanelScreen, TabletScreen, type PanelButton, type TabletData } from './TabletScreen';
 
 /**
  * The co-driver's seat. The navigator sits in the passenger seat (3D view
@@ -52,6 +52,12 @@ export class NavigatorApp {
   private rewardsEl: HTMLElement | null = null;
   private paidRun = -1;
   private screen: TabletScreen;
+  /** The car-systems panel on the co-driver's side of the dash. */
+  private panel = new SystemsPanelScreen();
+  private panelBtn: HTMLButtonElement;
+  private lastPanelDraw = 0;
+  private tyreWear = 0;
+  private fuseSpares = SPARE_FUSES;
   private weatherName: string;
   private lastTabletDraw = 0;
   private tab: TabletData;
@@ -104,7 +110,8 @@ export class NavigatorApp {
     // Only two real buttons float over the view; everything else is on the tablet in your hands.
     this.lookBtn = h('button', { class: 'look-btn nav-look', 'data-testid': 'look-btn', onclick: () => this.toggleLook() }, '▲ Look at road') as HTMLButtonElement;
     const leaveBtn = h('button', { class: 'back-btn nav-leave', onclick: () => void this.leave() }, 'Leave');
-    const hud = h('div', { class: 'nav-hud' }, leaveBtn, this.lookBtn);
+    this.panelBtn = h('button', { class: 'btn nav-panel-btn', 'data-testid': 'panel-btn', onclick: () => this.togglePanel() }, '🔧 Car panel') as HTMLButtonElement;
+    const hud = h('div', { class: 'nav-hud' }, leaveBtn, this.lookBtn, this.panelBtn);
     this.els.timer = h('span', { class: 'nav-timer-sr', 'data-testid': 'nav-timer', 'aria-live': 'off' }, '00:00.00');
     this.waitingEl = h('span', { class: 'nav-timer-sr', 'data-testid': 'nav-waiting' }, 'Waiting for the driver');
     const view3d = h('div', { class: 'nav-3d' }, h('div', { class: 'nav-3d-loading' }, 'Loading passenger-seat view…'));
@@ -117,11 +124,13 @@ export class NavigatorApp {
       import('./CockpitView')
         .then(({ CockpitView }) => {
           if (this.disposed) return;
-          this.view = new CockpitView(view3d, this.stage, this.weatherId as keyof typeof WEATHER, this.screen);
+          this.view = new CockpitView(view3d, this.stage, this.weatherId as keyof typeof WEATHER, this.screen, this.panel);
           this.view.setLookDown(this.lookingDown);
           this.view.onSwitch = (id, down) => net.sendSwitch(id, down);
           this.view.onTabletTap = (u, v) => this.tapTablet(u, v);
           this.view.onTabletRaise = () => !this.lookingDown && this.toggleLook();
+          this.view.onPanelTap = (id) => this.tapPanel(id);
+          this.view.onPanelRaise = () => this.togglePanel(true);
           if (this.spectator) {
             this.view.setSpectator(true);
             this.lookingDown = false;
@@ -140,7 +149,15 @@ export class NavigatorApp {
             const r = c.getBoundingClientRect();
             this.tapTablet((ev.clientX - r.left) / r.width, 1 - (ev.clientY - r.top) / r.height);
           });
-          view3d.append(c);
+          const pc = this.panel.canvas;
+          pc.classList.add('nav-flat-panel');
+          pc.addEventListener('pointerdown', (ev) => {
+            const r = pc.getBoundingClientRect();
+            const id = this.panel.hit((ev.clientX - r.left) / r.width, 1 - (ev.clientY - r.top) / r.height);
+            if (id) this.tapPanel(id);
+          });
+          view3d.append(c, pc);
+          this.panelBtn.style.display = 'none';
           const fit = () => this.screen.setPortrait(window.innerWidth / Math.max(1, window.innerHeight) < 0.9);
           fit();
           window.addEventListener('resize', fit);
@@ -254,6 +271,7 @@ export class NavigatorApp {
   /** Spectator overlay: who you're watching, their time and gap, cameras, standings. */
   private buildSpectatorHud(hud: HTMLElement) {
     this.lookBtn.style.display = 'none';
+    this.panelBtn.style.display = 'none';
     const who = h('div', { class: 'spec-who' });
     const time = h('div', { class: 'spec-time' }, '00:00.00');
     const gap = h('div', { class: 'spec-gap' });
@@ -342,24 +360,43 @@ export class NavigatorApp {
     audio.click();
     this.lastTabletDraw = 0; // redraw right away
     if (b === 'follow' || b === 'full') this.map.mode = b;
-    else if (b === 'tab-map') this.screen.page = 'map';
-    else if (b === 'tab-car') this.screen.page = 'car';
-    else {
-      // a car system: tell the driver's game, and show it straight away on the tablet
-      const s = this.tab.sys;
-      if (!s) return;
-      let cmd: SysCommand | null = null;
-      if (b === 'flaps') cmd = { key: 'flaps', value: !s.flaps };
-      else if (b === 'als') cmd = { key: 'als', value: !s.als };
-      else if (b.startsWith('map')) cmd = { key: 'map', value: Number(b.slice(3)) as 0 | 1 | 2 };
-      else if (b.startsWith('tyre')) cmd = { key: 'tyres', value: Number(b.slice(4)) as 0 | 1 | 2 };
-      else if (b.startsWith('fuse')) cmd = { key: 'fuse', value: Number(b.slice(4)) };
-      if (!cmd) return;
-      net.sendSys(cmd);
-      if (cmd.key === 'fuse') {
-        if (s.fuse === cmd.value) s.fuse = -1;
-      } else (s as unknown as Record<string, unknown>)[cmd.key] = cmd.value;
-      this.sysHoldUntil = performance.now() + 600; // don't let older telemetry flick it back
+  }
+
+  /** A button on the systems panel: tell the driver's car, and show it straight away. */
+  private tapPanel(b: PanelButton) {
+    const s = this.tab.sys;
+    if (!s || this.spectator) return;
+    audio.click();
+    let cmd: SysCommand | null = null;
+    if (b === 'flaps') cmd = { key: 'flaps', value: !s.flaps };
+    else if (b === 'als') cmd = { key: 'als', value: !s.als };
+    else if (b.startsWith('map')) cmd = { key: 'map', value: Number(b.slice(3)) as 0 | 1 | 2 };
+    else if (b.startsWith('tyre')) cmd = { key: 'tyres', value: Number(b.slice(4)) as 0 | 1 | 2 };
+    else if (b.startsWith('fuse')) cmd = { key: 'fuse', value: Number(b.slice(4)) };
+    if (!cmd) return;
+    net.sendSys(cmd);
+    if (cmd.key === 'fuse') {
+      if (s.fuse === cmd.value && this.fuseSpares > 0) {
+        s.fuse = -1;
+        this.fuseSpares--;
+      }
+    } else (s as unknown as Record<string, unknown>)[cmd.key] = cmd.value;
+    this.sysHoldUntil = performance.now() + 600; // don't let older telemetry flick it back
+    this.lastPanelDraw = 0;
+  }
+
+  /** Lean in to the systems panel (or back to where you were looking). */
+  private togglePanel(on = !this.view?.focusedOnPanel) {
+    if (!this.view) return;
+    if (on) {
+      this.view.setPanelFocus(true);
+      this.lookingDown = false;
+      this.root.classList.add('looking-up');
+      this.lookBtn.textContent = '▼ Look at tablet';
+      this.panelBtn.textContent = '▲ Look at road';
+    } else {
+      this.lookingDown = true;
+      this.toggleLook();
     }
   }
 
@@ -368,11 +405,13 @@ export class NavigatorApp {
     this.root.classList.toggle('looking-up', !this.lookingDown);
     this.lookBtn.textContent = this.lookingDown ? '▲ Look at road' : '▼ Look at tablet';
     this.view?.setLookDown(this.lookingDown);
+    this.panelBtn.textContent = '🔧 Car panel';
   }
 
   private onKey = (e: KeyboardEvent) => {
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-    if (e.key === 'ArrowUp' && this.lookingDown) this.toggleLook();
+    if (e.key === 'p' || e.key === 'P') this.togglePanel();
+    else if (e.key === 'ArrowUp' && this.lookingDown) this.toggleLook();
     else if (e.key === 'ArrowDown' && !this.lookingDown) this.toggleLook();
     else return;
     e.preventDefault();
@@ -492,6 +531,8 @@ export class NavigatorApp {
       tab.surface = SURFACES[surfaceAt(this.stage, t.dist)].name;
       if (t.sys !== undefined && performance.now() > this.sysHoldUntil) tab.sys = decodeSystems(t.sys, t.tmp ?? 70);
       else if (tab.sys && t.tmp !== undefined) tab.sys.temp = t.tmp;
+      if (t.tw !== undefined) this.tyreWear = t.tw;
+      if (t.fsp !== undefined && performance.now() > this.sysHoldUntil) this.fuseSpares = t.fsp;
       // the next change of surface (for tyre pressures)
       const nextSpan = this.stage.surfaceSpans.find((sp) => sp.from > t.dist && sp.surface !== surfaceAt(this.stage, t.dist));
       const near = !!nextSpan && nextSpan.from - t.dist < 1500;
@@ -512,9 +553,18 @@ export class NavigatorApp {
           else if (zoneAmount(this.cond.wet, t.dist) > 0.2) tab.alert = 'IN THE SHOWER – WIPERS ON, WET ROAD';
         }
       }
+      // the car itself comes first: only the co-driver can see these
+      const sy = tab.sys;
+      if (sy && sy.fuse >= 0) tab.alert = this.fuseSpares > 0 ? `FUSE BLOWN: ${FUSES[sy.fuse]} – FIT A SPARE ON THE CAR PANEL (P)` : `FUSE BLOWN: ${FUSES[sy.fuse]} – NO SPARES LEFT, TELL THE DRIVER`;
+      else if (sy && sy.temp > 112) tab.alert = `OVERHEATING ${Math.round(sy.temp)}°C – OPEN THE RADIATOR (CAR PANEL, P)`;
       const worst = t.dz ? Math.max(...t.dz) : t.dmg;
       tab.damage = worst < 0.05 ? 'OK' : `${Math.round(worst * 100)}%`;
       tab.damageLevel = worst > 0.6 ? 2 : worst > 0.2 ? 1 : 0;
+    }
+    // the systems panel (only redraws when something on it changed)
+    if (pnow - this.lastPanelDraw > 60) {
+      this.lastPanelDraw = pnow;
+      this.panel.draw({ sys: tab.sys, surface: tab.surface, nextSurface: tab.nextSurface, nextSurfaceIn: tab.nextSurfaceIn, tyreWear: this.tyreWear, fuseSpares: this.fuseSpares });
     }
     // the tablet screen refreshes ~12 times a second (plenty for a map, and cheap)
     if (!this.spectator && pnow - this.lastTabletDraw > 80) {

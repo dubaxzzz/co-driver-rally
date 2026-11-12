@@ -8,12 +8,12 @@ import { DustSystem } from '../game/environment/Atmosphere';
 import { DAMAGE_KEYS, noDamage, type DamageZones } from '../game/vehicle/Vehicle';
 import { fogMultiplier, garageStore, settings } from '../settings';
 import { FirstPersonCamera } from '../game/camera/FirstPersonCamera';
-import { bakeCarModel, createCarModel, type CarModel } from '../game/vehicle/CarModel';
+import { bakeCarModel, createCarModel, rollWheels, type CarModel } from '../game/vehicle/CarModel';
 import { Cockpit } from '../game/vehicle/Cockpit';
 import { buildStageWorld, type StageWorld } from '../game/world/StageWorld';
 import { SEATS } from '../game/vehicle/Cockpit';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import type { TabletScreen } from './TabletScreen';
+import type { PanelButton, SystemsPanelScreen, TabletScreen } from './TabletScreen';
 
 const LOOK_DOWN_PITCH = -0.95;
 const LOOK_DOWN_YAW = 0.12;
@@ -24,6 +24,11 @@ const TABLET_DIST = 0.4;
 /** Screen size of the tablet (m), landscape; the case adds a rugged bezel around it. */
 const SCREEN_W = 0.25;
 const SCREEN_H = 0.156;
+/** The co-driver's systems panel, in the car's frame: centre, face size (m) and tilt. */
+const PANEL_POS = new THREE.Vector3(-0.47, 0.25, 0.34);
+const PANEL_W = 0.3;
+const PANEL_H = 0.169;
+const PANEL_TILT = 0.75;
 
 /**
  * The co-driver's seat. Renders the same stage and the same car interior as
@@ -66,10 +71,19 @@ export class CockpitView {
   onTabletTap: (u: number, v: number) => void = () => {};
   /** Tap on the tablet while looking at the road: bring it up. */
   onTabletRaise: () => void = () => {};
+  /** Tap on a button of the systems panel. */
+  onPanelTap: (id: PanelButton) => void = () => {};
+  /** The co-driver leant in to read the systems panel. */
+  private panelFocus = false;
+  private panelEase = 0;
+  private panelGroup = new THREE.Group();
+  private panelFace: THREE.Mesh | null = null;
+  private panelTex: THREE.CanvasTexture | null = null;
+  private panelVersion = -1;
   /** Sends a shared switch press to the driver's car. */
   onSwitch: (id: SharedSwitch, down: boolean) => void = () => {};
 
-  constructor(private container: HTMLElement, private stage: BuiltStage, weatherId: WeatherId, private screen: TabletScreen) {
+  constructor(private container: HTMLElement, private stage: BuiltStage, weatherId: WeatherId, private screen: TabletScreen, private panel: SystemsPanelScreen) {
     this.weather = WEATHER[weatherId] ?? WEATHER.storm;
     const quality = settings.get().quality;
     this.renderer = new THREE.WebGLRenderer({ antialias: quality === 'high', powerPreference: 'high-performance' });
@@ -88,6 +102,7 @@ export class CockpitView {
     this.picker = new CockpitPicker(container, () => this.fp.camera, this.cockpit.controls, (id) => this.press(id), (id) => this.release(id), (id) => id !== 'ignition' && id !== 'start');
     this.fp.pitch = this.fp.targetPitch = LOOK_DOWN_PITCH;
     this.fp.yaw = this.fp.targetYaw = LOOK_DOWN_YAW;
+    this.buildPanel();
     this.placeAtStart();
     this.resize();
     if (import.meta.env.DEV) (window as unknown as { __cdrNavView: CockpitView }).__cdrNavView = this;
@@ -101,13 +116,23 @@ export class CockpitView {
         else this.onTabletRaise();
         return;
       }
+      const puv = this.pickPanel(e);
+      if (puv) {
+        const id = this.panelFocus ? this.panel.hit(puv.x, puv.y) : null;
+        if (id && !this.spectator) this.onPanelTap(id);
+        else if (!this.panelFocus) this.onPanelRaise();
+        return;
+      }
       if (this.lookingDown || this.picker.busy) return;
       this.drag = { x: e.clientX, y: e.clientY, yaw: this.fp.targetYaw, pitch: this.fp.targetPitch };
       this.canvas.setPointerCapture(e.pointerId);
     });
     this.canvas.addEventListener('pointermove', (e) => {
       if (!this.drag) {
-        if (!this.picker.busy) this.canvas.style.cursor = this.pickTablet(e) ? 'pointer' : '';
+        if (!this.picker.busy) {
+          const puv = this.pickPanel(e);
+          this.canvas.style.cursor = this.pickTablet(e) || (puv && (!this.panelFocus || this.panel.hit(puv.x, puv.y))) ? 'pointer' : '';
+        }
         return;
       }
       const k = 3 / Math.max(300, this.canvas.clientWidth);
@@ -123,7 +148,7 @@ export class CockpitView {
 
   /** Where on the tablet screen (texture uv) the pointer is, or null when it misses the tablet. */
   private pickTablet(e: PointerEvent): THREE.Vector2 | null {
-    if (!this.tabletScreenMesh) return null;
+    if (!this.tabletScreenMesh || !this.tablet.visible) return null;
     const r = this.canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     this.ray.setFromCamera(ndc, this.fp.camera);
@@ -132,6 +157,73 @@ export class CockpitView {
     if (!hit) return null;
     if (hit.object === this.tabletScreenMesh && hit.uv) return hit.uv.clone();
     return new THREE.Vector2(-1, -1); // the case: still "the tablet"
+  }
+
+  /** Where on the systems panel's face (uv) the pointer is, or null. */
+  private pickPanel(e: PointerEvent): THREE.Vector2 | null {
+    if (!this.panelFace || !this.panelGroup.visible) return null;
+    const r = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    this.ray.setFromCamera(ndc, this.fp.camera);
+    this.ray.far = 2;
+    const hit = this.ray.intersectObject(this.panelGroup, true)[0];
+    if (!hit) return null;
+    if (hit.object === this.panelFace && hit.uv) return hit.uv.clone();
+    return new THREE.Vector2(-1, -1);
+  }
+
+  /** Tapped the panel from further away: lean in to read it. */
+  onPanelRaise: () => void = () => {};
+
+  /**
+   * The car-systems panel: an aluminium box bolted to the co-driver's side of
+   * the dash with the gauge, switches and fuse board on its face. Only the
+   * co-driver's view has it – the driver never sees these numbers.
+   */
+  private buildPanel() {
+    const g = this.panelGroup;
+    const outer = new THREE.Group();
+    outer.position.copy(PANEL_POS);
+    outer.rotation.y = Math.PI;
+    g.add(outer);
+    const inner = new THREE.Group();
+    inner.rotation.x = -PANEL_TILT;
+    outer.add(inner);
+    const box = new THREE.Mesh(new RoundedBoxGeometry(PANEL_W + 0.024, PANEL_H + 0.024, 0.05, 2, 0.006), new THREE.MeshStandardMaterial({ color: 0x1b1e22, roughness: 0.55, metalness: 0.5 }));
+    box.position.z = -0.026;
+    inner.add(box);
+    // a little hood over the top, like a real auxiliary panel
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(PANEL_W + 0.03, 0.006, 0.05), new THREE.MeshStandardMaterial({ color: 0x0e1012, roughness: 0.8 }));
+    hood.position.set(0, PANEL_H / 2 + 0.015, 0.012);
+    hood.rotation.x = 0.25;
+    inner.add(hood);
+    // mounting bracket down into the dash
+    const bracket = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.12, 0.02), new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.6, metalness: 0.6 }));
+    bracket.position.set(0, -PANEL_H / 2 - 0.04, -0.035);
+    inner.add(bracket);
+    this.panelTex = new THREE.CanvasTexture(this.panel.canvas);
+    this.panelTex.colorSpace = THREE.SRGBColorSpace;
+    this.panelTex.anisotropy = 4;
+    this.panelFace = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_W, PANEL_H), new THREE.MeshBasicMaterial({ map: this.panelTex, toneMapped: false, color: 0xd8d8d8 }));
+    this.panelFace.position.z = 0.0005;
+    inner.add(this.panelFace);
+    this.panelVersion = -1;
+  }
+
+  /** Lean in to read the systems panel (or sit back). */
+  setPanelFocus(on: boolean) {
+    this.panelFocus = on;
+    if (on) {
+      this.lookingDown = false;
+      // aim at the panel's face from the co-driver's eyes
+      const eye = new THREE.Vector3(SEATS.navigator.x, SEATS.navigator.eyeY, SEATS.navigator.eyeZ);
+      const d = PANEL_POS.clone().sub(eye);
+      this.fp.targetYaw = Math.atan2(-d.x, d.z) * -1;
+      this.fp.targetPitch = Math.atan2(d.y, Math.hypot(d.x, d.z));
+    } else this.setLookDown(this.lookingDown);
+  }
+  get focusedOnPanel() {
+    return this.panelFocus;
   }
 
   /**
@@ -344,6 +436,16 @@ export class CockpitView {
     return THREE.MathUtils.radToDeg(Math.max(vFromH, vFromW));
   }
 
+  /** Field of view that fits the whole systems panel on screen. */
+  private panelFov() {
+    const eye = new THREE.Vector3(SEATS.navigator.x, SEATS.navigator.eyeY, SEATS.navigator.eyeZ);
+    const dist = PANEL_POS.distanceTo(eye);
+    const aspect = this.fp.camera.aspect;
+    const vFromH = 2 * Math.atan((PANEL_H * 0.75) / dist);
+    const vFromW = 2 * Math.atan(Math.tan(Math.atan((PANEL_W * 0.6) / dist)) / aspect);
+    return THREE.MathUtils.radToDeg(Math.max(vFromH, vFromW));
+  }
+
   /** The driver's car: interior + dashboard of whatever they drive. */
   private buildCar(id: CarModelId) {
     const sel = garageStore.resolve();
@@ -354,6 +456,7 @@ export class CockpitView {
     const cockpit = new Cockpit(sel.paint, 'navigator', id);
     car.root.add(cockpit.group);
     car.root.add(this.tablet);
+    car.root.add(this.panelGroup);
     this.scene.add(car.root);
     this.modelId = id;
     return { car, cockpit };
@@ -410,6 +513,7 @@ export class CockpitView {
 
   setLookDown(down: boolean) {
     this.lookingDown = down;
+    this.panelFocus = false;
     this.fp.targetPitch = down ? LOOK_DOWN_PITCH : LOOK_UP_PITCH;
     this.fp.targetYaw = down ? LOOK_DOWN_YAW : 0;
   }
@@ -503,10 +607,14 @@ export class CockpitView {
     this.car.setLightPod(this.sw.pod);
     this.car.setHazards(this.sw.hazards);
     this.car.tick(performance.now() / 1000);
+    // the wheels follow the driver's steering (spectators see them turn)
+    rollWheels(this.car, t?.steer ?? 0, t?.v ?? 0, dt);
     // zoom in on the tablet when looking at it, wide angle when looking at the road
     const k = THREE.MathUtils.clamp((this.fp.pitch - LOOK_UP_PITCH) / (LOOK_DOWN_PITCH - LOOK_UP_PITCH), 0, 1);
-    const ease = k * k * (3 - 2 * k);
-    const fov = THREE.MathUtils.lerp(ROAD_FOV, this.tabletFov(), ease);
+    this.panelEase += ((this.panelFocus ? 1 : 0) - this.panelEase) * Math.min(1, dt * 6);
+    // leaning in to the panel: the tablet stays down in the lap
+    const ease = k * k * (3 - 2 * k) * (1 - this.panelEase);
+    const fov = THREE.MathUtils.lerp(THREE.MathUtils.lerp(ROAD_FOV, this.tabletFov(), ease), this.panelFov(), this.panelEase);
     if (Math.abs(fov - this.fp.camera.fov) > 0.01) {
       this.fp.camera.fov = fov;
       this.fp.camera.updateProjectionMatrix();
@@ -525,6 +633,12 @@ export class CockpitView {
       this.world.atmosphere.setFogMultiplier(fogMultiplier() * (1 + fog * 3.5));
     }
     this.placeTablet(root, ease);
+    // leaning in to the panel: the tablet goes down on the seat, out of the way
+    this.tablet.visible = !this.spectator && this.panelEase < 0.3;
+    if (this.panelTex && this.panel.version !== this.panelVersion) {
+      this.panelVersion = this.panel.version;
+      this.panelTex.needsUpdate = true;
+    }
     if (this.tabletTex && this.screen.version !== this.tabletVersion) {
       this.tabletVersion = this.screen.version;
       this.tabletTex.needsUpdate = true;
@@ -557,6 +671,7 @@ export class CockpitView {
 
   dispose() {
     this.tabletTex?.dispose();
+    this.panelTex?.dispose();
     this.picker.dispose();
     this.aiCars.forEach((m) => m.dispose());
     this.unsub();

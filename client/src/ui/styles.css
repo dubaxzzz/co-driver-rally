@@ -636,9 +636,13 @@ input[type='range'] { accent-color: var(--accent); width: 180px; }
 .nav-hud > * { pointer-events: auto; position: absolute; }
 .nav-leave { top: 14px; right: 14px; }
 .nav-look { bottom: 18px; left: 50%; transform: translateX(-50%); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6); }
+.nav-panel-btn { bottom: 18px; left: 18px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6); }
+@media (max-width: 620px) { .nav-panel-btn { bottom: 74px; left: 50%; transform: translateX(-50%); } }
 .nav-timer-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .nav-3d.flat { display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 50% 40%, #1b2026, #000); }
-.nav-3d.flat .nav-flat-tablet { position: static; width: auto; height: auto; max-width: 94vw; max-height: 86vh; border: 14px solid #15171a; border-radius: 22px; box-shadow: 0 30px 90px rgba(0, 0, 0, 0.85); }
+.nav-3d.flat .nav-flat-tablet { position: static; width: auto; height: auto; max-width: 94vw; max-height: 52vh; border: 14px solid #15171a; border-radius: 22px; box-shadow: 0 30px 90px rgba(0, 0, 0, 0.85); }
+.nav-3d.flat { flex-direction: column; gap: 12px; }
+.nav-3d.flat .nav-flat-panel { position: static; width: auto; height: auto; max-width: 94vw; max-height: 40vh; border: 8px solid #15171a; border-radius: 10px; }
 .look-btn { pointer-events: auto; }
 .look-btn {
   background: linear-gradient(90deg, var(--accent), var(--accent2));
@@ -1043,13 +1047,6 @@ input[type='range'] { accent-color: var(--accent); width: 180px; }
 @media (max-width: 820px) { .play-grid.four { grid-template-columns: 1fr; } }
 
 /* ---- car systems strip (co-driver jobs) ---- */
-.hud-sys { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; margin-top: 6px; max-width: 330px; margin-left: auto; }
-.hud-sys i { font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: 0.08em; padding: 3px 6px; background: rgba(8, 10, 12, 0.7); color: #cfd6dd; border: 1px solid rgba(255, 255, 255, 0.12); }
-.hud-sys i.temp { color: #7dff9e; }
-.hud-sys i.temp.w { color: #ffc400; }
-.hud-sys i.temp.b, .hud-sys i.b { color: #fff; background: rgba(255, 59, 78, 0.9); }
-.hud-sys i.on { color: #ff8a3d; border-color: rgba(255, 138, 61, 0.6); }
-.hud-sys i.blink { animation: sysblink 0.8s steps(2) infinite; }
 @keyframes sysblink { 50% { opacity: 0.25; } }
 
 /* ---- spectator overlay ---- */
