@@ -6,7 +6,7 @@ export interface DriveInput {
   handbrake: boolean;
 }
 
-type Action = 'reset' | 'pause' | 'push';
+type Action = 'reset' | 'pause' | 'push' | 'fix' | 'boost';
 
 export class Input {
   private keys = new Set<string>();
@@ -23,6 +23,8 @@ export class Input {
     if (!e.repeat) {
       if (code === 'KeyR') this.fire('reset');
       if (code === 'KeyH') this.fire('push');
+      if (code === 'KeyF') this.fire('fix');
+      if (code === 'KeyB') this.fire('boost');
       if (code === 'Escape' || code === 'KeyP') this.fire('pause');
     }
     this.keys.add(code);

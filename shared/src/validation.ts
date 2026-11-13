@@ -126,6 +126,14 @@ export function validateTelemetry(p: unknown): TelemetryPacket | null {
     if (!isNum(p.tw, 0, 100)) return null;
     out.tw = Math.round(p.tw);
   }
+  const intField = (k: 'tc' | 'fl' | 'lg' | 'fx' | 'spw' | 'bst' | 'bsl' | 'el' | 'gl', lo: number, hi: number) => {
+    const v = p[k];
+    if (v === undefined) return true;
+    if (!isNum(v, lo, hi)) return false;
+    out[k] = Math.round(v as number);
+    return true;
+  };
+  if (!intField('tc', 0, 3) || !intField('fl', 0, 127) || !intField('lg', 0, 6) || !intField('fx', -1, 6) || !intField('spw', 0, 4) || !intField('bst', 0, 3) || !intField('bsl', 0, 60) || !intField('el', 0, 100) || !intField('gl', 0, 100)) return null;
   if (p.pen !== undefined) {
     if (!isNum(p.pen, 0, 3600)) return null;
     out.pen = Math.round(p.pen);

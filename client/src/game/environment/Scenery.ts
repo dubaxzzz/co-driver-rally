@@ -546,6 +546,7 @@ export class Scenery {
     }
     this.obstacleBodies = [];
     this.herds = [];
+    this.physics?.resetStatics(); // the list of static colliders changes
     this.obstacleGroup.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.isMesh) m.geometry.dispose();

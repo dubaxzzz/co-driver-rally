@@ -15,7 +15,7 @@ import { h, toast } from '../ui/dom';
 import { resultsOverlay, type Standing } from '../ui/results';
 import { AI_CREWS } from '../game/ai/AIDriver';
 import { career, money } from '../career';
-import { FUSES, SPARE_FUSES, NAVIGATOR_SHARE, decodeSystems, stageConditions, zoneAmount, showerAmount, type StageConditions, type SysCommand } from '@cdr/shared';
+import { FUSES, SPARE_FUSES, SPARE_WHEELS, BOOST_SECONDS, FAILURES, FAILURE_INFO, COMPOUND_INFO, TYRE_COMPOUNDS, decodeFailures, NAVIGATOR_SHARE, decodeSystems, stageConditions, zoneAmount, showerAmount, type StageConditions, type SysCommand } from '@cdr/shared';
 import type { CockpitView } from './CockpitView';
 import { Interpolator } from './Interpolator';
 import { MapView } from './MapView';
@@ -58,6 +58,11 @@ export class NavigatorApp {
   private lastPanelDraw = 0;
   private tyreWear = 0;
   private fuseSpares = SPARE_FUSES;
+  /** What the driver's car reports for the panel (failures, boost, compound, engine life). */
+  private car = { tc: -1, fl: 0, lg: 0, fx: -1, spw: SPARE_WHEELS, bst: 0, bsl: BOOST_SECONDS, el: -1, gl: -1, speed: 0 };
+  private boostHoldUntil = 0;
+  /** The roadside-fix mini-game. */
+  private repair: { failure: number; order: number[]; step: number; started: number; extra: number; sent: boolean } | null = null;
   private weatherName: string;
   private lastTabletDraw = 0;
   private tab: TabletData;
@@ -117,6 +122,7 @@ export class NavigatorApp {
     const view3d = h('div', { class: 'nav-3d' }, h('div', { class: 'nav-3d-loading' }, 'Loading passenger-seat view…'));
     this.root = h('div', { class: 'nav-shell' }, view3d, hud, this.els.timer, this.waitingEl);
     window.addEventListener('keydown', this.onKey);
+    if (import.meta.env.DEV) (window as unknown as { __cdrNavApp: NavigatorApp }).__cdrNavApp = this;
     window.addEventListener('resize', this.onResize);
     if (this.spectator) this.buildSpectatorHud(hud);
 
@@ -369,6 +375,36 @@ export class NavigatorApp {
     const s = this.tab.sys;
     if (!s || this.spectator) return;
     audio.click();
+    const c = this.car;
+    if (b === 'boost') {
+      if (c.bst === 0) {
+        net.sendSys({ key: 'boost', value: true });
+        c.bst = 1;
+        this.boostHoldUntil = performance.now() + 800;
+      }
+      this.lastPanelDraw = 0;
+      return;
+    }
+    if (b === 'fix') {
+      const faults = decodeFailures(c.fl);
+      if (!faults.size || c.speed >= 2 || c.fx >= 0 || this.repair) return;
+      const f = [...faults].find((x) => !x.startsWith('puncture') || c.spw > 0);
+      if (!f) return;
+      const idx = FAILURES.indexOf(f);
+      net.sendSys({ key: 'fix', value: idx });
+      const order = [0, 1, 2, 3, 4, 5].sort(() => Math.random() - 0.5);
+      this.repair = { failure: idx, order, step: 0, started: performance.now(), extra: 0, sent: false };
+      this.lastPanelDraw = 0;
+      return;
+    }
+    if (b.startsWith('bolt')) {
+      const rp = this.repair;
+      if (!rp || rp.step >= rp.order.length) return;
+      if (rp.order[rp.step] === Number(b.slice(4))) rp.step++;
+      else rp.extra += 1.5; // fumbled it: a second and a half lost
+      this.lastPanelDraw = 0;
+      return;
+    }
     let cmd: SysCommand | null = null;
     if (b === 'flaps') cmd = { key: 'flaps', value: !s.flaps };
     else if (b === 'als') cmd = { key: 'als', value: !s.als };
@@ -534,6 +570,20 @@ export class NavigatorApp {
       if (t.sys !== undefined && performance.now() > this.sysHoldUntil) tab.sys = decodeSystems(t.sys, t.tmp ?? 70);
       else if (tab.sys && t.tmp !== undefined) tab.sys.temp = t.tmp;
       if (t.tw !== undefined) this.tyreWear = t.tw;
+      const c = this.car;
+      if (t.tc !== undefined) c.tc = t.tc;
+      if (t.fl !== undefined) c.fl = t.fl;
+      if (t.lg !== undefined) c.lg = t.lg;
+      if (t.fx !== undefined) c.fx = t.fx;
+      if (t.spw !== undefined) c.spw = t.spw;
+      if (t.bst !== undefined && performance.now() > this.boostHoldUntil) c.bst = t.bst;
+      if (t.bsl !== undefined) c.bsl = t.bsl;
+      if (t.el !== undefined) c.el = t.el;
+      if (t.gl !== undefined) c.gl = t.gl;
+      c.speed = Math.abs(t.v);
+      // the fix is finished (or the failure's gone): close the mini-game
+      if (this.repair && this.repair.sent && c.fx < 0) this.repair = null;
+      if (this.repair && !(c.fl & (1 << this.repair.failure))) this.repair = null;
       if (t.fsp !== undefined && performance.now() > this.sysHoldUntil) this.fuseSpares = t.fsp;
       // the next change of surface (for tyre pressures)
       const nextSpan = this.stage.surfaceSpans.find((sp) => sp.from > t.dist && sp.surface !== surfaceAt(this.stage, t.dist));
@@ -583,6 +633,7 @@ export class NavigatorApp {
       const sy = tab.sys;
       if (sy && sy.fuse >= 0) tab.alert = this.fuseSpares > 0 ? `FUSE BLOWN: ${FUSES[sy.fuse]} – FIT A SPARE ON THE CAR PANEL (P)` : `FUSE BLOWN: ${FUSES[sy.fuse]} – NO SPARES LEFT, TELL THE DRIVER`;
       else if (sy && sy.temp > 112) tab.alert = `OVERHEATING ${Math.round(sy.temp)}°C – OPEN THE RADIATOR (CAR PANEL, P)`;
+      else if (this.car.fl) tab.alert = this.car.speed < 2 ? 'FAULT – FIX IT NOW ON THE CAR PANEL (P)' : 'FAULT ON THE CAR – GET THE DRIVER TO STOP, THEN FIX IT (P)';
       const worst = t.dz ? Math.max(...t.dz) : t.dmg;
       tab.damage = worst < 0.05 ? 'OK' : `${Math.round(worst * 100)}%`;
       tab.damageLevel = worst > 0.6 ? 2 : worst > 0.2 ? 1 : 0;
@@ -590,7 +641,29 @@ export class NavigatorApp {
     // the systems panel (only redraws when something on it changed)
     if (pnow - this.lastPanelDraw > 60) {
       this.lastPanelDraw = pnow;
-      this.panel.draw({ sys: tab.sys, surface: tab.surface, nextSurface: tab.nextSurface, nextSurfaceIn: tab.nextSurfaceIn, tyreWear: this.tyreWear, fuseSpares: this.fuseSpares });
+      const c = this.car;
+      const faults = decodeFailures(c.fl);
+      const faultNames = [...faults].map((f) => (f === 'gearbox' && c.lg ? `GEARBOX – NO ${['', '1ST', '2ND', '3RD', '4TH', '5TH', '6TH'][c.lg]} GEAR` : FAILURE_INFO[f].name));
+      const rp = this.repair;
+      if (rp && !rp.sent && rp.step >= 6) {
+        const f = FAILURES[rp.failure];
+        const wait = rp.started + (FAILURE_INFO[f].fix * 0.62 + rp.extra) * 1000 - performance.now();
+        if (wait <= 0) {
+          net.sendSys({ key: 'fixdone', value: rp.failure });
+          rp.sent = true;
+        }
+      }
+      this.panel.draw({
+        sys: tab.sys, surface: tab.surface, nextSurface: tab.nextSurface, nextSurfaceIn: tab.nextSurfaceIn, tyreWear: this.tyreWear, fuseSpares: this.fuseSpares,
+        compound: c.tc >= 0 ? COMPOUND_INFO[TYRE_COMPOUNDS[c.tc]].short : null,
+        spareWheels: c.spw,
+        faults: faultNames,
+        canFix: faults.size > 0 && c.speed < 2 && c.fx < 0,
+        boost: c.bst,
+        boostLeft: c.bsl,
+        life: c.el >= 0 ? { engine: c.el / 100, gearbox: c.gl / 100 } : null,
+        repair: rp ? { title: FAILURE_INFO[FAILURES[rp.failure]].name, order: rp.order, step: rp.step, wait: rp.step >= 6 ? Math.max(0, (rp.started + (FAILURE_INFO[FAILURES[rp.failure]].fix * 0.62 + rp.extra) * 1000 - performance.now()) / 1000) : 0 } : null,
+      });
     }
     // the tablet screen refreshes ~12 times a second (plenty for a map, and cheap)
     if (!this.spectator && pnow - this.lastTabletDraw > 80) {

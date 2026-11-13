@@ -147,6 +147,20 @@ export interface TelemetryPacket {
   fsp?: number;
   /** Time penalties so far this run (s) – added to the stage time at the finish. */
   pen?: number;
+  /** Tyre compound (index into TYRE_COMPOUNDS). */
+  tc?: number;
+  /** Mechanical failures (bitmask over FAILURES), the gear that's gone, the failure being fixed (-1 none). */
+  fl?: number;
+  lg?: number;
+  fx?: number;
+  /** Spare wheels left. */
+  spw?: number;
+  /** Push-to-pass: state (BoostState) and seconds left. */
+  bst?: number;
+  bsl?: number;
+  /** Engine and gearbox life left (%), championship. */
+  el?: number;
+  gl?: number;
   /** What the car looks like for other players: [vehicle index, body colour, accent colour]. */
   look?: number[];
   /** Prize the driver earned this run (sent after the finish so the navigator gets their share). */

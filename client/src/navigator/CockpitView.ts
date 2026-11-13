@@ -41,7 +41,7 @@ const SCREEN_H = 0.156;
 /** The co-driver's systems panel, in the car's frame: centre, face size (m) and tilt. */
 const PANEL_POS = new THREE.Vector3(-0.47, 0.25, 0.34);
 const PANEL_W = 0.3;
-const PANEL_H = 0.169;
+const PANEL_H = 0.206;
 const PANEL_TILT = 0.75;
 
 /**

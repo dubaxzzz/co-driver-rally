@@ -107,6 +107,9 @@ Set `CLIENT_ORIGIN` if the page is served from a different origin than the serve
 | Handbrake | Space | A / B |
 | Reset car onto the road (+15 s) | R | X |
 | Spectator push when stuck or off the road (+10 s) | H | Y |
+| Fire the push-to-pass boost (once your co-driver has armed it) | B | – |
+| Roadside fix when you're on your own (car stopped) | F | – |
+| Tyre choice before the stage | click, or 1–4 | – |
 | Pause menu | Esc | Start |
 | Everything else (ignition, start, lights, wipers…) | **click the switch in the car** with the mouse (tap on a touch screen) | – |
 
@@ -227,6 +230,31 @@ fades from day through sunset to night as you climb, so lights and the light pod
   about and cost grip. You can see the dark wheel tracks deepen. The ruts stay for the next
   run in the same room, so going first or last really matters. Tarmac barely changes.
 
+## Tyres, breakdowns, boost and engine life
+
+- **Tyre choice:** before every stage the driver picks a compound (it stays open until you
+  drive off the line): **Soft** (most grip in the dry, wears fast), **Hard** (less grip, lasts),
+  **Wet** (grips in rain and showers, slides in the dry) or **Snow** (studded: amazing on snow
+  and ice, poor on tarmac). Your last choice is remembered. In the championship you only have
+  a few sets per season (3 soft, 3 hard, 2 wet, 2 snow); an empty compound can't be picked.
+  Softer and special tyres cost more per % worn.
+- **Mechanical failures:** big hits can break things: a **puncture** (that corner loses
+  grip and drags, the wheel looks flat), the **power steering** (heavy, slow steering and less
+  lock), the **turbo pipe** (−22% power) or the **gearbox** (a gear is gone and the box skips
+  it). Nothing ends your stage outright – you can limp on.
+- **Roadside fixes:** stop the car and the co-driver presses **ROADSIDE FIX** on the car panel,
+  then taps the bolts as they light up (fumble one and it takes longer). The car can't move
+  while they work. One spare wheel per stage – after that a puncture can't be fixed. On your
+  own, press **F** and it takes longer.
+- **Push-to-pass:** 15 seconds of overboost (+12% power) per stage. The co-driver **arms** it
+  on the car panel; the driver fires it with **B** when they want it. It heats the engine fast.
+  On your own you can arm and fire it with B.
+- **Engine and gearbox life (championship):** revving hard, overheating and boost wear the
+  engine; gear changes and heavy landings wear the gearbox. They carry from round to round. A
+  tired engine loses up to 14% power, and worn-out parts start to fail on their own (gearbox,
+  turbo). Rebuild them at the service park between rounds (free with a works team). The
+  co-driver's panel shows both.
+
 ## Stages, weather and opponents
 
 The driver picks everything in the **lobby** (the navigator's screen follows):
@@ -330,6 +358,9 @@ The driving screen has no checklist or key-hint boxes – just the timer, progre
 grabs the gear stick, knocks it and comes back (it stays on the stick for quick double
 shifts), and it goes to the hydraulic handbrake while you pull it.
 
+**Long stages stay smooth:** only the trees, barriers and pieces of road and ground near a car
+take part in the physics (the rest are switched off), and long stages draw a little less far.
+
 **Smooth frame rate:** the game watches its own frame rate and lowers the resolution (and
 turns shadows off) when frames get slow, then sharpens again when there is room. Trees,
 rocks and grass are drawn in 200 m chunks so only what's near and in view is drawn, and the
@@ -404,7 +435,10 @@ no temperature, no fuse warnings, no messages – so the co-driver has to call i
 - **Engine map** – ECO (cool, −8%), NORMAL, ATTACK (+7%, hotter).
 - **Tyre pressures** – LOW is fastest on gravel, mud, sand and snow; HIGH on tarmac. The panel
   shows the surface now and what's coming up.
-- **Tyre wear** – a bar from green to red; tell the driver when grip is going.
+- **Tyre wear** – a bar from green to red; tell the driver when grip is going. The compound
+  fitted shows above the pressures.
+- **Push-to-pass, faults and engine life** – arm the boost, see what's broken (and the spare
+  wheel), run the roadside fix, and (championship) the engine and gearbox life.
 - **Fuse board** – most stages blow a fuse somewhere (lights, wipers, light pod, fan, demister
   or horn). That circuit dies until the co-driver taps the blown fuse to fit a spare. The car
   carries only **2 spare fuses** per stage and each one costs **$350** off the prize – once

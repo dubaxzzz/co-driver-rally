@@ -8,6 +8,10 @@ import {
   dailyKey,
   getStage,
   repairCost,
+  ENGINE_REBUILD,
+  GEARBOX_REBUILD,
+  TYRE_COMPOUNDS,
+  COMPOUND_INFO,
   vehicleById,
   type DailyChallenge,
   type RallyConfig,
@@ -190,6 +194,22 @@ export function championshipScreen(nav: Nav): Screen {
     } else {
       svc.append(h('div', { class: 'setup-desc' }, 'The car is in perfect shape.'));
     }
+    // engine, gearbox and the season's tyre allocation
+    const life = champ.life();
+    const bar = (label: string, v: number, part: 'engine' | 'gearbox', cost: number) =>
+      h('div', { class: 'life-row' },
+        h('span', {}, label),
+        h('div', { class: 'life-bar' }, h('i', { class: v < 0.4 ? 'bad' : v < 0.7 ? 'warn' : '', style: `width:${Math.round(v * 100)}%` })),
+        h('b', {}, `${Math.round(v * 100)}%`),
+        v < 0.999 ? h('button', { class: 'btn', 'data-testid': `rebuild-${part}`, onclick: () => { const r = champ.rebuild(part); if (!r.ok) toast(r.reason ?? 'Could not rebuild', 'bad'); redraw(); } }, teamPays ? 'Rebuild (free)' : `Rebuild – ${money(cost)}`) : null,
+      );
+    svc.append(
+      h('div', { class: 'setup-desc', style: 'margin-top:10px' }, 'Engine and gearbox wear from round to round – revving hard, overheating, boost, shifts and jumps. Worn out, they lose power and start to break.'),
+      bar('Engine', life.engine, 'engine', ENGINE_REBUILD),
+      bar('Gearbox', life.gearbox, 'gearbox', GEARBOX_REBUILD),
+    );
+    const sets = champ.tyreSets();
+    svc.append(h('div', { class: 'setup-desc', style: 'margin-top:8px' }, `Tyre sets left this season: ${TYRE_COMPOUNDS.map((c) => `${COMPOUND_INFO[c].name} ${sets[c]}`).join(' · ')}`));
     if (s.team === 'privateer') svc.append(h('button', { class: 'btn', style: 'margin-top:8px', onclick: () => nav.go('garage') }, 'Garage – change car & upgrades'));
     left.append(svc);
 

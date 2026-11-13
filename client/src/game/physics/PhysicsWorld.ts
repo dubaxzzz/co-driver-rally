@@ -42,7 +42,60 @@ export class PhysicsWorld {
   addTrimesh(vertices: Float32Array, indices: Uint32Array, friction = 0.9) {
     const body = this.world.createRigidBody(this.R.RigidBodyDesc.fixed());
     const desc = this.R.ColliderDesc.trimesh(vertices, indices).setFriction(friction);
-    return this.world.createCollider(desc, body);
+    const c = this.world.createCollider(desc, body);
+    // remember where it is (its centre and reach) so it can be switched off when far away
+    let x = 0, z = 0;
+    const n = vertices.length / 3;
+    for (let i = 0; i < vertices.length; i += 3) {
+      x += vertices[i];
+      z += vertices[i + 2];
+    }
+    x /= Math.max(1, n);
+    z /= Math.max(1, n);
+    let r = 0;
+    for (let i = 0; i < vertices.length; i += 3) r = Math.max(r, Math.hypot(vertices[i] - x, vertices[i + 2] - z));
+    this.meshCentres.set(c.handle, { x, z, r });
+    return c;
+  }
+
+  private meshCentres = new Map<number, { x: number; z: number; r: number }>();
+  private statics: Array<{ c: RAPIER.Collider; x: number; z: number; r: number; on: boolean }> | null = null;
+
+  /**
+   * Long stages have thousands of static colliders (trees, barriers, pieces of
+   * road and ground). Only the ones near a car need to take part in the
+   * simulation – the rest are switched off, which keeps the physics fast.
+   */
+  cullStatics(points: Array<{ x: number; z: number }>, radius = 260) {
+    if (!this.statics) {
+      this.statics = [];
+      this.world.forEachCollider((c) => {
+        const body = c.parent();
+        if (!body || !body.isFixed()) return;
+        const m = this.meshCentres.get(c.handle);
+        const t = c.translation();
+        this.statics!.push({ c, x: m ? m.x : t.x, z: m ? m.z : t.z, r: m ? m.r : 3, on: true });
+      });
+    }
+    for (const st of this.statics) {
+      let near = false;
+      for (const p of points) {
+        const dx = p.x - st.x, dz = p.z - st.z;
+        const lim = radius + st.r;
+        if (dx * dx + dz * dz < lim * lim) {
+          near = true;
+          break;
+        }
+      }
+      if (near !== st.on) {
+        st.c.setEnabled(near);
+        st.on = near;
+      }
+    }
+  }
+  /** Call after adding/removing static colliders (new obstacles etc.). */
+  resetStatics() {
+    this.statics = null;
   }
 
   dispose() {

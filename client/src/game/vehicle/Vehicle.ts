@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
-import { SURFACES, tyreWearStep, wornGrip, type SurfaceDef, type VehicleDef, type WheelOption } from '@cdr/shared';
+import { BOOST_POWER, SURFACES, compoundGrip, compoundWear, enginePower, tyreWearStep, wornGrip, type Failure, type SurfaceDef, type TyreCompound, type VehicleDef, type WheelOption } from '@cdr/shared';
+
+const PUNCTURE: Failure[] = ['punctureFL', 'punctureFR', 'punctureRL', 'punctureRR'];
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 import type { DriveInput } from '../input/Input';
 import { WHEEL_LAYOUT, type CarModel } from './CarModel';
@@ -89,6 +91,19 @@ export class Vehicle {
   /** Road condition here: grip multiplier (swept line / loose gravel / ruts) and roughness 0..1. */
   roadGrip = 1;
   roadRough = 0;
+  /** Tyre compound fitted for this stage. */
+  compound: TyreCompound = 'soft';
+  /** 0..1 how wet the road is (rain/showers) – wet tyres love it. */
+  wetness = 0;
+  /** Mechanical failures, the gear that's gone (0 = none), gear changes so far. */
+  failures = new Set<Failure>();
+  lostGear = 0;
+  shifts = 0;
+  private steerNow = 0;
+  /** Push-to-pass running. */
+  boosting = false;
+  /** Engine life 0..1 (championship) – a tired engine has less power. */
+  engineLife = 1;
   /** 0..1 how worn the tyres are (new each stage; costs grip as it goes up). */
   tyreWear = 0;
   /** Name of the surface most wheels are on (for sound/HUD). */
@@ -267,13 +282,18 @@ export class Vehicle {
     const absSpeed = Math.abs(speed);
     if (this.gear >= 1 && this.shiftTimer <= 0) {
       const rpmNow = absSpeed * ratios[this.gear - 1] * RPM_PER_MS;
-      if (rpmNow > def.maxRpm * 0.93 && this.gear < ratios.length) {
-        this.gear++;
+      // a broken gearbox has lost a gear: the box skips it (a big gap in the power)
+      const up = this.gear + 1 === this.lostGear ? this.gear + 2 : this.gear + 1;
+      const down = this.gear - 1 === this.lostGear ? this.gear - 2 : this.gear - 1;
+      if (rpmNow > def.maxRpm * 0.93 && up <= ratios.length) {
+        this.gear = up;
         this.shiftTimer = def.shiftTime;
+        this.shifts++;
         this.onGearChange?.(true);
-      } else if (this.gear > 1 && absSpeed * ratios[this.gear - 2] * RPM_PER_MS < def.maxRpm * 0.6) {
-        this.gear--;
+      } else if (down >= 1 && absSpeed * ratios[down - 1] * RPM_PER_MS < def.maxRpm * 0.6) {
+        this.gear = down;
         this.shiftTimer = def.shiftTime * 0.7;
+        this.shifts++;
         this.onGearChange?.(false);
       }
     }
@@ -290,7 +310,8 @@ export class Vehicle {
     const shiftCut = this.shiftTimer > 0.1 ? 0.2 : 1;
     // engine damage costs power; a smashed front end chokes the radiator too
     const damageLoss = 1 - this.damage.engine * 0.45 - this.damage.front * 0.1;
-    let force = def.enginePowerN * curve * (ratio / ratios[0]) * throttle * limiter * shiftCut * damageLoss * this.sysPower;
+    const extra = (this.failures.has('turbo') ? 0.78 : 1) * (this.boosting ? BOOST_POWER : 1) * enginePower(this.engineLife);
+    let force = def.enginePowerN * curve * (ratio / ratios[0]) * throttle * limiter * shiftCut * damageLoss * this.sysPower * extra;
     if (this.gear === -1) force = -def.enginePowerN * 0.45 * throttle;
     if (this.frozen) force = 0;
 
@@ -312,7 +333,10 @@ export class Vehicle {
 
     // --- Steering (speed sensitive) ---
     // the car goes exactly where you point it – damage never pulls the steering to one side
-    const steerAngle = input.steer * def.maxSteerRad * (this.frozen ? 0 : 1);
+    // with the power steering gone the wheel is heavy: slower and less lock
+    const steerWant = input.steer * def.maxSteerRad * (this.frozen ? 0 : 1) * (this.failures.has('steering') ? 0.72 : 1);
+    this.steerNow += (steerWant - this.steerNow) * Math.min(1, dt * (this.failures.has('steering') ? 4 : 60));
+    const steerAngle = this.steerNow;
     c.setWheelSteering(0, steerAngle);
     c.setWheelSteering(1, steerAngle);
 
@@ -323,7 +347,7 @@ export class Vehicle {
     // the slide (or lift) and the rear bites again.
     {
       const roadSurf = this.inWater ? SURFACES.water : this.roadSurface;
-      const avail = 18 * roadSurf.grip * this.roadGrip * this.weatherGrip * this.sysGrip(roadSurf.id) * wornGrip(this.tyreWear) * (this.def.grip / 2.05) * (1 + Math.max(0, absSpeed - 20) * 0.02); // downforce helps at speed
+      const avail = 18 * compoundGrip(this.compound, roadSurf.id, this.wetness) * roadSurf.grip * this.roadGrip * this.weatherGrip * this.sysGrip(roadSurf.id) * wornGrip(this.tyreWear) * (this.def.grip / 2.05) * (1 + Math.max(0, absSpeed - 20) * 0.02); // downforce helps at speed
       const upV = new THREE.Vector3(0, 1, 0).applyQuaternion(this.tmpQ);
       const av0 = this.body.angvel();
       const yawRate = av0.x * upV.x + av0.y * upV.y + av0.z * upV.z;
@@ -357,6 +381,8 @@ export class Vehicle {
       let grip = this.gripBase * surf.grip * this.weatherGrip * this.sysGrip(surf.id) * wornGrip(this.tyreWear) * (isRoad ? this.roadGrip : 1) * (rearWheel ? CHASSIS.rearGripBias : 1);
       if (rearWheel && handbrake) grip *= 0.45;
       if (rearWheel) grip *= 1 - 0.3 * this.rearLoose;
+      grip *= compoundGrip(this.compound, surf.id, this.wetness);
+      if (this.failures.has(PUNCTURE[i])) grip *= 0.45; // running on the rim
       // deep water lifts the car: the tyres barely touch the river bed
       if (this.inWater) grip *= Math.max(0.05, 1 - this.submerged * 1.1);
       c.setWheelFrictionSlip(i, grip);
@@ -405,6 +431,8 @@ export class Vehicle {
     let resist = 0;
     if (contacts && absSpeed > 0.3) resist = ((rolling + surfDrag * absSpeed) / 4) * Math.sign(speed);
     if (this.inWater) resist += 900 * Math.sign(speed) + 60 * speed; // wading through the river
+    const flats = PUNCTURE.filter((k) => this.failures.has(k)).length;
+    if (flats && absSpeed > 0.5) resist += flats * (350 + 18 * absSpeed) * Math.sign(speed); // a flat tyre drags
     const drag = -0.42 * speed * Math.abs(speed) - resist;
     this.body.addForce({ x: fwd.x * drag, y: -down + fwd.y * drag, z: fwd.z * drag }, true);
 
@@ -512,7 +540,7 @@ export class Vehicle {
     // tyres wear with distance, and much faster when sliding or spinning them up
     if (grounded >= 2 && !this.frozen && !this.inWater) {
       const surfId = this.surfaceName.id;
-      this.tyreWear = Math.min(1, this.tyreWear + tyreWearStep(dt, { speed, slip: t.slip, loose: this.rearLoose, handbrake, surface: surfId, pressureGrip: this.sysGrip(surfId) }));
+      this.tyreWear = Math.min(1, this.tyreWear + tyreWearStep(dt, { speed, slip: t.slip, loose: this.rearLoose, handbrake, surface: surfId, pressureGrip: this.sysGrip(surfId) }) * compoundWear(this.compound, surfId, this.wetness));
     }
     t.grounded = grounded >= 2;
     t.onGravel = onGravel >= 2;
@@ -549,6 +577,10 @@ export class Vehicle {
       w.rotation.y = c.wheelSteering(i) ?? 0;
       const spin = w.children[0];
       spin.rotation.x = c.wheelRotation(i) ?? 0;
+      // a flat tyre sits lower and squashed
+      const flat = this.failures.has(PUNCTURE[i]);
+      spin.scale.set(1, flat ? 0.88 : 1, flat ? 0.88 : 1);
+      if (flat) w.position.y -= 0.05;
     }
     this.model.setBrakeLights(this.telemetry.brake > 0.1);
   }

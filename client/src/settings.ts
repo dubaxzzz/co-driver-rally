@@ -1,5 +1,5 @@
 /** User preferences + garage selection (local to this device). */
-import { DEFAULT_CONFIG, PAINTS, VEHICLES, WHEELS, type RallyConfig } from '@cdr/shared';
+import { DEFAULT_CONFIG, PAINTS, VEHICLES, WHEELS, type RallyConfig, type TyreCompound } from '@cdr/shared';
 import { career } from './career';
 
 export interface Settings {
@@ -15,6 +15,8 @@ export interface Settings {
   /** How far the driver can see through the night fog. */
   visibility: 'verylow' | 'low' | 'normal';
   wipers: 0 | 1 | 2; // off / slow / fast
+  /** Last tyre compound picked before a stage. */
+  tyre?: TyreCompound;
   /** Last stage / weather / AI choice (used by PLAY and the lobby). */
   rally: RallyConfig;
 }

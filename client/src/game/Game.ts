@@ -47,6 +47,20 @@ import { applySharedSwitch, decodeSwitches, defaultSwitches,
   systemsGrip,
   FUSES,
   SPARE_FUSES,
+  SPARE_WHEELS,
+  FAILURES,
+  FAILURE_INFO,
+  BOOST_SECONDS,
+  TYRE_COMPOUNDS,
+  COMPOUND_INFO,
+  GEARBOX_WEAR_PER_SHIFT,
+  GEARBOX_WEAR_PER_LANDING,
+  encodeFailures,
+  engineWearStep,
+  suggestedCompound,
+  type Failure,
+  type BoostState,
+  type TyreCompound,
   FUSE_COST,
   TYRE_SET_COST,
   type CarSystems, encodeSwitches, SHARED_SWITCHES, type CarSwitches, type SharedSwitch } from '@cdr/shared';
@@ -179,7 +193,7 @@ export class Game {
       const model = createCarModel(sel.paint, sel.wheel, sel.vehicle.body);
       this.scene.add(model.root);
       this.vehicle = new Vehicle(this.physics, sel.vehicle, sel.wheel, model);
-      if (this.world.roadColliderHandle !== null) this.vehicle.roadColliders.add(this.world.roadColliderHandle);
+      for (const hnd of this.world.roadColliderHandles) this.vehicle.roadColliders.add(hnd);
       // First person only: hide the outside of the car, show the cockpit and switch on real headlights.
       model.setExteriorVisible(false);
       if (this.weather.headlights || this.stage.def.nightfall) model.enableHeadlights();
@@ -191,6 +205,7 @@ export class Game {
       this.vehicle.onImpact = (s, zone) => {
         audio.impact(s);
         if (zone === 'windscreen' || (zone === 'front' && s > 0.15)) audio.glass(s);
+        this.maybeFail(s, zone);
       };
 
       this.look = [Math.max(0, VEHICLES.findIndex((x) => x.id === sel.vehicle.id)), sel.paint.body, sel.paint.accent];
@@ -212,7 +227,7 @@ export class Game {
         const skill = entrant?.skill ?? room?.race.aiSkill ?? 'medium';
         const driver = new AIDriver(this.physics, stage, crew.name, aiModel, skill, aiGridOffset(i, driverCount), this.weather);
         if (entrant) this.aiEntrant.set(driver, entrant.entrantId);
-        if (this.world.roadColliderHandle !== null) driver.vehicle.roadColliders.add(this.world.roadColliderHandle);
+        for (const hnd of this.world.roadColliderHandles) driver.vehicle.roadColliders.add(hnd);
         this.ai.push(driver);
       }
 
@@ -250,6 +265,8 @@ export class Game {
   private bindInput() {
     this.input.on('reset', () => this.resetVehicle());
     this.input.on('push', () => this.pushCar());
+    this.input.on('fix', () => this.startFix(-1, false));
+    this.input.on('boost', () => this.fireBoost());
     this.input.on('pause', () => (this.paused ? this.closeOverlay() : this.openPause()));
   }
 
@@ -268,6 +285,10 @@ export class Game {
           if (s.fuse !== e.value || this.fuseSpares <= 0) return;
           s.fuse = -1;
           this.fuseSpares--;
+        } else if (e.key === 'fix') return this.startFix(e.value, true);
+        else if (e.key === 'fixdone') return this.finishFix(e.value);
+        else if (e.key === 'boost') {
+          if (this.boostState === 0) this.boostState = 1;
         }
         // Only the co-driver can see the car's systems (the panel on their side of
         // the dash) – the driver gets no read-out, just a quiet click.
@@ -359,6 +380,21 @@ export class Game {
     this.penalties = [];
     this.crowdHit.clear();
     this.roadWear?.newRun();
+    this.staticsAt = 0;
+    this.vehicle.failures.clear();
+    this.vehicle.lostGear = 0;
+    this.vehicle.boosting = false;
+    this.vehicle.shifts = 0;
+    this.spareWheels = SPARE_WHEELS;
+    this.fixing = null;
+    this.boostState = 0;
+    this.boostLeft = BOOST_SECONDS;
+    this.engineUsed = 0;
+    this.landings = 0;
+    const life = this.ctx.kind === 'championship' ? champ.life() : { engine: 1, gearbox: 1 };
+    this.vehicle.engineLife = life.engine;
+    this.gearboxLife = life.gearbox;
+    this.openTyreChoice();
     this.serviceState = 'none';
     this.closeService();
     this.fuseSpares = SPARE_FUSES;
@@ -562,6 +598,7 @@ export class Game {
     this.vehicle.place(s.x, s.y + 1.0, s.z, s.h);
     this.resets++;
     this.upsideDownFor = 0;
+    this.staticsAt = 0; // wake up the colliders where the car lands
     if (this.raceState?.phase === 'racing') this.addPenalty('Reset', 15);
   }
 
@@ -571,6 +608,7 @@ export class Game {
   /** Ruts and swept lines: the road breaks up as cars go over it (kept between runs). */
   private roadWear: RoadWear | null = null;
   private wearRefreshAt = 0;
+  private staticsAt = 0;
   private crowdHit = new Set<number>();
   private stuckFor = 0;
   private tyreUsed = 0;
@@ -606,6 +644,7 @@ export class Game {
     const lat = side * Math.min(hw - 1.2, 1.5); // back on the road, on the side you went off
     v.place(sp.x + Math.cos(sp.h) * lat, sp.y + 0.8, sp.z - Math.sin(sp.h) * lat, sp.h);
     this.resets++; // the server sees it like a reset (it moves the car), but it's cheaper
+    this.staticsAt = 0;
     this.upsideDownFor = 0;
     this.stuckFor = 0;
     this.addPenalty('Spectator push', 10);
@@ -621,6 +660,18 @@ export class Game {
     if (st.def.nightfall) {
       const f = (d - st.startDistance) / (st.finishDistance - st.startDistance);
       this.world.atmosphere.setDarkness(Math.min(1, Math.max(0, (f - 0.2) / 0.55)));
+    }
+    // only the static colliders near a car take part in the physics (long stages have thousands)
+    if (this.physics && this.clock > this.staticsAt) {
+      this.staticsAt = this.clock + 0.25;
+      const pts = [{ x: v.position.x, z: v.position.z }];
+      for (const a of this.ai) pts.push({ x: a.vehicle.position.x, z: a.vehicle.position.z });
+      for (const r of this.remotes.values()) {
+        if (!r.active) continue;
+        const t = r.body.translation();
+        pts.push({ x: t.x, z: t.z });
+      }
+      this.physics.cullStatics(pts);
     }
     // the road under us: swept, clean or rutted (short cuts are untouched: rough, but no ruts)
     if (this.roadWear) {
@@ -769,6 +820,197 @@ export class Game {
     if (this.raceState?.phase === 'racing') this.vehicle.frozen = false;
   }
 
+  // ---------------------------------------------------------------- failures, roadside fixes, boost, tyres
+  private spareWheels = SPARE_WHEELS;
+  private fixing: { failure: Failure; startedAt: number; until: number; byNav: boolean } | null = null;
+  private boostState: BoostState = 0;
+  private boostLeft = BOOST_SECONDS;
+  private boostEl: HTMLElement | null = null;
+  private engineUsed = 0;
+  private landings = 0;
+  private gearboxLife = 1;
+
+  /** Engine and gearbox life left, counting this stage so far. */
+  private lifeNow() {
+    return {
+      engine: Math.max(0, this.vehicle.engineLife - this.engineUsed),
+      gearbox: Math.max(0, this.gearboxLife - this.vehicle.shifts * GEARBOX_WEAR_PER_SHIFT - this.landings * GEARBOX_WEAR_PER_LANDING),
+    };
+  }
+
+  /** A big hit can break something: a puncture, the steering, the turbo pipe, a gear. */
+  private maybeFail(strength: number, zone: string) {
+    const v = this.vehicle;
+    if (this.raceState?.phase !== 'racing' || v.frozen) return;
+    if (zone === 'engine') this.landings++;
+    const chance = Math.max(0, strength - 0.18) * 0.9;
+    if (Math.random() > chance) return;
+    let f: Failure;
+    if (zone === 'left' || zone === 'right') {
+      const front = Math.random() < 0.5;
+      f = (zone === 'left' ? (front ? 'punctureFL' : 'punctureRL') : front ? 'punctureFR' : 'punctureRR') as Failure;
+      if (Math.random() < 0.3) f = 'steering';
+    } else if (zone === 'front') f = Math.random() < 0.5 ? 'steering' : Math.random() < 0.5 ? 'turbo' : Math.random() < 0.5 ? 'punctureFL' : 'punctureFR';
+    else if (zone === 'engine') f = Math.random() < 0.5 ? 'gearbox' : (['punctureFL', 'punctureFR', 'punctureRL', 'punctureRR'] as Failure[])[Math.floor(Math.random() * 4)];
+    else f = Math.random() < 0.5 ? 'punctureRL' : 'punctureRR';
+    this.fail(f);
+  }
+
+  private fail(f: Failure) {
+    const v = this.vehicle;
+    if (v.failures.has(f)) return;
+    v.failures.add(f);
+    if (f === 'gearbox') v.lostGear = 2 + Math.floor(Math.random() * Math.max(1, v.def.gearRatios.length - 2));
+    audio.impact(0.4);
+    // the driver feels it (and the solo driver is told what it is); the co-driver sees it on the panel
+    if (!this.hasNavigator()) this.hud.warn(`${FAILURE_INFO[f].name} – STOP AND PRESS F TO FIX`, 3);
+  }
+
+  /** Worn-out engine or gearbox (championship): things start to break on their own. */
+  private wearAndTear(dt: number) {
+    const v = this.vehicle;
+    if (this.raceState?.phase !== 'racing' || v.frozen) return;
+    const rpmFrac = v.telemetry.rpm / v.def.maxRpm;
+    if (this.ctx.kind === 'championship') this.engineUsed += engineWearStep(dt, { rpmFrac, temp: this.sys.temp, boost: v.boosting });
+    const life = this.lifeNow();
+    if (life.gearbox < 0.4 && Math.random() < dt * (0.4 - life.gearbox) * 0.01) this.fail('gearbox');
+    if (life.engine < 0.35 && Math.random() < dt * (0.35 - life.engine) * 0.008) this.fail('turbo');
+  }
+
+  /** Start a roadside fix (the co-driver from the panel, or F when you're on your own). */
+  private startFix(index: number, byNav: boolean) {
+    const v = this.vehicle;
+    if (this.fixing || this.raceState?.phase !== 'racing' || this.serviceState === 'working') return;
+    const list = [...v.failures];
+    const f = index >= 0 ? FAILURES[index] : list.find((x) => !x.startsWith('puncture') || this.spareWheels > 0);
+    if (!f || !v.failures.has(f)) {
+      if (!byNav) this.hud.warn(list.length ? 'NO SPARE WHEEL LEFT – DRIVE ON IT' : 'NOTHING TO FIX', 1.5);
+      return;
+    }
+    if (Math.abs(v.telemetry.speed) > 2) {
+      this.hud.warn('STOP THE CAR FIRST', 1.2);
+      return;
+    }
+    if (f.startsWith('puncture') && this.spareWheels <= 0) return;
+    const base = FAILURE_INFO[f].fix;
+    const now = performance.now();
+    // with a co-driver it's their job (the panel); alone it takes longer
+    this.fixing = { failure: f, startedAt: now, until: now + base * (byNav ? 3 : 1.4) * 1000, byNav };
+    v.frozen = true;
+    this.hud.warn(byNav ? 'CO-DRIVER OUT FIXING THE CAR' : `FIXING: ${FAILURE_INFO[f].name}`, 2);
+  }
+
+  private finishFix(index: number) {
+    const fx = this.fixing;
+    if (!fx || FAILURES[index] !== fx.failure) return;
+    // the co-driver can't be quicker than the job takes
+    if (performance.now() < fx.startedAt + FAILURE_INFO[fx.failure].fix * 600) return;
+    this.completeFix();
+  }
+
+  private completeFix() {
+    const fx = this.fixing;
+    if (!fx) return;
+    const v = this.vehicle;
+    v.failures.delete(fx.failure);
+    if (fx.failure === 'gearbox') v.lostGear = 0;
+    if (fx.failure.startsWith('puncture')) this.spareWheels--;
+    this.fixing = null;
+    if (this.raceState?.phase === 'racing' && this.serviceState !== 'working' && this.serviceState !== 'menu') v.frozen = false;
+    this.hud.warn('FIXED – GO!', 1.5);
+    audio.click();
+  }
+
+  private updateFixAndBoost(dt: number) {
+    const v = this.vehicle;
+    const fx = this.fixing;
+    if (fx) {
+      v.frozen = true;
+      const left = Math.ceil((fx.until - performance.now()) / 1000);
+      // alone: the timer is the job; with a co-driver it's a safety net if they never finish
+      if (!fx.byNav && left <= 0) this.completeFix();
+      else if (fx.byNav && left <= 0) this.completeFix();
+      else if (Math.random() < dt * 1.2) this.hud.warn(fx.byNav ? 'CO-DRIVER FIXING THE CAR…' : `FIXING… ${left} s`, 1);
+    } else if (v.failures.size && this.raceState?.phase === 'racing' && Math.abs(v.telemetry.speed) < 1.5 && !v.frozen && Math.random() < dt * 0.5) {
+      this.hud.warn(this.hasNavigator() ? 'STOPPED – YOUR CO-DRIVER CAN FIX IT FROM THE PANEL' : 'PRESS F TO FIX THE CAR', 1.4);
+    }
+    // push-to-pass
+    if (this.boostState === 2) {
+      this.boostLeft = Math.max(0, this.boostLeft - dt);
+      this.sys.temp += dt * 1.6; // overboost cooks the engine
+      if (this.boostLeft <= 0) this.boostState = 3;
+    }
+    v.boosting = this.boostState === 2 && !v.frozen;
+    this.drawBoost();
+  }
+
+  /** B: fire the boost (the co-driver arms it; alone you can arm and fire it yourself). */
+  private fireBoost() {
+    if (this.raceState?.phase !== 'racing') return;
+    if (this.boostState === 0 && !this.hasNavigator()) this.boostState = 1;
+    if (this.boostState === 1) {
+      this.boostState = 2;
+      audio.click();
+    } else if (this.boostState === 0) this.hud.warn('BOOST NOT ARMED – YOUR CO-DRIVER ARMS IT', 1.2);
+  }
+
+  private drawBoost() {
+    const st = this.boostState;
+    if (st === 0 || st === 3) {
+      this.boostEl?.remove();
+      this.boostEl = null;
+      return;
+    }
+    if (!this.boostEl) {
+      this.boostEl = h('div', { class: 'boost-chip', 'data-testid': 'boost' });
+      this.container.append(this.boostEl);
+    }
+    const text = st === 1 ? 'BOOST ARMED – PRESS B' : `BOOST ${Math.ceil(this.boostLeft)} s`;
+    if (this.boostEl.textContent !== text) this.boostEl.textContent = text;
+    this.boostEl.classList.toggle('on', st === 2);
+  }
+
+  // ---- tyre choice before the stage ----
+  private tyreEl: HTMLElement | null = null;
+  private openTyreChoice() {
+    this.tyreEl?.remove();
+    const champSets = this.ctx.kind === 'championship' ? champ.tyreSets() : null;
+    const suggest = suggestedCompound(this.stage.def.surface, this.weather.rain, this.weather.snow);
+    const pref = settings.get().tyre;
+    let pick: TyreCompound = champSets && !champSets[pref ?? suggest] ? suggest : (pref ?? suggest);
+    if (champSets && !champSets[pick]) pick = TYRE_COMPOUNDS.find((c) => champSets[c] > 0) ?? 'hard';
+    this.vehicle.compound = pick;
+    const btns = TYRE_COMPOUNDS.map((c, i) => {
+      const info = COMPOUND_INFO[c];
+      const left = champSets ? champSets[c] : null;
+      const b = h('button', { class: `tyre-btn ${c === pick ? 'sel' : ''}`, 'data-testid': `tyre-${c}`, disabled: left === 0 ? true : undefined },
+        h('b', {}, `${i + 1} · ${info.name}`), h('span', {}, info.desc), left !== null ? h('i', {}, `${left} set${left === 1 ? '' : 's'} left`) : null) as HTMLButtonElement;
+      b.onclick = () => choose(c);
+      return b;
+    });
+    const choose = (c: TyreCompound) => {
+      if (champSets && !champSets[c]) return;
+      this.vehicle.compound = c;
+      settings.update({ tyre: c });
+      btns.forEach((b, i) => b.classList.toggle('sel', TYRE_COMPOUNDS[i] === c));
+    };
+    this.tyreEl = h('div', { class: 'tyre-choice', 'data-testid': 'tyre-choice' },
+      h('div', { class: 'panel-title' }, `Tyres for this stage${champSets ? ' (season allocation)' : ''}`), ...btns,
+      h('div', { class: 'setup-desc' }, `Suggested: ${COMPOUND_INFO[suggest].name}. Closes when you drive off the line – press 1-4.`));
+    this.container.append(this.tyreEl);
+    const key = (e: KeyboardEvent) => {
+      if (!this.tyreEl) return window.removeEventListener('keydown', key);
+      if (/^[1-4]$/.test(e.key)) choose(TYRE_COMPOUNDS[Number(e.key) - 1]);
+    };
+    window.addEventListener('keydown', key);
+  }
+  private closeTyreChoice() {
+    if (!this.tyreEl) return;
+    this.tyreEl.remove();
+    this.tyreEl = null;
+    if (this.ctx.kind === 'championship') champ.useTyreSet(this.vehicle.compound);
+  }
+
   private closeService() {
     this.serviceEl?.remove();
     this.serviceEl = null;
@@ -914,11 +1156,13 @@ export class Game {
     const wear = this.vehicle.tyreWear + this.tyreUsed;
     return [
       { label: `Spare fuses (${used} × ${money(FUSE_COST)})`, amount: -used * FUSE_COST },
-      { label: `Tyres (${Math.round(wear * 100)}% worn)`, amount: -Math.round((wear * TYRE_SET_COST) / 10) * 10 },
+      { label: `${COMPOUND_INFO[this.vehicle.compound].name} tyres (${Math.round(wear * 100)}% worn)`, amount: -Math.round((wear * TYRE_SET_COST * COMPOUND_INFO[this.vehicle.compound].price) / 10) * 10 },
     ];
   }
 
   private finishChampionship(r: RaceResult | null) {
+    const lifeLeft = this.lifeNow();
+    champ.setLife(lifeLeft.engine, lifeLeft.gearbox);
     const summary = champ.finishRound(r?.timeMs ?? null, this.onTrackTimes(r?.timeMs ?? null), this.damageNow(), r?.resets ?? this.resets, this.runningCosts());
     if (summary) this.prize = { runId: this.raceState?.runId ?? 0, total: summary.prize.total };
     const save = champ.get();
@@ -1332,6 +1576,11 @@ export class Game {
     this.updateSystems(dt, v);
     this.updateConditions(dt, v);
     this.updateRally(dt, v);
+    this.updateFixAndBoost(dt);
+    this.wearAndTear(dt);
+    // the tyre choice stays open until the car moves off the line (or 15 s into the stage)
+    if (this.tyreEl && this.raceState?.phase === 'racing' && (this.race.distance > this.stage.spawnDistance + 6 || this.raceTimeMs() > 15000)) this.closeTyreChoice();
+    v.wetness = Math.min(1, Math.max(0, (1 - v.weatherGrip) / 0.2));
     const river = this.world.terrain.waterAt(p0.x, p0.z);
     v.inWater = !!river && p0.y < river.waterY + 0.6;
 
@@ -1395,7 +1644,7 @@ export class Game {
 
     // Off-road safety: fell through/away, or stuck upside down
     const roadY = sampleAt(this.stage.samples, this.race.distance).y;
-    if (pos.y < roadY - 25 || Math.abs(this.race.lateral) > 105) this.resetVehicle();
+    if (pos.y < roadY - 25 || Math.abs(this.race.lateral) > 70) this.resetVehicle();
     // stuck in the river?
     if (v.inWater && !v.flooded && Math.abs(v.telemetry.speed) < 2) {
       this.underwaterFor += dt;
@@ -1519,6 +1768,14 @@ export class Game {
       sys: encodeSystems(this.sys),
       tmp: Math.round(this.sys.temp),
       pen: this.penaltySec(),
+      tc: TYRE_COMPOUNDS.indexOf(this.vehicle.compound),
+      fl: encodeFailures(this.vehicle.failures),
+      lg: this.vehicle.lostGear,
+      fx: this.fixing ? FAILURES.indexOf(this.fixing.failure) : -1,
+      spw: this.spareWheels,
+      bst: this.boostState,
+      bsl: Math.ceil(this.boostLeft),
+      ...(this.ctx.kind === 'championship' ? { el: Math.round(this.lifeNow().engine * 100), gl: Math.round(this.lifeNow().gearbox * 100) } : {}),
       tw: Math.round(this.vehicle.tyreWear * 100),
       fsp: this.fuseSpares,
       ai: this.ai.flatMap((a) => {

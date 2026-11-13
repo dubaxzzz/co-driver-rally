@@ -16,8 +16,8 @@ export interface StageWorld {
   water: WaterBody[];
   /** Per-frame animation of weather + rivers around the camera. */
   update(dt: number, camera: THREE.Vector3, carVel: THREE.Vector3): void;
-  /** Collider handle of the road surface (driver only). */
-  roadColliderHandle: number | null;
+  /** Collider handles of the road surface (driver only; in chunks on long stages). */
+  roadColliderHandles: number[];
 }
 
 /**
@@ -34,11 +34,17 @@ export function buildStageWorld(
   const track = buildTrack(stage);
   scene.add(track.road, track.terrain);
   for (const w of track.water) scene.add(w.mesh);
-  let roadColliderHandle: number | null = null;
+  const roadColliderHandles: number[] = [];
   if (opts.physics) {
-    roadColliderHandle = opts.physics.addTrimesh(track.roadCollider.vertices, track.roadCollider.indices, 0.9).handle;
-    opts.physics.addTrimesh(track.terrainCollider.vertices, track.terrainCollider.indices, 0.8);
+    // split into pieces so the physics only tests the bits of road/ground near the car
+    for (const part of splitTrimesh(track.roadCollider.vertices, track.roadCollider.indices, 250)) roadColliderHandles.push(opts.physics.addTrimesh(part.vertices, part.indices, 0.9).handle);
+    for (const part of splitTrimesh(track.terrainCollider.vertices, track.terrainCollider.indices, 250)) opts.physics.addTrimesh(part.vertices, part.indices, 0.8);
   }
+  // long stages draw a little less far (the far landscape and fog cover the rest)
+  const long = stage.length > 12000;
+  const viewRoad = long ? 750 : 1000;
+  const viewGround = long ? 600 : 800;
+  const sceneryView = long ? 520 : 650;
   const atmosphere = new Atmosphere(scene, weather, stage.def.scenery, opts.quality === 'high', opts.fogMultiplier, !!stage.def.flatBase);
   const scenery = new Scenery(stage, track.data, opts.physics, opts.quality);
   scene.add(scenery.group);
@@ -74,14 +80,14 @@ export function buildStageWorld(
     snow,
     spray,
     water: track.water,
-    roadColliderHandle,
+    roadColliderHandles,
     update(dt, camera, carVel) {
-      scenery.cull(camera);
+      scenery.cull(camera, sceneryView);
       // long stages: don't even consider road/terrain pieces far behind or ahead
       for (const g of [track.road, track.terrain])
         for (const m of g.children) {
           const bs = (m as THREE.Mesh).geometry.boundingSphere;
-          if (bs) m.visible = bs.center.distanceTo(camera) - bs.radius < (g === track.road ? 1000 : 800);
+          if (bs) m.visible = bs.center.distanceTo(camera) - bs.radius < (g === track.road ? viewRoad : viewGround);
         }
       rain?.update(dt, camera, carVel);
       snow?.update(dt, camera, carVel);
@@ -90,4 +96,33 @@ export function buildStageWorld(
     },
   };
 
+}
+
+/** Splits a triangle mesh into square cells (by triangle centre) – one collider each. */
+function splitTrimesh(vertices: Float32Array, indices: Uint32Array, cell: number) {
+  const groups = new Map<string, number[]>();
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = indices[t] * 3;
+    const key = `${Math.floor(vertices[a] / cell)},${Math.floor(vertices[a + 2] / cell)}`;
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = []));
+    g.push(indices[t], indices[t + 1], indices[t + 2]);
+  }
+  const out: Array<{ vertices: Float32Array; indices: Uint32Array }> = [];
+  for (const tri of groups.values()) {
+    const remap = new Map<number, number>();
+    const v: number[] = [];
+    const ix = new Uint32Array(tri.length);
+    tri.forEach((old, i) => {
+      let n = remap.get(old);
+      if (n === undefined) {
+        n = v.length / 3;
+        remap.set(old, n);
+        v.push(vertices[old * 3], vertices[old * 3 + 1], vertices[old * 3 + 2]);
+      }
+      ix[i] = n;
+    });
+    out.push({ vertices: new Float32Array(v), indices: ix });
+  }
+  return out;
 }

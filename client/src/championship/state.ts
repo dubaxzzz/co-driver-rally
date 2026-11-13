@@ -17,6 +17,10 @@ import {
   pointsFor,
   repairCost,
   seasonSchedule,
+  SEASON_TYRE_SETS,
+  ENGINE_REBUILD,
+  GEARBOX_REBUILD,
+  type TyreCompound,
   simulateTimes,
   skillForPace,
   type Classified,
@@ -46,6 +50,11 @@ export interface ChampSave {
   misses: number;
   offer: TeamId | null;
   carry: { zones: number[]; wheels: number[] };
+  /** Tyre sets left this season, per compound. */
+  tyreSets?: Record<TyreCompound, number>;
+  /** Engine and gearbox life (1 = fresh) – carried from round to round. */
+  engineLife?: number;
+  gearboxLife?: number;
   inProgress: boolean;
   lastSummary: RoundSummary | null;
   titles: number;
@@ -108,6 +117,9 @@ export const champ = {
       misses: 0,
       offer: null,
       carry: noDamage(),
+      tyreSets: { ...SEASON_TYRE_SETS },
+      engineLife: 1,
+      gearboxLife: 1,
       inProgress: false,
       lastSummary: null,
       titles: save?.titles ?? 0,
@@ -274,6 +286,39 @@ export const champ = {
     save.lastSummary = summary;
     commit();
     return summary;
+  },
+
+  /** Engine and gearbox life carried into the next round. */
+  life(): { engine: number; gearbox: number } {
+    return { engine: save?.engineLife ?? 1, gearbox: save?.gearboxLife ?? 1 };
+  },
+  setLife(engine: number, gearbox: number) {
+    if (!save) return;
+    save = { ...save, engineLife: Math.max(0, Math.min(1, engine)), gearboxLife: Math.max(0, Math.min(1, gearbox)) };
+    commit();
+  },
+  /** Rebuild the engine or gearbox at the service park (free when a team pays). */
+  rebuild(part: 'engine' | 'gearbox'): { ok: boolean; reason?: string } {
+    if (!save) return { ok: false };
+    const cost = part === 'engine' ? ENGINE_REBUILD : GEARBOX_REBUILD;
+    if (save.team === 'privateer') {
+      if (career.get().money < cost) return { ok: false, reason: `A rebuild costs $${cost.toLocaleString()} – not enough in the bank.` };
+      career.spend(cost);
+    }
+    save = { ...save, ...(part === 'engine' ? { engineLife: 1 } : { gearboxLife: 1 }) };
+    commit();
+    return { ok: true };
+  },
+  /** Tyre sets left this season. */
+  tyreSets(): Record<TyreCompound, number> {
+    return { ...SEASON_TYRE_SETS, ...(save?.tyreSets ?? {}) };
+  },
+  useTyreSet(c: TyreCompound) {
+    if (!save) return;
+    const sets = champ.tyreSets();
+    sets[c] = Math.max(0, sets[c] - 1);
+    save = { ...save, tyreSets: sets };
+    commit();
   },
 
   /** Repair cost for the carried damage (free when a team pays). */

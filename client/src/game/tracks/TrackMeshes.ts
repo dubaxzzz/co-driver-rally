@@ -124,7 +124,7 @@ function grassColour(sc: BuiltStage['def']['scenery'], noise: ReturnType<typeof 
 const MARGIN = 280;
 const CELL = 5;
 const VISIBLE_RADIUS = 300;
-const COLLIDE_RADIUS = 110;
+const COLLIDE_RADIUS = 75;
 /** Terrain tile size in cells (tiles only exist near the road). */
 const TILE = 32;
 
@@ -570,7 +570,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
         const ramp = Math.min(1, Math.max(0, (dist - 260) / 900));
         const mountains = (noise(x * 0.0011 + 7, z * 0.0011, 4) - 0.42) * big * ramp * ramp;
         let y = (dist > 1e5 ? b.minY : fy[k]) - 6 + hillsAt(x, z) + mountains;
-        if (dist < VISIBLE_RADIUS + 10) y = heightAt(x, z) - 6; // hidden under the detailed tiles
+        if (dist < VISIBLE_RADIUS + 10) y = heightAt(x, z) - 3; // just under the detailed tiles
         fPos[k * 3] = x;
         fPos[k * 3 + 1] = y;
         fPos[k * 3 + 2] = z;
@@ -773,6 +773,8 @@ export class RoadWear {
   private readonly rowStep = 5;
 
   private drawn = false;
+  private dirtyFrom = Infinity;
+  private dirtyTo = -Infinity;
   constructor(stage: BuiltStage) {
     const n = Math.ceil(stage.length / RoadWear.CELL) + 1;
     this.wear = new Float32Array(n);
@@ -827,7 +829,11 @@ export class RoadWear {
     const c0 = Math.floor(last / RoadWear.CELL), c1 = Math.floor(d / RoadWear.CELL);
     const add = (this.soft ? 0.11 : 0.04) * (1 + wet * 1.6);
     for (let c = c0 + 1; c <= c1 && c < this.wear.length; c++) this.wear[c] = Math.min(1, this.wear[c] + add);
-    if (c1 > c0) this.dirty = true;
+    if (c1 > c0) {
+      this.dirty = true;
+      this.dirtyFrom = Math.min(this.dirtyFrom, (c0 + 1) * RoadWear.CELL);
+      this.dirtyTo = Math.max(this.dirtyTo, (c1 + 1) * RoadWear.CELL);
+    }
   }
 
   /** New run: cars' last positions are forgotten (the ruts stay). */
@@ -852,10 +858,15 @@ export class RoadWear {
   /** Redraw the ruts if anything changed (call about once a second). */
   refresh() {
     if (!this.dirty && this.drawn) return;
+    const rows = this.colors.length / 16;
+    // only the rows that changed (a whole 30 km stage is a lot to re-upload every second)
+    const r0 = this.drawn ? Math.max(0, Math.floor(this.dirtyFrom / this.rowStep) - 1) : 0;
+    const r1 = this.drawn ? Math.min(rows, Math.ceil(this.dirtyTo / this.rowStep) + 1) : rows;
     this.dirty = false;
     this.drawn = true;
-    const rows = this.colors.length / 16;
-    for (let r = 0; r < rows; r++) {
+    this.dirtyFrom = Infinity;
+    this.dirtyTo = -Infinity;
+    for (let r = r0; r < r1; r++) {
       const w = this.at(r * this.rowStep);
       const a = Math.min(0.75, w * 0.85);
       for (let j = 0; j < 4; j++) {
@@ -864,6 +875,9 @@ export class RoadWear {
         this.colors[o + 3] = a;
       }
     }
-    this.mesh.geometry.getAttribute('color').needsUpdate = true;
+    const attr = this.mesh.geometry.getAttribute('color') as THREE.BufferAttribute;
+    attr.clearUpdateRanges();
+    attr.addUpdateRange(r0 * 16, Math.max(0, r1 - r0) * 16);
+    attr.needsUpdate = true;
   }
 }

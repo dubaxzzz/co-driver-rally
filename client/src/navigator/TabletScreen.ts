@@ -40,7 +40,10 @@ export type PanelButton =
   | 'als'
   | `map${0 | 1 | 2}`
   | `tyre${0 | 1 | 2}`
-  | `fuse${0 | 1 | 2 | 3 | 4 | 5}`;
+  | `fuse${0 | 1 | 2 | 3 | 4 | 5}`
+  | 'boost'
+  | 'fix'
+  | `bolt${0 | 1 | 2 | 3 | 4 | 5}`;
 interface Rect { x: number; y: number; w: number; h: number }
 
 const ACCENT = '#ff4b1f';
@@ -175,7 +178,7 @@ export class TabletScreen {
     g.fillStyle = '#cfd6dd';
     g.fillText(d.mapStatus, map.x + 24, map.y + map.h - 31);
     if (d.alert && !d.waiting) {
-      const red = /TREE|ROCKS|ANIMALS|FUSE|OVERHEAT/.test(d.alert);
+      const red = /TREE|ROCKS|ANIMALS|FUSE|OVERHEAT|FAULT/.test(d.alert);
       const fork = /^FORK/.test(d.alert);
       let fs = P ? 18 : 24;
       g.font = `900 ${fs}px ${FONT}`;
@@ -324,6 +327,19 @@ export interface PanelData {
   tyreWear: number;
   /** Spare fuses left in the box. */
   fuseSpares: number;
+  /** Tyre compound fitted (short name) and spare wheels left. */
+  compound: string | null;
+  spareWheels: number;
+  /** Mechanical failures (names) and whether one can be fixed now. */
+  faults: string[];
+  canFix: boolean;
+  /** Push-to-pass: 0 off, 1 armed, 2 running, 3 used; seconds left. */
+  boost: number;
+  boostLeft: number;
+  /** Engine / gearbox life (championship), 0..1. */
+  life: { engine: number; gearbox: number } | null;
+  /** The roadside-fix mini-game, while fixing. */
+  repair: { title: string; order: number[]; step: number; wait: number } | null;
 }
 
 /**
@@ -343,7 +359,7 @@ export class SystemsPanelScreen {
 
   constructor() {
     this.canvas.width = 1024;
-    this.canvas.height = 576;
+    this.canvas.height = 704;
   }
 
   hit(u: number, v: number): PanelButton | null {
@@ -360,7 +376,7 @@ export class SystemsPanelScreen {
     const alarm = !!s && (s.fuse >= 0 || s.temp > 112);
     this.blink = (this.blink + 1) % 16;
     const flash = alarm && this.blink < 8;
-    const key = s ? `${Math.round(s.temp * 2)}|${s.flaps}|${s.als}|${s.map}|${s.tyres}|${s.fuse}|${flash}|${d.surface}|${d.nextSurface}|${d.nextSurfaceIn === null ? '' : Math.round(d.nextSurfaceIn / 50)}|${d.tyreWear}|${d.fuseSpares}` : 'none';
+    const key = s ? `${Math.round(s.temp * 2)}|${s.flaps}|${s.als}|${s.map}|${s.tyres}|${s.fuse}|${flash}|${d.surface}|${d.nextSurface}|${d.nextSurfaceIn === null ? '' : Math.round(d.nextSurfaceIn / 50)}|${d.tyreWear}|${d.fuseSpares}|${d.compound}|${d.spareWheels}|${d.faults.join()}|${d.canFix}|${d.boost}|${Math.ceil(d.boostLeft)}|${d.life ? Math.round(d.life.engine * 100) + '/' + Math.round(d.life.gearbox * 100) : ''}|${d.repair ? d.repair.step + '/' + Math.ceil(d.repair.wait) : ''}` : 'none';
     if (key === this.lastKey) return false;
     this.lastKey = key;
     const g = this.g;
@@ -506,7 +522,7 @@ export class SystemsPanelScreen {
     );
     // ---- tyres (right) ----
     well(676, 28, 320, 340);
-    engrave('TYRE PRESSURE', 692, 54, 22);
+    engrave(d.compound ? `TYRES: ${d.compound}` : 'TYRE PRESSURE', 692, 54, 22);
     (['LOW', 'MID', 'HIGH'] as const).forEach((l, i) => button(`tyre${i as 0 | 1 | 2}`, 692 + i * 100, 78, 88, 96, l, s.tyres === i, '#2c8fd0'));
     const best = (surf: string) => (/tarmac|wood|bridge/i.test(surf) ? 'HIGH' : 'LOW');
     g.font = `800 22px ${FONT}`;
@@ -576,6 +592,83 @@ export class SystemsPanelScreen {
       g.fillText(name, fx + fw / 2, fy + 88);
       this.buttons.set(`fuse${i as 0 | 1 | 2 | 3 | 4 | 5}`, { x: fx, y: fy, w: fw, h: 104 });
     });
+    // ---- push-to-pass, faults, engine life (bottom row) ----
+    well(28, 562, 290, 126);
+    engrave('PUSH-TO-PASS', 44, 588, 22);
+    const bl = d.boost === 0 ? 'ARM BOOST' : d.boost === 1 ? 'ARMED – DRIVER: B' : d.boost === 2 ? `BOOST ${Math.ceil(d.boostLeft)} s` : 'USED';
+    button('boost', 44, 608, 258, 64, bl, d.boost === 1 || d.boost === 2, d.boost === 2 ? '#ff4b1f' : '#d0901a');
+    well(334, 562, 420, 126);
+    engrave(d.faults.length ? 'FAULTS' : 'NO FAULTS', 350, 588, 22);
+    g.textAlign = 'right';
+    g.font = `800 20px ${FONT}`;
+    g.fillStyle = d.spareWheels > 0 ? '#cfd6dd' : '#ff8a8f';
+    g.fillText(`SPARE WHEEL: ${d.spareWheels}`, 738, 588);
+    g.textAlign = 'left';
+    d.faults.slice(0, 2).forEach((f, i) => {
+      g.fillStyle = flash ? '#ff3b4e' : '#ff8a8f';
+      g.font = `900 20px ${FONT}`;
+      g.fillText(`● ${f}`, 350, 618 + i * 26);
+    });
+    if (d.faults.length) button('fix', 576, 642, 162, 38, d.canFix ? 'ROADSIDE FIX' : 'STOP TO FIX', d.canFix, '#c0392b');
+    well(770, 562, 226, 126);
+    engrave('ENGINE · GEARBOX', 786, 588, 20);
+    if (d.life) {
+      const lifeBar = (label: string, v: number, y: number) => {
+        g.font = `800 18px ${FONT}`;
+        g.fillStyle = '#cfd6dd';
+        g.fillText(label, 786, y + 12);
+        g.fillStyle = '#101214';
+        this.round(870, y, 112, 22, 5);
+        g.fill();
+        g.fillStyle = v < 0.4 ? '#e8303f' : v < 0.7 ? '#e0a800' : '#26b86a';
+        this.round(872, y + 2, Math.max(4, 108 * v), 18, 4);
+        g.fill();
+      };
+      lifeBar('ENGINE', d.life.engine, 610);
+      lifeBar('BOX', d.life.gearbox, 646);
+    } else {
+      g.font = `700 17px ${FONT}`;
+      g.fillStyle = '#7a848d';
+      g.fillText('Fresh for this event', 786, 628);
+    }
+
+    // ---- the roadside fix: tap the bolts as they light up ----
+    if (d.repair) {
+      const rp = d.repair;
+      g.fillStyle = 'rgba(6,8,10,0.97)';
+      g.fillRect(0, 0, W, H);
+      this.buttons.clear();
+      engrave(`ROADSIDE FIX – ${rp.title}`, W / 2, 48, 30, 'center');
+      g.font = `700 20px ${FONT}`;
+      g.fillStyle = '#9aa4ae';
+      g.textAlign = 'center';
+      g.fillText(rp.step < rp.order.length ? 'Tap the bolt that lights up – quickly!' : rp.wait > 0 ? `Tightening up… ${Math.ceil(rp.wait)} s` : 'Done – tell the driver to go!', W / 2, 84);
+      const cx = W / 2, cy = 400, R = 210;
+      rp.order.forEach((_, k) => {
+        const a = (k / rp.order.length) * Math.PI * 2 - Math.PI / 2;
+        const x = cx + Math.cos(a) * R, y = cy + Math.sin(a) * R * 0.95;
+        const lit = rp.step < rp.order.length && rp.order[rp.step] === k;
+        const done = rp.order.indexOf(k) < rp.step;
+        g.fillStyle = lit ? '#ffd23a' : done ? '#26b86a' : '#3a4048';
+        g.beginPath();
+        g.arc(x, y, 52, 0, Math.PI * 2);
+        g.fill();
+        g.strokeStyle = '#111';
+        g.lineWidth = 8;
+        g.beginPath();
+        for (let q = 0; q < 6; q++) {
+          const b = (q / 6) * Math.PI * 2;
+          g[q ? 'lineTo' : 'moveTo'](x + Math.cos(b) * 26, y + Math.sin(b) * 26);
+        }
+        g.closePath();
+        g.stroke();
+        this.buttons.set(`bolt${k as 0 | 1 | 2 | 3 | 4 | 5}`, { x: x - 56, y: y - 56, w: 112, h: 112 });
+      });
+      g.font = `900 40px ${FONT}`;
+      g.fillStyle = '#fff';
+      g.fillText(`${Math.min(rp.step, rp.order.length)} / ${rp.order.length}`, cx, cy + 14);
+    }
+
     this.version++;
     return true;
   }
