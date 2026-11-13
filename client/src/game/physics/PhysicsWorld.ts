@@ -74,7 +74,8 @@ export class PhysicsWorld {
         if (!body || !body.isFixed()) return;
         const m = this.meshCentres.get(c.handle);
         const t = c.translation();
-        this.statics!.push({ c, x: m ? m.x : t.x, z: m ? m.z : t.z, r: m ? m.r : 3, on: true });
+        // remember whether it's switched on right now – after a restart some are still off
+        this.statics!.push({ c, x: m ? m.x : t.x, z: m ? m.z : t.z, r: m ? m.r : 3, on: c.isEnabled() });
       });
     }
     for (const st of this.statics) {
