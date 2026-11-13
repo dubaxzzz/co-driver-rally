@@ -86,6 +86,9 @@ export class Vehicle {
   weatherGrip = 1;
   /** 0..1: how far the rear tyres have let go (over the grip limit = oversteer). */
   rearLoose = 0;
+  /** Road condition here: grip multiplier (swept line / loose gravel / ruts) and roughness 0..1. */
+  roadGrip = 1;
+  roadRough = 0;
   /** 0..1 how worn the tyres are (new each stage; costs grip as it goes up). */
   tyreWear = 0;
   /** Name of the surface most wheels are on (for sound/HUD). */
@@ -320,7 +323,7 @@ export class Vehicle {
     // the slide (or lift) and the rear bites again.
     {
       const roadSurf = this.inWater ? SURFACES.water : this.roadSurface;
-      const avail = 18 * roadSurf.grip * this.weatherGrip * this.sysGrip(roadSurf.id) * wornGrip(this.tyreWear) * (this.def.grip / 2.05) * (1 + Math.max(0, absSpeed - 20) * 0.02); // downforce helps at speed
+      const avail = 18 * roadSurf.grip * this.roadGrip * this.weatherGrip * this.sysGrip(roadSurf.id) * wornGrip(this.tyreWear) * (this.def.grip / 2.05) * (1 + Math.max(0, absSpeed - 20) * 0.02); // downforce helps at speed
       const upV = new THREE.Vector3(0, 1, 0).applyQuaternion(this.tmpQ);
       const av0 = this.body.angvel();
       const yawRate = av0.x * upV.x + av0.y * upV.y + av0.z * upV.z;
@@ -351,7 +354,7 @@ export class Vehicle {
       const rearWheel = i >= 2;
       const surf = this.inWater ? SURFACES.water : isRoad ? this.roadSurface : this.offroadSurface;
       wheelSurfaces[i] = surf;
-      let grip = this.gripBase * surf.grip * this.weatherGrip * this.sysGrip(surf.id) * wornGrip(this.tyreWear) * (rearWheel ? CHASSIS.rearGripBias : 1);
+      let grip = this.gripBase * surf.grip * this.weatherGrip * this.sysGrip(surf.id) * wornGrip(this.tyreWear) * (isRoad ? this.roadGrip : 1) * (rearWheel ? CHASSIS.rearGripBias : 1);
       if (rearWheel && handbrake) grip *= 0.45;
       if (rearWheel) grip *= 1 - 0.3 * this.rearLoose;
       // deep water lifts the car: the tyres barely touch the river bed
@@ -375,6 +378,15 @@ export class Vehicle {
     // otherwise the anti-roll/stabiliser torques pile up and spin the car.
     this.body.resetForces(false);
     this.body.resetTorques(false);
+    // ruts and rough short cuts kick the car about
+    if (this.roadRough > 0 && grounded >= 2 && absSpeed > 6) {
+      const k = this.roadRough * Math.min(1, absSpeed / 25) * def.massKg;
+      const up0 = new THREE.Vector3(0, 1, 0).applyQuaternion(this.tmpQ);
+      const kick = (Math.random() - 0.5) * 2 * k * 3.2;
+      this.body.addForce({ x: up0.x * kick, y: up0.y * kick, z: up0.z * kick }, true);
+      const tw = (Math.random() - 0.5) * 2 * k * 0.9;
+      this.body.addTorque({ x: fwd.x * tw + up0.x * tw * 0.35, y: fwd.y * tw + up0.y * tw * 0.35, z: fwd.z * tw + up0.z * tw * 0.35 }, true);
+    }
     const down = Math.min(6000, 1.6 * speed * speed);
     // Surface resistance: sand, mud, snow, grass and water slow the car a lot.
     let rolling = 0;

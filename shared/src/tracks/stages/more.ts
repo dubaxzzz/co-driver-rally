@@ -211,3 +211,104 @@ export const MORE_STAGES: StageDef[] = [
     corners: 18, sev: [2, 5], straight: [50, 130], mix: ['mud'], bridges: 1, secPerKm: 35,
   }),
 ];
+
+/**
+ * Col de la Couronne – a 30 km climb from a forest valley to a snowy summit:
+ * flowing valley roads, two faces of stacked hairpin switchbacks, a ridge
+ * with the mid-stage service zone, and the light fading to night on the way up.
+ */
+function mountainSegments(): SegmentDef[] {
+  const rand = rng(77001);
+  const segs: SegmentDef[] = [{ kind: 'straight', length: 80, grade: 1 }];
+  let heading = 0;
+  /** Flowing section: alternating corners, the road keeps heading broadly "up" the map. */
+  const twisty = (n: number, sev: [number, number], straight: [number, number], grade: number, opts: { mix?: SurfaceId; jumps?: boolean; service?: number; bridge?: number } = {}) => {
+    for (let i = 0; i < n; i++) {
+      const s = Math.round(sev[0] + rand() * (sev[1] - sev[0]));
+      const sevv = Math.max(1, Math.min(6, s)) as Severity;
+      let angle = Math.round(110 - (sevv as number) * 12 + rand() * 25);
+      let dir: 'L' | 'R' = heading > 25 ? 'R' : heading < -25 ? 'L' : rand() < 0.5 ? 'L' : 'R';
+      const sign = dir === 'L' ? 1 : -1;
+      if (Math.abs(heading + sign * angle) > 80) angle = Math.max(25, 80 - Math.abs(heading));
+      if (Math.abs(heading + sign * angle) > 80) dir = dir === 'L' ? 'R' : 'L';
+      heading += (dir === 'L' ? 1 : -1) * angle;
+      const corner: SegmentDef = { kind: 'corner', dir, severity: sevv, angle, grade: grade * (0.8 + rand() * 0.5) };
+      if (rand() < 0.18) corner.modifier = (['tightens', 'opens', 'dontcut'] as const)[Math.floor(rand() * 3)];
+      if (opts.mix && rand() < 0.3) corner.surface = opts.mix;
+      segs.push(corner);
+      const sl = Math.round(straight[0] + rand() * (straight[1] - straight[0]));
+      const st: SegmentDef = { kind: 'straight', length: sl, grade: grade * (0.6 + rand() * 0.8) };
+      if (opts.service === i) {
+        st.length = 300;
+        st.grade = 0;
+        st.service = true;
+      } else if (opts.bridge === i) {
+        st.bridge = true;
+        st.length = Math.max(sl, 110);
+        st.grade = 0;
+      } else if (opts.jumps && rand() < 0.15 && sl > 70) {
+        st.feature = 'jump';
+        st.hazard = 'jump';
+      } else if (rand() < 0.15 && sl > 60) {
+        st.feature = 'crest';
+        st.hazard = 'crest';
+      }
+      if (opts.mix && !st.bridge && !st.service && rand() < 0.3) st.surface = opts.mix;
+      segs.push(st);
+    }
+  };
+  /** Turn to face across the slope, then zig-zag up it with hairpins. */
+  const switchbacks = (hairpins: number, leg: [number, number], grade: number, mix?: SurfaceId) => {
+    // first face across the mountain (+90° = left across the map)
+    const toSide = 90 - heading;
+    segs.push({ kind: 'corner', dir: 'L', severity: 3, angle: Math.round(toSide), grade });
+    heading = 90;
+    const legLen = Math.round(leg[0] + rand() * (leg[1] - leg[0]));
+    for (let i = 0; i < hairpins; i++) {
+      const st: SegmentDef = { kind: 'straight', length: legLen + Math.round((rand() - 0.5) * 30), grade };
+      if (mix && rand() < 0.4) st.surface = mix;
+      segs.push(st);
+      // hairpins alternate so each leg sits just above the last one
+      const dir: 'L' | 'R' = heading > 0 ? 'R' : 'L';
+      segs.push({ kind: 'corner', dir, severity: 'H', angle: 180, grade: grade * 0.5 });
+      heading = -heading;
+    }
+    segs.push({ kind: 'straight', length: legLen, grade });
+    // and turn back up the map
+    segs.push({ kind: 'corner', dir: heading > 0 ? 'R' : 'L', severity: 3, angle: 90, grade });
+    heading = 0;
+  };
+  // valley forest: flowing, a river crossing
+  twisty(40, [2, 5], [70, 170], 2.2, { bridge: 12 });
+  // the first face
+  switchbacks(9, [190, 230], 9);
+  // the ridge: quicker, crests and jumps, the service zone half way
+  twisty(62, [2, 5], [70, 175], 1.6, { jumps: true, service: 30 });
+  // the big face, gravel turning to snow near the top
+  switchbacks(11, [210, 250], 9.5, 'snow');
+  // the summit: snow and ice, very tight
+  twisty(34, [1, 4], [50, 125], 2.4, { mix: 'snow' });
+  segs.push({ kind: 'straight', length: 160, grade: 0 });
+  return segs;
+}
+
+const mountainSegs = mountainSegments();
+const mountainLength = mountainSegs.reduce((a, s) => a + (s.kind === 'straight' ? s.length : ((s.angle * Math.PI) / 180) * (s.severity === 'H' ? 11 : [0, 17, 26, 40, 62, 95, 150][s.severity as number])), 0);
+
+export const MOUNTAIN_STAGE: StageDef = {
+  id: 'col-couronne',
+  name: 'Col de la Couronne',
+  location: 'Hautes-Alpes, France',
+  description: '30 km climb: valley forest, two walls of hairpins, a service zone on the ridge and a snowy summit as night falls.',
+  surface: 'gravel',
+  offroad: 'grass',
+  roadWidth: 7.5,
+  seed: 7700,
+  checkpointFractions: [0.15, 0.3, 0.45, 0.6, 0.75, 0.9],
+  referenceTimeMs: Math.round((mountainLength / 1000) * 39 * 1000),
+  defaultWeather: 'clear',
+  scenery: sc({ trees: 'pine', treeDensity: 1.0, grassA: 0x4f6a35, grassB: 0x667a45, patch: 0x7a7468, verge: 0x6a6052, rock: 0x8c8a84, hills: 60 }),
+  segments: mountainSegs,
+  flatBase: true,
+  nightfall: true,
+};

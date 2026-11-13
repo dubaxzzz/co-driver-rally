@@ -25,7 +25,8 @@ function race(base: BuiltStage, skill: AiSkill) {
   ai.vehicle.roadColliders.add(ground.handle);
   const dt = physics.fixedDt;
   let t = 0;
-  while (t < 360 && ai.finishTimeMs === null) {
+  const limit = Math.max(360, ((stage.finishDistance - stage.startDistance) / 1000) * 75);
+  while (t < limit && ai.finishTimeMs === null) {
     ai.step(dt, true, t * 1000);
     physics.world.step();
     t += dt;

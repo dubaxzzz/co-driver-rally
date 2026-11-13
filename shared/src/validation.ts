@@ -126,6 +126,10 @@ export function validateTelemetry(p: unknown): TelemetryPacket | null {
     if (!isNum(p.tw, 0, 100)) return null;
     out.tw = Math.round(p.tw);
   }
+  if (p.pen !== undefined) {
+    if (!isNum(p.pen, 0, 3600)) return null;
+    out.pen = Math.round(p.pen);
+  }
   if (p.fsp !== undefined) {
     if (!isNum(p.fsp, 0, 9) || !Number.isInteger(p.fsp)) return null;
     out.fsp = p.fsp;

@@ -12,8 +12,11 @@ export class Atmosphere {
   readonly fog: THREE.FogExp2;
   private sunOffset: THREE.Vector3;
 
-  constructor(scene: THREE.Scene, private env: WeatherDef, scenery: StageScenery, shadows: boolean, fogMultiplier = 1) {
-    this.fog = new THREE.FogExp2(env.fogColor, env.fogDensity * fogMultiplier);
+  /** Mountain stages have clearer air so you can see the views. */
+  private fogScale: number;
+  constructor(private scene: THREE.Scene, private env: WeatherDef, scenery: StageScenery, shadows: boolean, fogMultiplier = 1, clearAir = false) {
+    this.fogScale = clearAir && !env.night ? 0.5 : 1;
+    this.fog = new THREE.FogExp2(env.fogColor, env.fogDensity * fogMultiplier * this.fogScale);
     scene.fog = this.fog;
     scene.background = new THREE.Color(env.fogColor);
 
@@ -58,8 +61,33 @@ export class Atmosphere {
     scene.add(this.sun, this.sun.target);
   }
 
+  private dark = 0;
+  /**
+   * Nightfall on long stages: 0 = the weather's own light, 1 = full night.
+   * Sky, fog, ambient and sun all fade towards a moonlit night.
+   */
+  setDarkness(k: number) {
+    k = Math.max(0, Math.min(1, k));
+    if (this.env.night || Math.abs(k - this.dark) < 0.004) return;
+    this.dark = k;
+    const lerp = (a: number, b: number) => new THREE.Color(a).lerp(new THREE.Color(b), k);
+    // dusk on the way: the sky warms first, then goes dark
+    const mid = Math.sin(Math.min(1, k * 1.6) * Math.PI) * 0.5;
+    const top = lerp(this.env.skyTop, 0x03050a);
+    const bottom = lerp(this.env.skyBottom, 0x0b1018).lerp(new THREE.Color(0xd9784a), mid * 0.6);
+    const sky = this.sky.material as THREE.ShaderMaterial;
+    (sky.uniforms.top.value as THREE.Color).copy(top);
+    (sky.uniforms.bottom.value as THREE.Color).copy(bottom);
+    const fogC = lerp(this.env.fogColor, 0x0a0e14).lerp(new THREE.Color(0x9a6a55), mid * 0.4);
+    this.fog.color.copy(fogC);
+    if (this.scene.background instanceof THREE.Color) this.scene.background.copy(fogC);
+    this.hemi.intensity = this.env.hemiIntensity * (1 - k * 0.88);
+    this.sun.intensity = this.env.sunIntensity * (1 - k * 0.9);
+    this.sun.color.copy(lerp(this.env.sunColor, 0x8fa4c8).lerp(new THREE.Color(0xff9a5a), mid));
+  }
+
   setFogMultiplier(m: number) {
-    this.fog.density = this.env.fogDensity * m;
+    this.fog.density = this.env.fogDensity * m * this.fogScale;
   }
 
   /** Keeps sky and shadow camera centred on the player. */

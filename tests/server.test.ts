@@ -135,11 +135,14 @@ const finished = waitFor<RaceResult>(nav2, 'race:finished', 90000);
 const driverFinished = waitFor<RaceResult>(driver, 'race:finished', 90000);
 let seq = 10;
 for (let d = stage.spawnDistance + 2; d <= stage.finishDistance + 5; d += 3.4) {
-  driver.emit('telemetry', packet(runId, seq++, d));
+  // half way a 15 s penalty is picked up (crowd tape + push); a later packet can't lower it
+  const pen = d > stage.finishDistance * 0.7 ? 7 : d > stage.finishDistance / 2 ? 15 : 0;
+  driver.emit('telemetry', { ...packet(runId, seq++, d), pen });
   await sleep(50);
 }
 const [rn, rd] = await Promise.all([finished, driverFinished]);
 check(!!rn && !!rd && rn.timeMs === rd.timeMs && rn.splits.length === 3 && rn.name === 'Tester', `both players receive the same result (${rn ? (rn.timeMs / 1000).toFixed(2) : '-'} s, ${rn?.splits.length} splits)`);
+check(rn?.penaltyMs === 15000 && rn.timeMs >= 15000 + 40000, `time penalties are added to the stage time and can't be taken back (${rn?.penaltyMs} ms)`);
 
 // spectators: join any time, don't take a seat, can't send telemetry
 {

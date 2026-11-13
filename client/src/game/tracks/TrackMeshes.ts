@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SURFACES, riverDistance, type BuiltStage, type River, type SurfaceId } from '@cdr/shared';
+import { SURFACES, riverDistance, sampleAt, type BuiltStage, type River, type SurfaceId } from '@cdr/shared';
 
 /** Deterministic value noise + fbm for terrain. */
 export function makeNoise(seed: number) {
@@ -62,8 +62,8 @@ export interface WaterBody {
 }
 
 export interface TrackBuild {
-  road: THREE.Mesh;
-  terrain: THREE.Mesh;
+  road: THREE.Group;
+  terrain: THREE.Group;
   water: WaterBody[];
   data: TerrainData;
   roadCollider: { vertices: Float32Array; indices: Uint32Array };
@@ -125,6 +125,8 @@ const MARGIN = 280;
 const CELL = 5;
 const VISIBLE_RADIUS = 300;
 const COLLIDE_RADIUS = 110;
+/** Terrain tile size in cells (tiles only exist near the road). */
+const TILE = 32;
 
 /** Builds the road ribbon, terrain (with river channels) and flowing water. */
 export function buildTrack(stage: BuiltStage): TrackBuild {
@@ -187,122 +189,418 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
     const wet = sf === 'mud' ? 0.45 : sf === 'snow' ? 0.6 : sf === 'tarmac' ? 0.75 : 1;
     return new THREE.MeshStandardMaterial({ map: surfaceTexture(sf, sc.verge), roughness: wet, metalness: 0 });
   });
-  const road = new THREE.Mesh(roadGeo, roadMats);
-  road.receiveShadow = true;
+  // drawn in ~400 m chunks (sharing one vertex buffer) so the far road is culled
+  const road = new THREE.Group();
+  road.name = 'road';
+  const CHUNK = 400;
+  const tri = roadGeo.index!.array as ArrayLike<number>;
+  for (let c0 = 0; c0 < n - 1; c0 += CHUNK) {
+    const c1 = Math.min(n - 1, c0 + CHUNK);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', roadGeo.getAttribute('position'));
+    geo.setAttribute('uv', roadGeo.getAttribute('uv'));
+    geo.setAttribute('normal', roadGeo.getAttribute('normal'));
+    const cidx: number[] = [];
+    for (const g of roadGeo.groups) {
+      const start = cidx.length;
+      for (let k = g.start; k < g.start + g.count; k += 6) {
+        const row = Math.floor(tri[k] / cols);
+        if (row < c0 || row >= c1) continue;
+        for (let q = 0; q < 6; q++) cidx.push(tri[k + q]);
+      }
+      if (cidx.length > start) geo.addGroup(start, cidx.length - start, g.materialIndex ?? 0);
+    }
+    if (!cidx.length) continue;
+    geo.setIndex(cidx);
+    const mid = samples[Math.floor((c0 + c1) / 2)];
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(mid.x, mid.y, mid.z), (c1 - c0) * stage.step * 0.6 + 20);
+    const mesh = new THREE.Mesh(geo, roadMats);
+    mesh.receiveShadow = true;
+    road.add(mesh);
+  }
 
-  // ---- Terrain grid ----
+  // ---- the short cuts / bypasses at the forks: their own ribbons ----
+  const extraPos: number[] = [];
+  const extraIdx: number[] = [];
+  const baseVerts = pos.length / 3;
+  for (const sp of stage.splits) {
+    const bh = sp.width / 2;
+    const acr = [-bh - 1.2, -bh, 0, bh, bh + 1.2];
+    const cr = [-0.12, 0, 0.05, 0, -0.12];
+    const bs = sp.samples;
+    const bn = bs.length;
+    const bpos = new Float32Array(bn * acr.length * 3);
+    const buv = new Float32Array(bn * acr.length * 2);
+    for (let i = 0; i < bn; i++) {
+      const q = bs[i];
+      const lx = Math.cos(q.h), lz = -Math.sin(q.h);
+      for (let j = 0; j < acr.length; j++) {
+        const o = (i * acr.length + j) * 3;
+        const off = -acr[j];
+        bpos[o] = q.x + lx * off;
+        bpos[o + 1] = q.y + cr[j] + 0.03;
+        bpos[o + 2] = q.z + lz * off;
+        buv[(i * acr.length + j) * 2] = (acr[j] + bh + 1.2) / (2 * bh + 2.4);
+        buv[(i * acr.length + j) * 2 + 1] = q.d / 7;
+      }
+    }
+    const bidx: number[] = [];
+    for (let i = 0; i < bn - 1; i++)
+      for (let j = 0; j < acr.length - 1; j++) {
+        const a = i * acr.length + j, b2 = a + 1, c = a + acr.length, d = c + 1;
+        bidx.push(a, b2, c, b2, d, c);
+      }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(bpos, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(buv, 2));
+    g.setIndex(bidx);
+    g.computeVertexNormals();
+    g.computeBoundingSphere();
+    const mat = new THREE.MeshStandardMaterial({ map: surfaceTexture(sp.surface, sc.verge), roughness: sp.surface === 'mud' ? 0.45 : 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.receiveShadow = true;
+    mesh.name = `split-${sp.index}`;
+    road.add(mesh);
+    const off = baseVerts + extraPos.length / 3;
+    for (const v of bpos) extraPos.push(v);
+    for (const k of bidx) extraIdx.push(k + off);
+  }
+
+  // the terrain follows the short cuts too
+  const ts = stage.splits.length ? samples.concat(...stage.splits.map((sp) => sp.samples)) : samples;
+  const tn = ts.length;
+  // ---- Terrain: sparse tiles around the road ----
+  // Only tiles near the road exist (a 30 km stage would otherwise need millions of
+  // cells). Distance to the road is "splatted" from the centreline outwards.
   const b = stage.bounds;
   const ox = b.minX - MARGIN, oz = b.minZ - MARGIN;
   const gcols = Math.ceil((b.maxX - b.minX + MARGIN * 2) / CELL) + 1;
   const grows = Math.ceil((b.maxZ - b.minZ + MARGIN * 2) / CELL) + 1;
-  const heights = new Float32Array(gcols * grows);
-  const dists = new Float32Array(gcols * grows);
-  const rdists = new Float32Array(gcols * grows).fill(1e9);
-  const coarseStep = 8;
-
-  for (let r = 0; r < grows; r++) {
-    for (let c = 0; c < gcols; c++) {
-      const x = ox + c * CELL, z = oz + r * CELL;
-      // coarse nearest search, then refine locally
-      let best = 0, bestD2 = Infinity;
-      for (let i = 0; i < n; i += coarseStep) {
-        const dx = samples[i].x - x, dz = samples[i].z - z;
-        const d2 = dx * dx + dz * dz;
-        if (d2 < bestD2) { bestD2 = d2; best = i; }
+  const T = TILE;
+  const tilesX = Math.ceil(gcols / T), tilesZ = Math.ceil(grows / T);
+  type Tile = { tx: number; tz: number; heights: Float32Array; dists: Float32Array; rdists: Float32Array; best: Int32Array; d2b: Float32Array; best2: Int32Array };
+  const tiles: Array<Tile | null> = new Array(tilesX * tilesZ).fill(null);
+  const reach = VISIBLE_RADIUS + 30;
+  const tileM = T * CELL;
+  for (let i = 0; i < tn; i += 20) {
+    const sx = ts[i].x - ox, sz = ts[i].z - oz;
+    const t0x = Math.max(0, Math.floor((sx - reach) / tileM)), t1x = Math.min(tilesX - 1, Math.floor((sx + reach) / tileM));
+    const t0z = Math.max(0, Math.floor((sz - reach) / tileM)), t1z = Math.min(tilesZ - 1, Math.floor((sz + reach) / tileM));
+    for (let tz = t0z; tz <= t1z; tz++)
+      for (let tx = t0x; tx <= t1x; tx++) {
+        const k = tz * tilesX + tx;
+        if (!tiles[k]) tiles[k] = { tx, tz, heights: new Float32Array(T * T), dists: new Float32Array(T * T).fill(1e9), rdists: new Float32Array(T * T).fill(1e9), best: new Int32Array(T * T).fill(-1), d2b: new Float32Array(T * T).fill(1e9), best2: new Int32Array(T * T).fill(-1) };
       }
-      const lo = Math.max(0, best - coarseStep), hi = Math.min(n - 1, best + coarseStep);
-      for (let i = lo; i <= hi; i++) {
-        const dx = samples[i].x - x, dz = samples[i].z - z;
+  }
+  const tileOf = (c: number, r: number) => (c < 0 || r < 0 || c >= gcols || r >= grows ? null : tiles[Math.floor(r / T) * tilesX + Math.floor(c / T)]);
+  const cellIdx = (c: number, r: number) => (r % T) * T + (c % T);
+  // splat: every 4th sample claims the cells around it
+  const coarseStep = 4;
+  const rc = Math.ceil(reach / CELL);
+  for (let i = 0; i < tn; i += coarseStep) {
+    const sx = ts[i].x, sz = ts[i].z;
+    const cc0 = Math.round((sx - ox) / CELL), rr0 = Math.round((sz - oz) / CELL);
+    for (let r = Math.max(0, rr0 - rc); r <= Math.min(grows - 1, rr0 + rc); r++) {
+      const dz = oz + r * CELL - sz;
+      for (let c = Math.max(0, cc0 - rc); c <= Math.min(gcols - 1, cc0 + rc); c++) {
+        const tl = tileOf(c, r);
+        if (!tl) continue;
+        const dx = ox + c * CELL - sx;
         const d2 = dx * dx + dz * dz;
-        if (d2 < bestD2) { bestD2 = d2; best = i; }
-      }
-      const dist = Math.sqrt(bestD2);
-      const roadY = samples[best].y;
-      const hills = (noise(x * 0.004, z * 0.004, 5) - 0.42) * sc.hills + (noise(x * 0.03 + 50, z * 0.03, 2) - 0.5) * 3;
-      const t = Math.min(1, Math.max(0, (dist - hw - 2.5) / 34));
-      const blend = t * t * (3 - 2 * t);
-      let y = roadY - 0.18 + blend * hills;
-      // shallow drainage ditch beside the road
-      if (dist > hw + 1.5 && dist < hw + 6) y -= Math.sin(((dist - hw - 1.5) / 4.5) * Math.PI) * 0.45;
-
-      // River channel: carved everywhere except right next to the road – apart
-      // from under its own bridge, where the river flows beneath the deck.
-      if (stage.rivers.length) {
-        const rv = riverDistance(stage, x, z);
-        rdists[r * gcols + c] = rv.dist;
-        const river = rv.river;
-        if (river && rv.dist < river.halfWidth + 12) {
-          const bridge = stage.bridges[river.bridgeIndex];
-          const underBridge = Math.abs(samples[best].d - bridge.distance) < bridge.length / 2 + 14;
-          const roadGuard = underBridge ? 1 : Math.min(1, Math.max(0, (dist - hw - 4) / 8));
-          const u = Math.min(1, Math.max(0, (rv.dist - river.halfWidth * 0.55) / (river.halfWidth * 0.45 + 12)));
-          const bank = u * u * (3 - 2 * u);
-          const carved = river.bedY + (Math.max(y, river.waterY + 0.6) - river.bedY) * bank;
-          y = y + (Math.min(y, carved) - y) * roadGuard;
+        const ci = cellIdx(c, r);
+        const bi = tl.best[ci];
+        if (d2 < tl.dists[ci]) {
+          // the old best is kept as "another part of the road" (e.g. the leg of a
+          // switchback above/below) if it's far enough along the stage
+          if (bi >= 0 && Math.abs(i - bi) > 60 && tl.dists[ci] < tl.d2b[ci]) {
+            tl.d2b[ci] = tl.dists[ci];
+            tl.best2[ci] = bi;
+          }
+          tl.dists[ci] = d2;
+          tl.best[ci] = i;
+        } else if (d2 < tl.d2b[ci] && bi >= 0 && Math.abs(i - bi) > 60) {
+          tl.d2b[ci] = d2;
+          tl.best2[ci] = i;
         }
       }
-      heights[r * gcols + c] = y;
-      dists[r * gcols + c] = dist;
     }
   }
+  const hillsAt = (x: number, z: number) => (noise(x * 0.004, z * 0.004, 5) - 0.42) * sc.hills + (noise(x * 0.03 + 50, z * 0.03, 2) - 0.5) * 3;
+  let lowest = Infinity;
+  for (const tl of tiles) {
+    if (!tl) continue;
+    for (let lr = 0; lr < T; lr++)
+      for (let lc = 0; lc < T; lc++) {
+        const c = tl.tx * T + lc, r = tl.tz * T + lr;
+        const ci = lr * T + lc;
+        const x = ox + c * CELL, z = oz + r * CELL;
+        let best = tl.best[ci];
+        let bestD2 = tl.dists[ci];
+        if (best < 0) {
+          // too far from the road for any sample to reach: plain hills at the nearest road height we know
+          tl.dists[ci] = 1e4;
+          tl.heights[ci] = NaN;
+          continue;
+        }
+        // refine around the coarse match
+        for (let j = Math.max(0, best - coarseStep); j <= Math.min(tn - 1, best + coarseStep); j++) {
+          const dx = ts[j].x - x, dz = ts[j].z - z;
+          const d2 = dx * dx + dz * dz;
+          if (d2 < bestD2) { bestD2 = d2; best = j; }
+        }
+        const dist = Math.sqrt(bestD2);
+        const roadY = ts[best].y;
+        const t = Math.min(1, Math.max(0, (dist - hw - 2.5) / 34));
+        let blend = t * t * (3 - 2 * t);
+        let baseY = roadY;
+        // between two parts of the road (switchback legs): a smooth bank from one to the other
+        const b2 = tl.best2[ci];
+        if (b2 >= 0 && Math.abs(b2 - best) > 60) {
+          let bestB = b2, d2B = Infinity;
+          for (let j = Math.max(0, b2 - coarseStep); j <= Math.min(tn - 1, b2 + coarseStep); j++) {
+            const dx = ts[j].x - x, dz = ts[j].z - z;
+            const d2 = dx * dx + dz * dz;
+            if (d2 < d2B) { d2B = d2; bestB = j; }
+          }
+          const distB = Math.sqrt(d2B);
+          if (distB < 60) {
+            const eA = Math.max(0, dist - hw - 2), eB = Math.max(0, distB - hw - 2);
+            if (eA + eB > 0) baseY = (roadY * eB + ts[bestB].y * eA) / (eA + eB);
+            blend *= Math.min(1, Math.max(0, (distB - 30) / 30)); // no hills squeezed in between
+          }
+        }
+        let y = baseY - 0.18 + blend * hillsAt(x, z);
+        // shallow drainage ditch beside the road
+        if (dist > hw + 1.5 && dist < hw + 6) y -= Math.sin(((dist - hw - 1.5) / 4.5) * Math.PI) * 0.45;
+        // River channel: carved everywhere except right next to the road – apart
+        // from under its own bridge, where the river flows beneath the deck.
+        if (stage.rivers.length) {
+          const rv = riverDistance(stage, x, z);
+          tl.rdists[ci] = rv.dist;
+          const river = rv.river;
+          if (river && rv.dist < river.halfWidth + 12) {
+            const bridge = stage.bridges[river.bridgeIndex];
+            const underBridge = Math.abs(ts[best].d - bridge.distance) < bridge.length / 2 + 14;
+            const roadGuard = underBridge ? 1 : Math.min(1, Math.max(0, (dist - hw - 4) / 8));
+            const u = Math.min(1, Math.max(0, (rv.dist - river.halfWidth * 0.55) / (river.halfWidth * 0.45 + 12)));
+            const bank = u * u * (3 - 2 * u);
+            const carved = river.bedY + (Math.max(y, river.waterY + 0.6) - river.bedY) * bank;
+            y = y + (Math.min(y, carved) - y) * roadGuard;
+          }
+        }
+        tl.heights[ci] = y;
+        tl.dists[ci] = dist;
+        lowest = Math.min(lowest, y);
+      }
+  }
+  // cells no sample reached: copy a neighbour's height so there are no holes at the edge
+  for (const tl of tiles) {
+    if (!tl) continue;
+    for (let ci = 0; ci < T * T; ci++) if (Number.isNaN(tl.heights[ci])) tl.heights[ci] = lowest;
+  }
+  // mountain stages: relax the slopes between stacked roads (no cliffs or spikes),
+  // leaving the road and its verges exactly where they are
+  if (def.flatBase) {
+    const list = tiles.filter((t): t is Tile => !!t);
+    for (let it = 0; it < 6; it++) {
+      for (const tl of list) {
+        const next = new Float32Array(tl.heights);
+        for (let lr = 0; lr < T; lr++)
+          for (let lc = 0; lc < T; lc++) {
+            const ci = lr * T + lc;
+            if (tl.dists[ci] < hw + 3.5 || tl.rdists[ci] < 25) continue;
+            const c = tl.tx * T + lc, r = tl.tz * T + lr;
+            let sum = 0, cnt = 0;
+            for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const nt = tileOf(c + dc, r + dr);
+              if (!nt) continue;
+              sum += nt.heights[cellIdx(c + dc, r + dr)];
+              cnt++;
+            }
+            if (cnt) next[ci] = tl.heights[ci] * 0.2 + (sum / cnt) * 0.8;
+          }
+        tl.heights.set(next);
+      }
+    }
+  }
+  const get = (arr: 'heights' | 'dists' | 'rdists', c: number, r: number, fallback: number) => {
+    const tl = tileOf(c, r);
+    return tl ? tl[arr][cellIdx(c, r)] : fallback;
+  };
 
-  const tPos = new Float32Array(gcols * grows * 3);
-  const tCol = new Float32Array(gcols * grows * 3);
+  // one mesh per tile: far tiles are culled, and the GPU only draws what's near
   const riverBank = new THREE.Color(0x4a4036);
   const verge = new THREE.Color(sc.verge);
   const tmp = new THREE.Color();
-  for (let r = 0; r < grows; r++) {
-    for (let c = 0; c < gcols; c++) {
-      const i = r * gcols + c;
-      const x = ox + c * CELL, z = oz + r * CELL;
-      tPos[i * 3] = x;
-      tPos[i * 3 + 1] = heights[i];
-      tPos[i * 3 + 2] = z;
-      tmp.copy(grassAt(x, z));
-      // a dusty verge either side of the road, fading into the grass
-      const d = dists[i];
-      if (d < hw + 5) tmp.lerp(verge, (1 - Math.max(0, (d - hw) / 5)) * 0.55);
-      if (rdists[i] < 22) tmp.lerp(riverBank, Math.max(0, 1 - rdists[i] / 22) * 0.8);
-      tCol[i * 3] = tmp.r;
-      tCol[i * 3 + 1] = tmp.g;
-      tCol[i * 3 + 2] = tmp.b;
-    }
-  }
-  const visIdx: number[] = [];
+  const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
+  const snowWhite = new THREE.Color(0xe9eef2);
+  const terrain = new THREE.Group();
+  terrain.name = 'terrain';
+  const colPos: number[] = [];
   const colIdx: number[] = [];
-  for (let r = 0; r < grows - 1; r++) {
-    for (let c = 0; c < gcols - 1; c++) {
-      const a = r * gcols + c, bb = a + 1, cc = a + gcols, d = cc + 1;
-      const minDist = Math.min(dists[a], dists[bb], dists[cc], dists[d]);
-      if (minDist > VISIBLE_RADIUS) continue;
-      visIdx.push(a, cc, bb, bb, cc, d);
-      if (minDist < COLLIDE_RADIUS) colIdx.push(a, cc, bb, bb, cc, d);
-    }
+  for (const tl of tiles) {
+    if (!tl) continue;
+    const V = T + 1;
+    const c0 = tl.tx * T, r0 = tl.tz * T;
+    const tPos = new Float32Array(V * V * 3);
+    const tCol = new Float32Array(V * V * 3);
+    const tDist = new Float32Array(V * V);
+    const exists = new Uint8Array(V * V);
+    for (let lr = 0; lr < V; lr++)
+      for (let lc = 0; lc < V; lc++) {
+        const c = c0 + lc, r = r0 + lr;
+        const i = lr * V + lc;
+        const x = ox + c * CELL, z = oz + r * CELL;
+        const nt = tileOf(c, r);
+        exists[i] = nt ? 1 : 0;
+        const y = nt ? nt.heights[cellIdx(c, r)] : lowest;
+        const d = nt ? nt.dists[cellIdx(c, r)] : 1e4;
+        const rd = nt ? nt.rdists[cellIdx(c, r)] : 1e9;
+        tDist[i] = d;
+        tPos[i * 3] = x;
+        tPos[i * 3 + 1] = y;
+        tPos[i * 3 + 2] = z;
+        tmp.copy(grassAt(x, z));
+        // a dusty verge either side of the road, fading into the grass
+        if (d < hw + 5) tmp.lerp(verge, (1 - Math.max(0, (d - hw) / 5)) * 0.55);
+        if (rd < 22) tmp.lerp(riverBank, Math.max(0, 1 - rd / 22) * 0.8);
+        // mountain stages: snow on the high ground
+        if (def.flatBase && y > b.maxY - 150) tmp.lerp(snowWhite, Math.min(0.92, (y - (b.maxY - 150)) / 90));
+        tCol[i * 3] = tmp.r;
+        tCol[i * 3 + 1] = tmp.g;
+        tCol[i * 3 + 2] = tmp.b;
+      }
+    const visIdx: number[] = [];
+    const base = colPos.length / 3;
+    const colMap = new Int32Array(V * V).fill(-1);
+    const colVert = (i: number) => {
+      if (colMap[i] < 0) {
+        colMap[i] = colPos.length / 3 - base;
+        colPos.push(tPos[i * 3], tPos[i * 3 + 1], tPos[i * 3 + 2]);
+      }
+      return base + colMap[i];
+    };
+    for (let lr = 0; lr < T; lr++)
+      for (let lc = 0; lc < T; lc++) {
+        const a = lr * V + lc, bb = a + 1, cc = a + V, d = cc + 1;
+        if (!exists[a] || !exists[bb] || !exists[cc] || !exists[d]) continue;
+        const minDist = Math.min(tDist[a], tDist[bb], tDist[cc], tDist[d]);
+        if (minDist > VISIBLE_RADIUS) continue;
+        visIdx.push(a, cc, bb, bb, cc, d);
+        if (minDist < COLLIDE_RADIUS) {
+          const A = colVert(a), B = colVert(bb), C = colVert(cc), D = colVert(d);
+          colIdx.push(A, C, B, B, C, D);
+        }
+      }
+    if (!visIdx.length) continue;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(tPos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(tCol, 3));
+    geo.setIndex(visIdx);
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, terrainMat);
+    mesh.receiveShadow = true;
+    terrain.add(mesh);
   }
-  const terrainGeo = new THREE.BufferGeometry();
-  terrainGeo.setAttribute('position', new THREE.BufferAttribute(tPos, 3));
-  terrainGeo.setAttribute('color', new THREE.BufferAttribute(tCol, 3));
-  terrainGeo.setIndex(visIdx);
-  terrainGeo.computeVertexNormals();
-  const terrain = new THREE.Mesh(terrainGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }));
-  terrain.receiveShadow = true;
 
-  const sampleGrid = (arr: Float32Array, x: number, z: number) => {
+  const sampleGrid = (arr: 'heights' | 'dists', x: number, z: number, fallback: number) => {
     const fx = Math.min(gcols - 1.001, Math.max(0, (x - ox) / CELL));
     const fz = Math.min(grows - 1.001, Math.max(0, (z - oz) / CELL));
     const c = Math.floor(fx), r = Math.floor(fz);
     const u = fx - c, v = fz - r;
-    const i = r * gcols + c;
+    const g00 = get(arr, c, r, fallback), g10 = get(arr, c + 1, r, fallback), g01 = get(arr, c, r + 1, fallback);
     // match the triangle split used by the mesh (a, cc, bb) / (bb, cc, d)
-    if (u + v <= 1) return arr[i] + (arr[i + 1] - arr[i]) * u + (arr[i + gcols] - arr[i]) * v;
-    const d = arr[i + gcols + 1];
-    return d + (arr[i + gcols] - d) * (1 - u) + (arr[i + 1] - d) * (1 - v);
+    if (u + v <= 1) return g00 + (g10 - g00) * u + (g01 - g00) * v;
+    const g11 = get(arr, c + 1, r + 1, fallback);
+    return g11 + (g01 - g11) * (1 - u) + (g10 - g11) * (1 - v);
   };
 
-  const heightAt = (x: number, z: number) => sampleGrid(heights, x, z);
+  const heightAt = (x: number, z: number) => sampleGrid('heights', x, z, lowest);
+  // rock on the steep banks (mountain faces between switchbacks)
+  const rockCol = new THREE.Color(sc.rock);
+  for (const m of terrain.children) {
+    const g = (m as THREE.Mesh).geometry;
+    const nrm = g.getAttribute('normal');
+    const col = g.getAttribute('color');
+    for (let i = 0; i < nrm.count; i++) {
+      const ny = nrm.getY(i);
+      if (ny > 0.8) continue;
+      const k = Math.min(1, (0.8 - ny) / 0.25);
+      tmp.setRGB(col.getX(i), col.getY(i), col.getZ(i)).lerp(rockCol, k * 0.85);
+      col.setXYZ(i, tmp.r, tmp.g, tmp.b);
+    }
+  }
+
+  // ---- Far landscape: a coarse skirt of hills and mountains out to the horizon ----
+  // It sits just under the detailed tiles and fills everything beyond them, so from
+  // high on a mountain you look out over valleys instead of into the void.
+  {
+    const FC = 80;
+    const fm = 2400;
+    const fox = b.minX - fm, foz = b.minZ - fm;
+    const fcols = Math.ceil((b.maxX - b.minX + fm * 2) / FC) + 1;
+    const frows = Math.ceil((b.maxZ - b.minZ + fm * 2) / FC) + 1;
+    const fd = new Float32Array(fcols * frows).fill(1e12);
+    const fy = new Float32Array(fcols * frows);
+    const R = Math.ceil(fm / FC);
+    for (let i = 0; i < n; i += 30) {
+      const c0 = Math.round((samples[i].x - fox) / FC), r0 = Math.round((samples[i].z - foz) / FC);
+      for (let r = Math.max(0, r0 - R); r <= Math.min(frows - 1, r0 + R); r++)
+        for (let c = Math.max(0, c0 - R); c <= Math.min(fcols - 1, c0 + R); c++) {
+          const dx = fox + c * FC - samples[i].x, dz = foz + r * FC - samples[i].z;
+          const d2 = dx * dx + dz * dz;
+          const k = r * fcols + c;
+          if (d2 < fd[k]) {
+            fd[k] = d2;
+            fy[k] = samples[i].y;
+          }
+        }
+    }
+    const big = def.flatBase ? 520 : Math.max(60, sc.hills * 3);
+    const snowLine = b.maxY - 150;
+    const fPos = new Float32Array(fcols * frows * 3);
+    const fCol = new Float32Array(fcols * frows * 3);
+    const snowC = new THREE.Color(0xeef2f5);
+    for (let r = 0; r < frows; r++)
+      for (let c = 0; c < fcols; c++) {
+        const k = r * fcols + c;
+        const x = fox + c * FC, z = foz + r * FC;
+        const dist = Math.sqrt(fd[k]);
+        const ramp = Math.min(1, Math.max(0, (dist - 260) / 900));
+        const mountains = (noise(x * 0.0011 + 7, z * 0.0011, 4) - 0.42) * big * ramp * ramp;
+        let y = (dist > 1e5 ? b.minY : fy[k]) - 6 + hillsAt(x, z) + mountains;
+        if (dist < VISIBLE_RADIUS + 10) y = heightAt(x, z) - 6; // hidden under the detailed tiles
+        fPos[k * 3] = x;
+        fPos[k * 3 + 1] = y;
+        fPos[k * 3 + 2] = z;
+        tmp.copy(grassAt(x, z)).lerp(rockCol, Math.min(0.8, Math.max(0, mountains / big) * 1.6));
+        if (def.flatBase && y > snowLine) tmp.lerp(snowC, Math.min(1, (y - snowLine) / 80));
+        fCol[k * 3] = tmp.r;
+        fCol[k * 3 + 1] = tmp.g;
+        fCol[k * 3 + 2] = tmp.b;
+      }
+    const fIdx: number[] = [];
+    for (let r = 0; r < frows - 1; r++)
+      for (let c = 0; c < fcols - 1; c++) {
+        const a = r * fcols + c, bb = a + 1, cc = a + fcols, d = cc + 1;
+        fIdx.push(a, cc, bb, bb, cc, d);
+      }
+    const fg = new THREE.BufferGeometry();
+    fg.setAttribute('position', new THREE.BufferAttribute(fPos, 3));
+    fg.setAttribute('color', new THREE.BufferAttribute(fCol, 3));
+    fg.setIndex(fIdx);
+    fg.computeVertexNormals();
+    fg.computeBoundingSphere();
+    fg.boundingSphere!.radius = 1e7; // never distance-culled
+    const farMesh = new THREE.Mesh(fg, terrainMat);
+    farMesh.name = 'far-land';
+    terrain.add(farMesh);
+  }
+
   const data: TerrainData = {
     heightAt,
-    roadDistanceAt: (x, z) => sampleGrid(dists, x, z),
+    roadDistanceAt: (x, z) => sampleGrid('dists', x, z, 1e4),
     riverDistanceAt: (x, z) => (stage.rivers.length ? riverDistance(stage, x, z).dist : Infinity),
     waterAt: (x, z) => {
       if (!stage.rivers.length) return null;
@@ -329,8 +627,19 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
     terrain,
     water,
     data,
-    roadCollider: { vertices: pos, indices: new Uint32Array(roadGeo.index!.array as ArrayLike<number>) },
-    terrainCollider: { vertices: tPos, indices: new Uint32Array(colIdx) },
+    roadCollider: extraPos.length
+      ? (() => {
+          const v = new Float32Array(pos.length + extraPos.length);
+          v.set(pos);
+          v.set(extraPos, pos.length);
+          const mainIdx = roadGeo.index!.array as ArrayLike<number>;
+          const ix = new Uint32Array(mainIdx.length + extraIdx.length);
+          ix.set(mainIdx);
+          ix.set(extraIdx, mainIdx.length);
+          return { vertices: v, indices: ix };
+        })()
+      : { vertices: pos, indices: new Uint32Array(roadGeo.index!.array as ArrayLike<number>) },
+    terrainCollider: { vertices: new Float32Array(colPos), indices: new Uint32Array(colIdx) },
   };
 }
 
@@ -447,3 +756,114 @@ function buildWater(stage: BuiltStage, river: River, terrain: TerrainData): Wate
 }
 
 export { SURFACES };
+
+/**
+ * The road breaks up as cars go over it: the first car sweeps the loose gravel
+ * off the line, later cars dig ruts, and rain makes it far worse. Kept in 10 m
+ * cells along the stage; drawn as dark wheel tracks that deepen as it wears.
+ */
+export class RoadWear {
+  static readonly CELL = 10;
+  readonly wear: Float32Array;
+  readonly mesh: THREE.Mesh;
+  private colors: Float32Array;
+  private dirty = false;
+  private lastPass = new Map<string, number>();
+  private readonly soft: boolean;
+  private readonly rowStep = 5;
+
+  private drawn = false;
+  constructor(stage: BuiltStage) {
+    const n = Math.ceil(stage.length / RoadWear.CELL) + 1;
+    this.wear = new Float32Array(n);
+    this.soft = stage.def.surface !== 'tarmac';
+    // two wheel tracks either side of the centre line
+    const samples = stage.samples;
+    const tracks = [-1.15, -0.55, 0.55, 1.15];
+    const rows = Math.floor(stage.length / this.rowStep);
+    const pos = new Float32Array(rows * tracks.length * 3);
+    this.colors = new Float32Array(rows * tracks.length * 4);
+    const idx: number[] = [];
+    for (let r = 0; r < rows; r++) {
+      const s = sampleAt(samples, r * this.rowStep);
+      const lx = Math.cos(s.h), lz = -Math.sin(s.h);
+      tracks.forEach((off, j) => {
+        const o = (r * tracks.length + j) * 3;
+        pos[o] = s.x + lx * off;
+        pos[o + 1] = s.y + 0.095; // just above the crown
+        pos[o + 2] = s.z + lz * off;
+      });
+      if (r < rows - 1) {
+        const a = r * 4;
+        for (const [j0, j1] of [[0, 1], [2, 3]]) {
+          const p = a + j0, q = a + j1, p2 = p + 4, q2 = q + 4;
+          idx.push(p, p2, q, q, p2, q2);
+        }
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(this.colors, 4));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    const col = stage.def.surface === 'snow' ? 0x8f9aa6 : stage.def.surface === 'tarmac' ? 0x4a4036 : 0x3b2c1f;
+    const mat = new THREE.MeshStandardMaterial({ color: col, vertexColors: true, transparent: true, depthWrite: false, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide });
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.name = 'road-wear';
+    this.mesh.renderOrder = 1;
+    this.refresh();
+  }
+
+  at(d: number) {
+    return this.wear[Math.max(0, Math.min(this.wear.length - 1, Math.floor(d / RoadWear.CELL)))];
+  }
+
+  /** A car (id) is at distance d: wears every cell it has crossed since last time. */
+  pass(id: string, d: number, wet: number) {
+    const last = this.lastPass.get(id);
+    this.lastPass.set(id, d);
+    if (last === undefined || d <= last || d - last > 200) return;
+    const c0 = Math.floor(last / RoadWear.CELL), c1 = Math.floor(d / RoadWear.CELL);
+    const add = (this.soft ? 0.11 : 0.04) * (1 + wet * 1.6);
+    for (let c = c0 + 1; c <= c1 && c < this.wear.length; c++) this.wear[c] = Math.min(1, this.wear[c] + add);
+    if (c1 > c0) this.dirty = true;
+  }
+
+  /** New run: cars' last positions are forgotten (the ruts stay). */
+  newRun() {
+    this.lastPass.clear();
+  }
+
+  /** Grip multiplier on the road here (first car on loose gravel; deep ruts later). */
+  grip(d: number) {
+    const w = this.at(d);
+    if (!this.soft) return 1 - 0.03 * w;
+    if (w < 0.08) return 0.955; // loose gravel on top: the first car sweeps it
+    if (w < 0.5) return 0.97 + 0.06 * Math.min(1, (w - 0.08) / 0.32); // a clean, swept line
+    return 1.03 - 0.22 * (w - 0.5); // deep ruts
+  }
+
+  /** 0..1 how rough the road is here (ruts kick the car about). */
+  rough(d: number) {
+    return this.soft ? Math.max(0, (this.at(d) - 0.45) / 0.55) : 0;
+  }
+
+  /** Redraw the ruts if anything changed (call about once a second). */
+  refresh() {
+    if (!this.dirty && this.drawn) return;
+    this.dirty = false;
+    this.drawn = true;
+    const rows = this.colors.length / 16;
+    for (let r = 0; r < rows; r++) {
+      const w = this.at(r * this.rowStep);
+      const a = Math.min(0.75, w * 0.85);
+      for (let j = 0; j < 4; j++) {
+        const o = (r * 4 + j) * 4;
+        this.colors[o] = this.colors[o + 1] = this.colors[o + 2] = 1;
+        this.colors[o + 3] = a;
+      }
+    }
+    this.mesh.geometry.getAttribute('color').needsUpdate = true;
+  }
+}

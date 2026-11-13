@@ -105,7 +105,8 @@ Set `CLIENT_ORIGIN` if the page is served from a different origin than the serve
 | Brake / Reverse | S / ↓ (hold when stopped to reverse) | LT |
 | Steer | A D / ← → | Left stick |
 | Handbrake | Space | A / B |
-| Reset car onto the road | R | X |
+| Reset car onto the road (+15 s) | R | X |
+| Spectator push when stuck or off the road (+10 s) | H | Y |
 | Pause menu | Esc | Start |
 | Everything else (ignition, start, lights, wipers…) | **click the switch in the car** with the mouse (tap on a touch screen) | – |
 
@@ -187,6 +188,45 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
   the outside of tight corners (solid – you'll bounce off them), and telegraph poles with wires.
 - **Dirt:** mud, dust or snow builds up on the car as you drive – you can see it on the bonnet.
 
+## The long stage, service zone, crowds and penalties
+
+**Col de la Couronne** is a 30 km climb (about 20 minutes): flowing valley roads, two faces of
+stacked hairpins up the mountain, a ridge, and a snowy summit. Far mountains and valleys
+fill the horizon, steep banks turn to rock, and the snow starts near the top. The light
+fades from day through sunset to night as you climb, so lights and the light pod matter.
+
+- **Service zone** (this stage only, about half way): a SERVICE banner over the road with team
+  awnings and vans. Stop in it and pick the jobs – bodywork & windscreen, engine & cooling,
+  a new set of tyres, fuses & spares. The **stage clock keeps running** while they work; go
+  over 3 minutes and you're late (+10 s per 10 s over). Or skip it and drive on.
+- **Crowds** stand behind tape on the outside of hairpins, the tightest corners and jumps on
+  every stage. They jump and cheer as you come past; go through the tape and they scatter –
+  **+5 s**.
+- **Time penalties** are added to your stage time by the server and listed on the results:
+  crowd tape +5 s, spectator push +10 s, reset +15 s, late out of service.
+- **Spectator push (H):** stuck in a ditch or beached off the road? Spectators push you back
+  onto the road right where you are for +10 s – cheaper than a reset (+15 s), which puts you
+  back a little way.
+
+## Forks, weather radar and roads that break up
+
+- **Forks (split routes):** most stages have a fork – the road splits and joins up again
+  further on. A **SHORT CUT** across the inside of a big loop is shorter but narrow, rough
+  and muddy (or loose gravel on tarmac stages, deep snow on snow stages); a **FAST ROUTE**
+  is wide and smooth but a little longer than the twisty road it bypasses. A sign stands
+  before each fork, but only the co-driver's map shows where both ways go and how long they
+  are, and the tablet calls it: "FORK IN 300 m: SHORT CUT LEFT (MUD, 443 m vs 650 m)".
+  There are no pace notes on the short cuts. The 30 km mountain stage has three.
+- **Weather radar:** showers now drift across the map with the wind. The co-driver's map shows
+  each one (green/blue), where it will be in a minute (dashed) and which way it's moving. The
+  tablet warns "RAIN AHEAD IN 200 m", and at a fork it tells you if one way is about to get
+  wet ("RAIN ON IT, STAY ON THE ROAD").
+- **The road breaks up:** every car that drives a gravel, mud or snow stage changes it. The
+  first car on the road gets loose gravel (a little less grip); after a few cars the line is
+  swept clean (more grip); after many more – or in the rain – deep ruts form that kick the car
+  about and cost grip. You can see the dark wheel tracks deepen. The ruts stay for the next
+  run in the same room, so going first or last really matters. Tarmac barely changes.
+
 ## Stages, weather and opponents
 
 The driver picks everything in the **lobby** (the navigator's screen follows):
@@ -211,6 +251,7 @@ The driver picks everything in the **lobby** (the navigator's screen follows):
 | Sardinia Ridge | Sardinia | sandy gravel full of jumps |
 | Mojave Run | USA | very fast desert gravel, big jumps |
 | Moorland Mud | Yorkshire | gravel and deep mud, bridge |
+| **Col de la Couronne** | Hautes-Alpes, France | **30 km mountain climb** (~980 m up): valley forest, two walls of hairpin switchbacks, a ridge with the **service zone**, a snowy summit – and night falls on the way up |
 
 The twelve newer stages are laid out from a seed (`shared/src/tracks/stages/more.ts`):
 corners alternate so the road always makes progress and can never cross itself.
@@ -321,9 +362,15 @@ can watch), can join while a stage is already running, and don't earn money.
 Cars you watch (and other players' cars on the stage) turn their front wheels with the
 driver's real steering and roll with the speed.
 
-- **Cameras** (button at the bottom): 🎥 **TV cameras** placed along the roadside that cut from
-  one to the next and zoom to keep the car framed · 🚗 **chase cam** · 🚁 **helicopter** ·
-  👀 **in the car** (the co-driver's seat).
+- **Cameras** (button at the bottom):
+  - 🎬 **Director** (default) cuts between shots by itself – TV cameras at the hairpins, crowds,
+    jumps and bridges, mixed with chase, helicopter, drone, bonnet and wheel shots.
+  - 🎥 **TV cameras** stand where the action is: on the outside of hairpins and tight corners,
+    by the crowds, at jumps, crests and bridges (with fillers in between), zooming to keep the
+    car framed with a little hand-held wobble.
+  - 🚗 **chase cam** · 🚁 **helicopter** · 🛸 **drone** (sweeps around the car) ·
+    🏁 **bonnet cam** · 🛞 **wheel cam** (low on the side of the car) · 👀 **in the car**.
+  - The shot's name shows under the timer (e.g. "TV · HAIRPIN").
 - **◀ ▶** switch between the drivers in the rally.
 - Live overlay: position, stage time, gap to the leader, speed, and a running order with each
   driver's progress (or finish time).

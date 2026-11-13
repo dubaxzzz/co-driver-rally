@@ -32,11 +32,13 @@ import { VEHICLES, FIELD, TEAMS, applyUpgrades, vehicleById, dailyChallenge, med
 import { eventCtx, type EventContext } from '../events/context';
 import { champ } from '../championship/state';
 import { classificationTable, formatMs } from '../ui/classification';
+import { RoadWear } from './tracks/TrackMeshes';
 import { RemoteCar, fallbackPaint } from './RemoteCars';
 import { applySharedSwitch, decodeSwitches, defaultSwitches,
   defaultSystems,
   stageConditions,
   zoneAmount,
+  showerAmount,
   type StageConditions,
   encodeSystems,
   stepSystems,
@@ -158,6 +160,8 @@ export class Game {
       this.physics = new PhysicsWorld(R);
       await new Promise((r) => setTimeout(r, 0)); // let the loading screen paint
       this.world = buildStageWorld(this.scene, stage, { quality, physics: this.physics, fogMultiplier: fogMultiplier(), weather: this.weather.id });
+      this.roadWear = new RoadWear(stage);
+      this.scene.add(this.roadWear.mesh);
       this.scene.add(this.smoke.points);
       this.unsubs.push(settings.subscribe(() => (this.fogBase = fogMultiplier())));
       this.fogBase = fogMultiplier();
@@ -178,7 +182,7 @@ export class Game {
       if (this.world.roadColliderHandle !== null) this.vehicle.roadColliders.add(this.world.roadColliderHandle);
       // First person only: hide the outside of the car, show the cockpit and switch on real headlights.
       model.setExteriorVisible(false);
-      if (this.weather.headlights) model.enableHeadlights();
+      if (this.weather.headlights || this.stage.def.nightfall) model.enableHeadlights();
       model.setHeadlights(false);
       this.vehicle.weatherGrip = this.weather.grip;
       this.cockpit = new Cockpit(sel.paint, 'driver', sel.vehicle.body.model);
@@ -245,6 +249,7 @@ export class Game {
   // ---------------------------------------------------------------- setup
   private bindInput() {
     this.input.on('reset', () => this.resetVehicle());
+    this.input.on('push', () => this.pushCar());
     this.input.on('pause', () => (this.paused ? this.closeOverlay() : this.openPause()));
   }
 
@@ -350,6 +355,12 @@ export class Game {
     this.drownShown = false;
     this.vehicle.resetDamage();
     this.vehicle.tyreWear = 0; // fresh tyres for every stage
+    this.tyreUsed = 0;
+    this.penalties = [];
+    this.crowdHit.clear();
+    this.roadWear?.newRun();
+    this.serviceState = 'none';
+    this.closeService();
     this.fuseSpares = SPARE_FUSES;
     if (this.ctx.kind === 'championship' && !this.carryApplied) {
       this.vehicle.setDamage(this.ctx.carry.zones);
@@ -517,6 +528,8 @@ export class Game {
     const car = this.remote(p.pid, d.name, d.slot);
     if (p.look) car.setLook(p.look[0], p.look[1], p.look[2]);
     car.push({ t: p.serverTime, x: p.x, y: p.y, z: p.z, h: p.h, p: p.p, r: p.r, steer: p.steer, v: p.v });
+    // other cars wear the road ahead of us (or behind)
+    this.roadWear?.pass(p.pid, p.dist, this.localRain);
     car.distance = p.dist;
     car.model.setBrakeLights(p.brake > 0.1 || p.handbrake); // so you can see them stop in the dark
     if (p.sw !== undefined) {
@@ -549,6 +562,217 @@ export class Game {
     this.vehicle.place(s.x, s.y + 1.0, s.z, s.h);
     this.resets++;
     this.upsideDownFor = 0;
+    if (this.raceState?.phase === 'racing') this.addPenalty('Reset', 15);
+  }
+
+  // ---------------------------------------------------------------- rally rules
+  /** Time penalties this run (shown on the results, added to the stage time by the server). */
+  private penalties: Array<{ label: string; sec: number }> = [];
+  /** Ruts and swept lines: the road breaks up as cars go over it (kept between runs). */
+  private roadWear: RoadWear | null = null;
+  private wearRefreshAt = 0;
+  private crowdHit = new Set<number>();
+  private stuckFor = 0;
+  private tyreUsed = 0;
+  private penaltySec() {
+    return this.penalties.reduce((a, p) => a + p.sec, 0);
+  }
+  private addPenalty(label: string, sec: number) {
+    this.penalties.push({ label, sec });
+    this.hud.warn(`+${sec} s PENALTY – ${label.toUpperCase()}`, 2.5);
+    audio.click();
+  }
+
+  /** Spectators push the car back onto the road where it is: quicker than a reset, +10 s. */
+  private pushCar() {
+    const v = this.vehicle;
+    if (!v || this.raceState?.phase !== 'racing' || v.frozen || this.serviceState === 'working') return;
+    const hw = this.stage.def.roadWidth / 2;
+    const off = Math.abs(this.race.lateral) > hw + 1.2;
+    const stuck = Math.abs(v.telemetry.speed) < 2 && (off || v.upright < 0.6 || this.stuckFor > 2);
+    if (!stuck) {
+      this.hud.warn('PUSH ONLY WHEN YOU’RE STUCK OR OFF THE ROAD', 1.5);
+      return;
+    }
+    const d = Math.max(this.stage.spawnDistance, this.race.distance);
+    let sp = sampleAt(this.stage.samples, d);
+    const fork = this.race.branch >= 0 ? this.stage.splits[this.race.branch] : null;
+    if (fork) {
+      // on a short cut: back onto the short cut
+      const f = (d - fork.from) / (fork.to - fork.from);
+      sp = fork.samples[Math.max(0, Math.min(fork.samples.length - 1, Math.round(f * fork.length)))];
+    }
+    const side = Math.sign(this.race.lateral) || 1;
+    const lat = side * Math.min(hw - 1.2, 1.5); // back on the road, on the side you went off
+    v.place(sp.x + Math.cos(sp.h) * lat, sp.y + 0.8, sp.z - Math.sin(sp.h) * lat, sp.h);
+    this.resets++; // the server sees it like a reset (it moves the car), but it's cheaper
+    this.upsideDownFor = 0;
+    this.stuckFor = 0;
+    this.addPenalty('Spectator push', 10);
+  }
+
+  /** Crowds, nightfall, the service zone, and when a push is on offer. */
+  private updateRally(dt: number, v: Vehicle) {
+    const st = this.stage;
+    const d = this.race.distance;
+    const hw = st.def.roadWidth / 2;
+    const racing = this.raceState?.phase === 'racing' && !v.frozen;
+    // night falls as you climb
+    if (st.def.nightfall) {
+      const f = (d - st.startDistance) / (st.finishDistance - st.startDistance);
+      this.world.atmosphere.setDarkness(Math.min(1, Math.max(0, (f - 0.2) / 0.55)));
+    }
+    // the road under us: swept, clean or rutted (short cuts are untouched: rough, but no ruts)
+    if (this.roadWear) {
+      const fork = this.race.branch >= 0 ? st.splits[this.race.branch] : null;
+      if (!fork && racing) this.roadWear.pass('me', d, this.localRain);
+      this.ai.forEach((a, i) => this.roadWear!.pass(`ai${i}`, a.distance, this.localRain));
+      v.roadGrip = fork ? (fork.kind === 'cut' ? 0.96 : 1.02) : this.roadWear.grip(d);
+      v.roadRough = fork ? (fork.kind === 'cut' ? 0.45 : 0) : this.roadWear.rough(d);
+      if (this.clock > this.wearRefreshAt) {
+        this.wearRefreshAt = this.clock + 1;
+        this.roadWear.refresh();
+      }
+    }
+    // crowds: cheer, and penalise anyone who goes through the tape
+    this.world.scenery.updateCrowds(dt, v.position, this.clock);
+    if (racing) {
+      for (const c of st.crowds) {
+        if (d < c.distance - 2 || d > c.distance + c.length + 2 || this.crowdHit.has(c.index)) continue;
+        if (this.race.lateral * c.side > hw + 3.6) {
+          this.crowdHit.add(c.index);
+          this.world.scenery.scatterCrowd(c.index);
+          this.addPenalty('Through the crowd tape', 5);
+        }
+      }
+    }
+    // stuck (wheels spinning, going nowhere)?
+    if (racing && Math.abs(v.telemetry.speed) < 1 && this.input.state.throttle > 0.5) this.stuckFor += dt;
+    else if (Math.abs(v.telemetry.speed) > 3) this.stuckFor = 0;
+    if (racing && Math.abs(v.telemetry.speed) < 2 && (this.stuckFor > 2 || (Math.abs(this.race.lateral) > hw + 1.2 && this.stuckFor > 0.5))) {
+      if (Math.random() < dt * 0.6) this.hud.warn('STUCK? PRESS H – SPECTATORS PUSH YOU OUT (+10 s)', 1.6);
+    }
+    // the service zone (long stages): stop in it to service the car
+    const sv = st.service;
+    if (sv && racing && this.serviceState === 'none' && d > sv.distance && d < sv.distance + sv.length) {
+      if (Math.abs(v.telemetry.speed) < 2) this.openService();
+      else if (Math.random() < dt * 0.8) this.hud.warn('SERVICE ZONE – STOP TO SERVICE THE CAR', 1.2);
+    }
+    if (this.serviceState === 'menu') v.frozen = true;
+    if (this.serviceState === 'working') {
+      v.frozen = true;
+      const left = Math.ceil((this.serviceUntil - performance.now()) / 1000);
+      if (this.serviceTimerEl) this.serviceTimerEl.textContent = `${Math.max(0, left)} s`;
+      if (left <= 0) this.finishService();
+    }
+  }
+
+  // ---- mid-stage service: pick jobs, the clock keeps running ----
+  private serviceState: 'none' | 'menu' | 'working' | 'done' = 'none';
+  private serviceEl: HTMLElement | null = null;
+  private serviceTimerEl: HTMLElement | null = null;
+  private serviceUntil = 0;
+  private serviceJobs = new Set<string>();
+  private static SERVICE_BUDGET = 180;
+
+  private serviceJobList() {
+    const v = this.vehicle;
+    const dm = v.damage;
+    const body = (dm.front + dm.left + dm.right + dm.rear + dm.windscreen) / 5;
+    return [
+      { id: 'body', label: 'Bodywork & windscreen', detail: `${Math.round(body * 100)}% damaged`, sec: Math.round(20 + 120 * body) },
+      { id: 'engine', label: 'Engine & cooling', detail: `${Math.round(dm.engine * 100)}% damaged`, sec: Math.round(15 + 90 * dm.engine) },
+      { id: 'tyres', label: 'New set of tyres', detail: `${Math.round(v.tyreWear * 100)}% worn`, sec: 30 },
+      { id: 'fuses', label: 'Fuses & spares restocked', detail: `${this.fuseSpares} spare${this.fuseSpares === 1 ? '' : 's'} left${this.sys.fuse >= 0 ? ', one blown' : ''}`, sec: 10 },
+    ];
+  }
+
+  private openService() {
+    this.serviceState = 'menu';
+    this.vehicle.frozen = true;
+    this.serviceJobs.clear();
+    const jobs = this.serviceJobList();
+    const total = h('div', { class: 'svc-total' });
+    const rows = jobs.map((j) => {
+      const row = h('button', { class: 'svc-job', 'data-testid': `svc-${j.id}` }, h('b', {}, j.label), h('span', {}, j.detail), h('i', {}, `${j.sec} s`)) as HTMLButtonElement;
+      row.onclick = () => {
+        if (this.serviceJobs.has(j.id)) this.serviceJobs.delete(j.id);
+        else this.serviceJobs.add(j.id);
+        row.classList.toggle('on', this.serviceJobs.has(j.id));
+        draw();
+      };
+      return row;
+    });
+    const draw = () => {
+      const t = jobs.filter((j) => this.serviceJobs.has(j.id)).reduce((a, j) => a + j.sec, 0);
+      const late = Math.max(0, t - Game.SERVICE_BUDGET);
+      total.textContent = `Work: ${t} s of ${Game.SERVICE_BUDGET} s${late ? ` – ${late} s over: +${Math.ceil(late / 10) * 10} s penalty` : ''}`;
+      total.classList.toggle('late', late > 0);
+    };
+    draw();
+    const go = h('button', { class: 'btn primary', 'data-testid': 'svc-go', onclick: () => this.startService() }, 'Start service (Enter)');
+    const skip = h('button', { class: 'btn', 'data-testid': 'svc-skip', onclick: () => this.skipService() }, 'Skip – drive on (Esc)');
+    this.serviceTimerEl = null;
+    this.serviceEl = h('div', { class: 'svc-panel', 'data-testid': 'service' },
+      h('div', { class: 'panel-title' }, '🔧 Service zone'),
+      h('p', {}, 'Pick the jobs. The stage clock keeps running while the mechanics work – go over 3 minutes and you are late (time penalty).'),
+      ...rows, total, h('div', { class: 'svc-actions' }, skip, go));
+    this.container.append(this.serviceEl);
+    window.addEventListener('keydown', this.serviceKey);
+  }
+
+  private serviceKey = (e: KeyboardEvent) => {
+    if (this.serviceState !== 'menu') return;
+    if (e.key === 'Enter') this.startService();
+    else if (e.key === 'Escape') this.skipService();
+    else if (/^[1-4]$/.test(e.key)) (this.serviceEl?.querySelectorAll('.svc-job')[Number(e.key) - 1] as HTMLButtonElement | undefined)?.click();
+  };
+
+  private startService() {
+    if (this.serviceState !== 'menu') return;
+    const jobs = this.serviceJobList().filter((j) => this.serviceJobs.has(j.id));
+    const t = jobs.reduce((a, j) => a + j.sec, 0);
+    if (!t) return this.skipService();
+    const late = Math.max(0, t - Game.SERVICE_BUDGET);
+    if (late) this.addPenalty('Late out of service', Math.ceil(late / 10) * 10);
+    this.serviceState = 'working';
+    this.serviceUntil = performance.now() + t * 1000;
+    this.serviceTimerEl = h('div', { class: 'svc-timer' }, `${t} s`);
+    this.serviceEl?.replaceChildren(h('div', { class: 'panel-title' }, '🔧 Mechanics at work'), h('p', {}, jobs.map((j) => j.label).join(' · ')), this.serviceTimerEl);
+  }
+
+  private finishService() {
+    const v = this.vehicle;
+    const dm = v.damage;
+    if (this.serviceJobs.has('body')) dm.front = dm.left = dm.right = dm.rear = dm.windscreen = 0;
+    if (this.serviceJobs.has('engine')) {
+      dm.engine = 0;
+      this.sys.temp = Math.min(this.sys.temp, 85);
+    }
+    if (this.serviceJobs.has('tyres')) {
+      this.tyreUsed += v.tyreWear;
+      v.tyreWear = 0;
+    }
+    if (this.serviceJobs.has('fuses')) {
+      this.sys.fuse = -1;
+      this.fuseSpares = SPARE_FUSES;
+    }
+    this.serviceState = 'done';
+    this.closeService();
+    v.frozen = false;
+    this.hud.warn('SERVICE DONE – GO GO GO!', 2);
+  }
+
+  private skipService() {
+    this.serviceState = 'done';
+    this.closeService();
+    if (this.raceState?.phase === 'racing') this.vehicle.frozen = false;
+  }
+
+  private closeService() {
+    this.serviceEl?.remove();
+    this.serviceEl = null;
+    window.removeEventListener('keydown', this.serviceKey);
   }
 
   // ---------------------------------------------------------------- race
@@ -687,7 +911,7 @@ export class Game {
   /** Spare fuses fitted and rubber used this stage – they come off the prize. */
   private runningCosts() {
     const used = SPARE_FUSES - this.fuseSpares;
-    const wear = this.vehicle.tyreWear;
+    const wear = this.vehicle.tyreWear + this.tyreUsed;
     return [
       { label: `Spare fuses (${used} × ${money(FUSE_COST)})`, amount: -used * FUSE_COST },
       { label: `Tyres (${Math.round(wear * 100)}% worn)`, amount: -Math.round((wear * TYRE_SET_COST) / 10) * 10 },
@@ -895,14 +1119,15 @@ export class Game {
   }
 
   private fogBase = 1;
-  private cond: StageConditions = { wet: [], fog: [], obstacles: [] };
+  private cond: StageConditions = { wet: [], showers: [], fog: [], obstacles: [] };
   private warnedObstacles = new Set<number>();
   private localRain = 0;
 
   /** Showers, fog banks and things on the road (see stageConditions). */
   private updateConditions(dt: number, v: Vehicle) {
     const d = this.race.distance;
-    const wet = zoneAmount(this.cond.wet, d);
+    const pos = v.position;
+    const wet = Math.max(zoneAmount(this.cond.wet, d), showerAmount(this.cond, pos.x, pos.z, this.raceTimeMs() / 1000));
     const fog = zoneAmount(this.cond.fog, d);
     const base = this.weather.rain;
     this.localRain = Math.max(base, wet * 0.85);
@@ -1100,11 +1325,13 @@ export class Game {
     // Surface under the car: road surface at this point of the stage, the
     // stage's verge when off the road, and the river if we went in.
     const p0 = v.position;
-    v.roadSurface = SURFACES[surfaceAt(this.stage, this.race.distance)];
+    const fork = this.race.branch >= 0 ? this.stage.splits[this.race.branch] : null;
+    v.roadSurface = SURFACES[fork ? fork.surface : surfaceAt(this.stage, this.race.distance)];
     v.offroadSurface = SURFACES[this.stage.def.offroad];
     this.updateDirt(dt, v);
     this.updateSystems(dt, v);
     this.updateConditions(dt, v);
+    this.updateRally(dt, v);
     const river = this.world.terrain.waterAt(p0.x, p0.z);
     v.inWater = !!river && p0.y < river.waterY + 0.6;
 
@@ -1291,6 +1518,7 @@ export class Game {
       sw: encodeSwitches(this.sw),
       sys: encodeSystems(this.sys),
       tmp: Math.round(this.sys.temp),
+      pen: this.penaltySec(),
       tw: Math.round(this.vehicle.tyreWear * 100),
       fsp: this.fuseSpares,
       ai: this.ai.flatMap((a) => {

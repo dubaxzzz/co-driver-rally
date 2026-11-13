@@ -43,6 +43,8 @@ class Tracker {
   topSpeed = 0;
   warnedCheckpoint = -1;
   warnedFinish = false;
+  /** Time penalties (s) the driver has picked up this run. */
+  penalty = 0;
   constructor(start: number) {
     this.progress = start;
   }
@@ -160,6 +162,7 @@ export class RaceController {
       }
     }
     tr.lastResets = Math.max(tr.lastResets, p.resets);
+    if (p.pen !== undefined) tr.penalty = Math.max(tr.penalty, p.pen); // penalties never go back down
     tr.lastPos = { x: p.x, z: p.z, t: now };
     tr.topSpeed = Math.max(tr.topSpeed, Math.abs(p.v));
 
@@ -205,7 +208,8 @@ export class RaceController {
   private finish(playerId: string, tr: Tracker, now: number) {
     const d = this.driver(playerId)!;
     const startAt = this.state.startAt ?? now;
-    const timeMs = now - startAt;
+    const penaltyMs = tr.penalty * 1000;
+    const timeMs = now - startAt + penaltyMs;
     const distanceM = this.stage.finishDistance - this.stage.startDistance;
     const result: RaceResult = {
       playerId,
@@ -214,10 +218,11 @@ export class RaceController {
       timeMs,
       splits: d.splits,
       topSpeedKmh: Math.round(tr.topSpeed * 3.6),
-      avgSpeedKmh: Math.round((distanceM / Math.max(1, timeMs / 1000)) * 3.6 * 10) / 10,
+      avgSpeedKmh: Math.round((distanceM / Math.max(1, (timeMs - penaltyMs) / 1000)) * 3.6 * 10) / 10,
       resets: tr.lastResets,
       distanceM: Math.round(distanceM),
       finishedAt: now,
+      ...(penaltyMs ? { penaltyMs } : {}),
     };
     this.patchDriver(playerId, { result });
     this.events.onFinished(result);

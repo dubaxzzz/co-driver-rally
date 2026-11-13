@@ -8,6 +8,8 @@ import { projectOnStage, type BuiltStage, type PaceNote } from '@cdr/shared';
 export class RaceClient {
   distance: number;
   lateral = 0;
+  /** On a fork's short cut / bypass (-1 = the main road). */
+  branch = -1;
   private hint = -1;
   private announced = new Set<number>();
   nextNoteIndex = 0;
@@ -52,12 +54,15 @@ export class RaceClient {
     this.hint = p.index;
     this.distance = p.distance;
     this.lateral = p.lateral;
+    this.branch = p.branch;
     const notes = this.stage.paceNotes;
     let i = 0;
     while (i < notes.length && notes[i].distance < this.distance - 2) i++;
     this.nextNoteIndex = i;
 
     if (!autoCalls) return;
+    // the notes are for the main road – none on a short cut
+    if (this.branch >= 0) return;
     // Call far enough ahead to react: at least 70 m or ~3.5 s at current speed.
     const lead = Math.max(70, Math.abs(speed) * 3.5);
     for (let k = i; k < notes.length; k++) {

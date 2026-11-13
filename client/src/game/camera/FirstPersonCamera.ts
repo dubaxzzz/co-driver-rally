@@ -25,7 +25,7 @@ export class FirstPersonCamera {
   }
 
   constructor(aspect: number, seat: Seat) {
-    this.camera = new THREE.PerspectiveCamera(74, aspect, 0.03, 900);
+    this.camera = new THREE.PerspectiveCamera(74, aspect, 0.03, 1700);
     const s = SEATS[seat];
     this.eye = new THREE.Vector3(s.x, s.eyeY, s.eyeZ);
   }

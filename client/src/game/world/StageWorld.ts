@@ -39,7 +39,7 @@ export function buildStageWorld(
     roadColliderHandle = opts.physics.addTrimesh(track.roadCollider.vertices, track.roadCollider.indices, 0.9).handle;
     opts.physics.addTrimesh(track.terrainCollider.vertices, track.terrainCollider.indices, 0.8);
   }
-  const atmosphere = new Atmosphere(scene, weather, stage.def.scenery, opts.quality === 'high', opts.fogMultiplier);
+  const atmosphere = new Atmosphere(scene, weather, stage.def.scenery, opts.quality === 'high', opts.fogMultiplier, !!stage.def.flatBase);
   const scenery = new Scenery(stage, track.data, opts.physics, opts.quality);
   scene.add(scenery.group);
   const q = opts.quality === 'high' ? 1 : 0.5;
@@ -77,6 +77,12 @@ export function buildStageWorld(
     roadColliderHandle,
     update(dt, camera, carVel) {
       scenery.cull(camera);
+      // long stages: don't even consider road/terrain pieces far behind or ahead
+      for (const g of [track.road, track.terrain])
+        for (const m of g.children) {
+          const bs = (m as THREE.Mesh).geometry.boundingSphere;
+          if (bs) m.visible = bs.center.distanceTo(camera) - bs.radius < (g === track.road ? 1000 : 800);
+        }
       rain?.update(dt, camera, carVel);
       snow?.update(dt, camera, carVel);
       for (const w of track.water) w.update(dt);

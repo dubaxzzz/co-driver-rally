@@ -48,6 +48,8 @@ export interface RaceResult {
   resets: number;
   distanceM: number;
   finishedAt: number;
+  /** Time penalties included in timeMs (crowd tape, push, resets, late at service…). */
+  penaltyMs?: number;
 }
 
 /** One driver's run inside a stage. */
@@ -143,6 +145,8 @@ export interface TelemetryPacket {
   /** Tyre wear 0..100 % and spare fuses left (only the co-driver's panel shows these). */
   tw?: number;
   fsp?: number;
+  /** Time penalties so far this run (s) – added to the stage time at the finish. */
+  pen?: number;
   /** What the car looks like for other players: [vehicle index, body colour, accent colour]. */
   look?: number[];
   /** Prize the driver earned this run (sent after the finish so the navigator gets their share). */

@@ -176,10 +176,13 @@ export class TabletScreen {
     g.fillText(d.mapStatus, map.x + 24, map.y + map.h - 31);
     if (d.alert && !d.waiting) {
       const red = /TREE|ROCKS|ANIMALS|FUSE|OVERHEAT/.test(d.alert);
-      g.font = `900 ${P ? 18 : 24}px ${FONT}`;
+      const fork = /^FORK/.test(d.alert);
+      let fs = P ? 18 : 24;
+      g.font = `900 ${fs}px ${FONT}`;
+      while (g.measureText(d.alert).width > map.w - 64 && fs > 12) g.font = `900 ${(fs -= 1)}px ${FONT}`;
       const aw = Math.min(map.w - 24, g.measureText(d.alert).width + 40);
       const ay = map.y + (P ? 76 : 76);
-      g.fillStyle = red ? (this.blink < 6 ? 'rgba(255,59,78,0.95)' : 'rgba(180,30,45,0.95)') : 'rgba(30,110,220,0.92)';
+      g.fillStyle = red ? (this.blink < 6 ? 'rgba(255,59,78,0.95)' : 'rgba(180,30,45,0.95)') : fork ? 'rgba(150,90,30,0.95)' : 'rgba(30,110,220,0.92)';
       this.round(map.x + 12, ay, aw, P ? 40 : 46, 8);
       g.fill();
       g.fillStyle = '#fff';

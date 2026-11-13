@@ -15,7 +15,7 @@ import { h, toast } from '../ui/dom';
 import { resultsOverlay, type Standing } from '../ui/results';
 import { AI_CREWS } from '../game/ai/AIDriver';
 import { career, money } from '../career';
-import { FUSES, SPARE_FUSES, NAVIGATOR_SHARE, decodeSystems, stageConditions, zoneAmount, type StageConditions, type SysCommand } from '@cdr/shared';
+import { FUSES, SPARE_FUSES, NAVIGATOR_SHARE, decodeSystems, stageConditions, zoneAmount, showerAmount, type StageConditions, type SysCommand } from '@cdr/shared';
 import type { CockpitView } from './CockpitView';
 import { Interpolator } from './Interpolator';
 import { MapView } from './MapView';
@@ -65,7 +65,7 @@ export class NavigatorApp {
   private cond: StageConditions | null = null;
   /** Watching rather than navigating (TV cameras, live times, pick who to follow). */
   private readonly spectator = net.me()?.role === 'spectator';
-  private spec: { hud: HTMLElement; who: HTMLElement; time: HTMLElement; gap: HTMLElement; speed: HTMLElement; cam: HTMLButtonElement; board: HTMLElement } | null = null;
+  private spec: { hud: HTMLElement; who: HTMLElement; time: HTMLElement; gap: HTMLElement; speed: HTMLElement; cam: HTMLButtonElement; board: HTMLElement; shot: HTMLElement } | null = null;
 
   private readonly weatherId: string;
 
@@ -276,9 +276,9 @@ export class NavigatorApp {
     const time = h('div', { class: 'spec-time' }, '00:00.00');
     const gap = h('div', { class: 'spec-gap' });
     const speed = h('div', { class: 'spec-speed' });
-    const cam = h('button', { class: 'btn spec-btn', 'data-testid': 'spec-cam' }, '🎥 TV cameras') as HTMLButtonElement;
-    const modes = ['tv', 'chase', 'heli', 'incar'] as const;
-    const names = { tv: '🎥 TV cameras', chase: '🚗 Chase cam', heli: '🚁 Helicopter', incar: '👀 In the car' };
+    const cam = h('button', { class: 'btn spec-btn', 'data-testid': 'spec-cam' }, '🎬 Director') as HTMLButtonElement;
+    const modes = ['director', 'tv', 'chase', 'heli', 'drone', 'bonnet', 'wheel', 'incar'] as const;
+    const names = { director: '🎬 Director', tv: '🎥 TV cameras', chase: '🚗 Chase cam', heli: '🚁 Helicopter', drone: '🛸 Drone', bonnet: '🏁 Bonnet cam', wheel: '🛞 Wheel cam', incar: '👀 In the car' };
     cam.onclick = () => {
       if (!this.view) return;
       const next = modes[(modes.indexOf(this.view.cameraMode) + 1) % modes.length];
@@ -288,13 +288,14 @@ export class NavigatorApp {
     const prev = h('button', { class: 'btn spec-btn', 'data-testid': 'spec-prev', onclick: () => this.followNext(-1) }, '◀');
     const next = h('button', { class: 'btn spec-btn', 'data-testid': 'spec-next', onclick: () => this.followNext(1) }, '▶');
     const board = h('div', { class: 'spec-board' });
+    const shot = h('div', { class: 'spec-shot', 'data-testid': 'spec-shot' });
     const panel = h('div', { class: 'spec-hud' },
-      h('div', { class: 'spec-top' }, h('div', { class: 'spec-tag' }, 'LIVE · SPECTATING'), who, time, gap),
+      h('div', { class: 'spec-top' }, h('div', { class: 'spec-tag' }, 'LIVE · SPECTATING'), who, time, gap, shot),
       h('div', { class: 'spec-bottom' }, prev, cam, next, speed),
       board,
     );
     hud.append(panel);
-    this.spec = { hud: panel, who, time, gap, speed, cam, board };
+    this.spec = { hud: panel, who, time, gap, speed, cam, board, shot };
   }
 
   /** Spectators: watch the next/previous driver. */
@@ -316,6 +317,7 @@ export class NavigatorApp {
 
   /** Live numbers for the spectator overlay. */
   private updateSpectatorHud(now: number) {
+    if (this.spec && this.view) this.spec.shot.textContent = this.view.shotLabel;
     const sp = this.spec;
     const s = this.race;
     if (!sp || !s) return;
@@ -546,13 +548,37 @@ export class NavigatorApp {
           const what = ob.kind === 'tree' ? 'TREE DOWN' : ob.kind === 'rocks' ? 'ROCKS ON ROAD' : 'ANIMALS CROSSING';
           tab.alert = `${what} IN ${Math.max(0, Math.round((ob.distance - t.dist) / 10) * 10)} m – ${ob.side > 0 ? 'LEFT' : 'RIGHT'} BLOCKED, KEEP ${ob.side > 0 ? 'RIGHT' : 'LEFT'}`;
         } else {
-          const w = this.cond.wet.find((z) => z.from > t.dist && z.from - t.dist < 600);
+          const now = t.t / 1000;
+          const speed = Math.max(12, Math.abs(t.v));
+          const st = this.stage;
+          const wetAt = (x: number, z: number, at: number) => showerAmount(this.cond!, x, z, at);
+          // the next fork, and which way is drier when we get there
+          const fork = st.splits.find((sp) => sp.from > t.dist - 5 && sp.from - t.dist < 650);
+          // rain ahead on the road (allowing for the shower moving while we drive there)
+          let rainIn = -1;
+          for (let dd = 0; dd <= 600; dd += 20) {
+            const q = st.samples[Math.min(st.samples.length - 1, Math.round(t.dist + dd))];
+            if (wetAt(q.x, q.z, now + dd / speed) > 0.25) {
+              rainIn = dd;
+              break;
+            }
+          }
           const f = this.cond.fog.find((z) => z.from > t.dist && z.from - t.dist < 600);
-          if (w) tab.alert = `RAIN SHOWER IN ${Math.round((w.from - t.dist) / 10) * 10} m – GRIP WILL DROP`;
+          if (fork) {
+            const eta = now + (fork.from - t.dist) / speed;
+            const mid = fork.samples[Math.floor(fork.samples.length / 2)];
+            const mainMid = st.samples[Math.round((fork.from + fork.to) / 2)];
+            const wetCut = wetAt(mid.x, mid.z, eta + 8) > 0.25, wetMain = wetAt(mainMid.x, mainMid.z, eta + 10) > 0.25;
+            const what = fork.kind === 'cut' ? `SHORT CUT ${fork.side === 'L' ? 'LEFT' : 'RIGHT'} (${fork.surface.toUpperCase()}, ${Math.round(fork.length)} m vs ${Math.round(fork.to - fork.from)} m)` : `FAST ROUTE ${fork.side === 'L' ? 'LEFT' : 'RIGHT'} (${Math.round(fork.length)} m vs ${Math.round(fork.to - fork.from)} m twisty)`;
+            const hint = wetCut && !wetMain ? ' – RAIN ON IT, STAY ON THE ROAD' : wetMain && !wetCut ? ' – THE MAIN ROAD IS WET, TAKE IT' : '';
+            tab.alert = `FORK IN ${Math.max(0, Math.round((fork.from - t.dist) / 10) * 10)} m: ${what}${hint}`;
+          } else if (rainIn > 0) tab.alert = `RAIN AHEAD IN ${rainIn} m – SHOWER MOVING IN, GRIP WILL DROP`;
           else if (f) tab.alert = `FOG BANK IN ${Math.round((f.from - t.dist) / 10) * 10} m`;
-          else if (zoneAmount(this.cond.wet, t.dist) > 0.2) tab.alert = 'IN THE SHOWER – WIPERS ON, WET ROAD';
+          else if (rainIn === 0 || zoneAmount(this.cond.wet, t.dist) > 0.2) tab.alert = 'IN THE SHOWER – WIPERS ON, WET ROAD';
         }
       }
+      const svc = this.stage.service;
+      if (svc && !tab.alert && t.dist > svc.distance - 800 && t.dist < svc.distance + svc.length) tab.alert = t.dist < svc.distance ? `SERVICE ZONE IN ${Math.round((svc.distance - t.dist) / 10) * 10} m – STOP THERE TO FIX THE CAR` : 'SERVICE ZONE – STOP AND PICK THE JOBS';
       // the car itself comes first: only the co-driver can see these
       const sy = tab.sys;
       if (sy && sy.fuse >= 0) tab.alert = this.fuseSpares > 0 ? `FUSE BLOWN: ${FUSES[sy.fuse]} – FIT A SPARE ON THE CAR PANEL (P)` : `FUSE BLOWN: ${FUSES[sy.fuse]} – NO SPARES LEFT, TELL THE DRIVER`;
@@ -569,6 +595,7 @@ export class NavigatorApp {
     // the tablet screen refreshes ~12 times a second (plenty for a map, and cheap)
     if (!this.spectator && pnow - this.lastTabletDraw > 80) {
       this.lastTabletDraw = pnow;
+      if (t) this.map.raceTime = t.t / 1000;
       this.screen.setMapState(t, this.driverRace()?.checkpointsPassed ?? 0);
       this.screen.draw(tab);
     }

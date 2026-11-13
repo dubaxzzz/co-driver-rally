@@ -6,7 +6,7 @@ export interface DriveInput {
   handbrake: boolean;
 }
 
-type Action = 'reset' | 'pause';
+type Action = 'reset' | 'pause' | 'push';
 
 export class Input {
   private keys = new Set<string>();
@@ -22,6 +22,7 @@ export class Input {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(code)) e.preventDefault();
     if (!e.repeat) {
       if (code === 'KeyR') this.fire('reset');
+      if (code === 'KeyH') this.fire('push');
       if (code === 'Escape' || code === 'KeyP') this.fire('pause');
     }
     this.keys.add(code);
@@ -67,6 +68,7 @@ export class Input {
         if (pressed(i) && !this.padPrev[i]) this.fire(a);
       };
       edge(2, 'reset'); // X
+      edge(3, 'push'); // Y
       edge(9, 'pause'); // Start
       this.padPrev = pad.buttons.map((b) => b.pressed);
       break;

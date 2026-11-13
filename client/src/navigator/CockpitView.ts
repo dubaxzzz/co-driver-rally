@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WEATHER, WHEELS, VEHICLES, sampleAt, zoneAmount, decodeSwitches, defaultSwitches, SHARED_SWITCHES, type BuiltStage, type CarModelId, type CarSwitches, type RelayedTelemetry, type SharedSwitch, type StageConditions, type WeatherDef, type WeatherId } from '@cdr/shared';
+import { WEATHER, WHEELS, VEHICLES, sampleAt, zoneAmount, showerAmount, decodeSwitches, defaultSwitches, SHARED_SWITCHES, type BuiltStage, type CarModelId, type CarSwitches, type RelayedTelemetry, type SharedSwitch, type StageConditions, type WeatherDef, type WeatherId } from '@cdr/shared';
 import { CockpitPicker } from '../game/vehicle/CockpitPicker';
 import type { ControlId } from '../game/vehicle/Controls';
 import { audio } from '../audio/AudioEngine';
@@ -11,9 +11,23 @@ import { FirstPersonCamera } from '../game/camera/FirstPersonCamera';
 import { bakeCarModel, createCarModel, rollWheels, type CarModel } from '../game/vehicle/CarModel';
 import { Cockpit } from '../game/vehicle/Cockpit';
 import { buildStageWorld, type StageWorld } from '../game/world/StageWorld';
+import { RoadWear } from '../game/tracks/TrackMeshes';
 import { SEATS } from '../game/vehicle/Cockpit';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { PanelButton, SystemsPanelScreen, TabletScreen } from './TabletScreen';
+
+export type SpecMode = 'director' | 'tv' | 'chase' | 'heli' | 'drone' | 'bonnet' | 'wheel' | 'incar';
+/** Small seeded random numbers (camera placement is the same for everyone). */
+function mulberryRand(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 const LOOK_DOWN_PITCH = -0.95;
 const LOOK_DOWN_YAW = 0.12;
@@ -54,6 +68,9 @@ export class CockpitView {
   private weather: WeatherDef;
   private damage: DamageZones = noDamage();
   private aiCars: CarModel[] = [];
+  /** The ruts the cars leave (same rules as the driver's game). */
+  private roadWear: RoadWear;
+  private wearAt = 0;
   private smoke = new DustSystem(200, 'rgba(70,70,74,', -0.8, 2.6);
   private modelId: CarModelId = 'kestrel';
   private sw: CarSwitches = defaultSwitches();
@@ -94,6 +111,8 @@ export class CockpitView {
 
     this.world = buildStageWorld(this.scene, stage, { quality: 'low', physics: null, fogMultiplier: fogMultiplier(), weather: this.weather.id });
     this.scene.add(this.smoke.points);
+    this.roadWear = new RoadWear(stage);
+    this.scene.add(this.roadWear.mesh);
     this.unsub = settings.subscribe(() => this.world.atmosphere.setFogMultiplier(fogMultiplier()));
     this.fp = new FirstPersonCamera(1, 'navigator');
     const built = this.buildCar('kestrel');
@@ -332,86 +351,193 @@ export class CockpitView {
 
   private cond: StageConditions | null = null;
 
-  // ---- spectating: TV cameras along the stage, chase cam, helicopter, in-car ----
+  // ---- spectating: an auto-director, TV cameras at the corners, chase, heli, drone, bonnet, wheel, in-car ----
   private spectator = false;
-  cameraMode: 'tv' | 'chase' | 'heli' | 'incar' = 'tv';
+  cameraMode: SpecMode = 'director';
+  /** What's on screen right now (for the caption), e.g. "TV · HAIRPIN". */
+  shotLabel = '';
   private specCam = new THREE.PerspectiveCamera(50, 1, 0.1, 3000);
   private specPos = new THREE.Vector3();
   private specLook = new THREE.Vector3();
   private specInit = false;
-  private tvCams: THREE.Vector3[] = [];
-  private tvDist: number[] = [];
-  private tvIndex = 0;
+  private tvCams: Array<{ pos: THREE.Vector3; d: number; from: number; to: number; label: string; hot: boolean }> = [];
+  private tvIndex = -1;
+  private shot: Exclude<SpecMode, 'director'> = 'tv';
+  private shotUntil = 0;
+  private droneAngle = 0;
 
   /** Watch instead of navigate: no tablet, cameras instead. */
   setSpectator(on: boolean) {
     this.spectator = on;
     this.tablet.visible = !on;
     this.setLookDown(false);
-    if (on && !this.tvCams.length) {
-      // TV cameras on the roadside every ~130 m, alternating sides, a few metres up
-      const st = this.stage;
-      const hw = st.def.roadWidth / 2;
-      let side = 1;
-      for (let d = st.startDistance + 40; d < st.finishDistance; d += 110 + Math.random() * 50) {
-        const c = sampleAt(st.samples, d);
-        const off = side * (hw + 3.2 + Math.random() * 2.5); // on the verge, in front of the trees
-        const x = c.x + Math.cos(c.h) * off, z = c.z - Math.sin(c.h) * off;
-        if (this.world.terrain.riverDistanceAt(x, z) < 12) continue;
-        this.tvCams.push(new THREE.Vector3(x, this.world.terrain.heightAt(x, z) + 3.5 + Math.random() * 2.5, z));
-        this.tvDist.push(d);
-        side = -side;
+    if (on && !this.tvCams.length) this.placeTvCams();
+    this.specInit = false;
+  }
+
+  /**
+   * TV cameras where the action is: on the outside of hairpins and tight corners
+   * (looking back at the car coming in), by the crowds, at jumps and crests – plus
+   * a few in between so there's always one covering the car.
+   */
+  private placeTvCams() {
+    const st = this.stage;
+    const hw = st.def.roadWidth / 2;
+    const rnd = mulberryRand(st.def.seed + 99);
+    const spots: Array<{ d: number; side: number; label: string; hot: boolean; up: number; out: number }> = [];
+    for (const n of st.paceNotes) {
+      if (n.kind === 'corner' && (n.severity === 'H' || (typeof n.severity === 'number' && n.severity <= 3))) {
+        // outside of the corner, at the apex
+        spots.push({ d: n.distance + n.length * 0.5, side: n.dir === 'L' ? -1 : 1, label: n.severity === 'H' ? 'HAIRPIN' : `${n.dir === 'L' ? 'LEFT' : 'RIGHT'} ${n.severity}`, hot: n.severity === 'H', up: 3 + rnd() * 4, out: 9 + rnd() * 7 });
+      } else if (n.kind === 'hazard' && (n.hazard === 'jump' || n.hazard === 'crest')) {
+        spots.push({ d: n.distance + 30, side: rnd() < 0.5 ? 1 : -1, label: n.hazard === 'jump' ? 'JUMP' : 'CREST', hot: n.hazard === 'jump', up: 1.2, out: 8 + rnd() * 4 });
       }
     }
-    this.specInit = false;
+    for (const c of st.crowds) spots.push({ d: c.distance + c.length / 2, side: c.side, label: 'CROWD', hot: true, up: 4, out: 14 });
+    for (const b of st.bridges) spots.push({ d: b.distance, side: 1, label: 'BRIDGE', hot: true, up: 1.5, out: 14 });
+    spots.sort((x, y) => x.d - y.d);
+    // keep them apart, and fill long gaps
+    const picked: typeof spots = [];
+    for (const sp of spots) {
+      const last = picked[picked.length - 1];
+      if (last && sp.d - last.d < 90) {
+        if (sp.hot && !last.hot) picked[picked.length - 1] = sp;
+        continue;
+      }
+      if (last && sp.d - last.d > 320) for (let d = last.d + 160; d < sp.d - 100; d += 160) picked.push({ d, side: rnd() < 0.5 ? 1 : -1, label: 'STAGE', hot: false, up: 3 + rnd() * 3, out: hw + 4 + rnd() * 3 });
+      picked.push(sp);
+    }
+    for (const sp of picked) {
+      if (sp.d < st.startDistance || sp.d > st.finishDistance) continue;
+      const c = sampleAt(st.samples, sp.d);
+      const off = sp.side * Math.max(hw + 3.5, sp.out);
+      let x = c.x + Math.cos(c.h) * off, z = c.z - Math.sin(c.h) * off;
+      // not on another bit of road, not in the river
+      if (this.world.terrain.roadDistanceAt(x, z) < hw + 2.5 || this.world.terrain.riverDistanceAt(x, z) < 12) {
+        x = c.x + Math.cos(c.h) * sp.side * (hw + 3.5);
+        z = c.z - Math.sin(c.h) * sp.side * (hw + 3.5);
+      }
+      const pos = new THREE.Vector3(x, this.world.terrain.heightAt(x, z) + sp.up, z);
+      this.tvCams.push({ pos, d: sp.d, from: sp.d - 150, to: sp.d + 70, label: sp.label, hot: sp.hot });
+    }
+  }
+
+  /** The TV camera covering this point of the stage (the next one ahead of the car). */
+  private tvFor(carDist: number) {
+    let best = -1;
+    for (let i = 0; i < this.tvCams.length; i++) {
+      const c = this.tvCams[i];
+      if (carDist >= c.from && carDist <= c.to) {
+        best = i;
+        if (c.d >= carDist) break;
+      }
+    }
+    return best;
   }
 
   /** Places the spectator camera for the current mode. Returns false for in-car. */
   private placeSpectatorCam(dt: number, root: THREE.Object3D, carDist: number): boolean {
-    if (!this.spectator || this.cameraMode === 'incar') return false;
+    if (!this.spectator) return false;
+    const now = performance.now() / 1000;
+    let mode = this.cameraMode === 'director' ? this.shot : this.cameraMode;
+    let snap = !this.specInit;
+    // the director cuts between shots: TV at the hot spots, otherwise a mix
+    if (this.cameraMode === 'director') {
+      const tv = this.tvFor(carDist);
+      const hot = tv >= 0 && this.tvCams[tv].hot;
+      if (now > this.shotUntil || (hot && mode !== 'tv' && now > this.shotUntil - 4)) {
+        const pool: Array<Exclude<SpecMode, 'director'>> = hot ? ['tv', 'tv', 'tv', 'drone'] : tv >= 0 ? ['tv', 'chase', 'heli', 'drone', 'wheel', 'bonnet', 'tv'] : ['chase', 'heli', 'drone', 'wheel', 'bonnet'];
+        let next = pool[Math.floor(Math.random() * pool.length)];
+        if (next === mode && pool.length > 1) next = pool[(pool.indexOf(next) + 1) % pool.length];
+        if (next !== mode) snap = true;
+        this.shot = mode = next;
+        this.shotUntil = now + (mode === 'tv' ? 5 : mode === 'bonnet' || mode === 'wheel' ? 4 : 7) + Math.random() * 3;
+      }
+    }
+    if (mode === 'incar') {
+      this.shotLabel = 'IN-CAR';
+      return false;
+    }
     const cam = this.specCam;
     const aspect = this.fp.camera.aspect;
     if (cam.aspect !== aspect) {
       cam.aspect = aspect;
       cam.updateProjectionMatrix();
     }
-    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(root.quaternion);
-    fwd.y = 0;
-    fwd.normalize();
+    const q = root.quaternion;
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+    const flat = fwd.clone().setY(0).normalize();
+    const left = new THREE.Vector3(flat.z, 0, -flat.x);
     const car = root.position;
-    let want: THREE.Vector3;
     let look = car.clone().add(new THREE.Vector3(0, 0.6, 0));
     let fov = 55;
-    let snap = !this.specInit;
-    if (this.cameraMode === 'tv' && this.tvCams.length) {
-      // the camera the car is coming up to (or just went past)
-      while (this.tvIndex < this.tvCams.length - 1 && carDist > this.tvDist[this.tvIndex] + 35) {
-        this.tvIndex++;
-        snap = true; // a TV cut
+    let follow = 5; // how tightly the camera follows (1/s); Infinity = locked to the car
+    const want = new THREE.Vector3();
+    if (mode === 'tv') {
+      let i = this.tvFor(carDist);
+      if (i < 0) {
+        // no TV camera here: fall back to the chase cam for now
+        mode = 'chase';
+      } else {
+        if (i !== this.tvIndex) {
+          this.tvIndex = i;
+          snap = true; // a TV cut
+        }
+        const tvc = this.tvCams[i];
+        want.copy(tvc.pos);
+        // a camera operator: a little hand-held wobble
+        want.x += Math.sin(now * 1.3) * 0.05;
+        want.y += Math.sin(now * 1.7 + 1) * 0.04;
+        const dist = want.distanceTo(car);
+        fov = THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(2 * Math.atan(5.5 / Math.max(1, dist))), 8, 60); // zoom to keep the car framed
+        follow = Infinity;
+        this.shotLabel = `TV · ${tvc.label}`;
       }
-      while (this.tvIndex > 0 && carDist < this.tvDist[this.tvIndex - 1] - 20) {
-        this.tvIndex--;
-        snap = true;
-      }
-      want = this.tvCams[this.tvIndex];
-      const dist = want.distanceTo(car);
-      fov = THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(2 * Math.atan(5 / Math.max(1, dist))), 10, 60); // zoom to keep the car framed
-      this.specPos.copy(want);
-    } else if (this.cameraMode === 'heli') {
-      want = car.clone().addScaledVector(fwd, -24).add(new THREE.Vector3(0, 16, 0));
-      look = car.clone().addScaledVector(fwd, 8);
-      fov = 50;
-      this.specPos.lerp(want, snap ? 1 : Math.min(1, dt * 1.5));
-    } else {
-      want = car.clone().addScaledVector(fwd, -6.5).add(new THREE.Vector3(0, 2.3, 0));
-      look = car.clone().addScaledVector(fwd, 4).add(new THREE.Vector3(0, 0.8, 0));
+    }
+    if (mode === 'heli') {
+      want.copy(car).addScaledVector(flat, -26).addScaledVector(left, 10).add(new THREE.Vector3(0, 18, 0));
+      look = car.clone().addScaledVector(flat, 10);
+      fov = 45;
+      follow = 1.4;
+      this.shotLabel = 'HELICOPTER';
+    } else if (mode === 'drone') {
+      // sweeps around the car, low and close
+      this.droneAngle += dt * 0.35;
+      const a = Math.sin(this.droneAngle) * 1.3;
+      want.copy(car).addScaledVector(flat, Math.cos(a) * -9 + 4).addScaledVector(left, Math.sin(a) * 9).add(new THREE.Vector3(0, 3.2 + Math.sin(this.droneAngle * 0.7) * 1.2, 0));
+      look = car.clone().addScaledVector(flat, 3).add(new THREE.Vector3(0, 0.5, 0));
+      fov = 60;
+      follow = 3;
+      this.shotLabel = 'DRONE';
+    } else if (mode === 'bonnet') {
+      want.set(0, 1.18, 0.9).applyQuaternion(q).add(car);
+      look = new THREE.Vector3(0, 1.0, 12).applyQuaternion(q).add(car);
+      fov = 70;
+      follow = Infinity;
+      this.shotLabel = 'BONNET CAM';
+    } else if (mode === 'wheel') {
+      // low on the side of the car, by the front wheel
+      want.set(1.15, 0.42, 0.5).applyQuaternion(q).add(car);
+      look = new THREE.Vector3(0.6, 0.3, 14).applyQuaternion(q).add(car);
+      fov = 68;
+      follow = Infinity;
+      this.shotLabel = 'WHEEL CAM';
+    } else if (mode === 'chase') {
+      want.copy(car).addScaledVector(flat, -6.5).add(new THREE.Vector3(0, 2.3, 0));
+      look = car.clone().addScaledVector(flat, 4).add(new THREE.Vector3(0, 0.8, 0));
       fov = 62;
-      this.specPos.lerp(want, snap ? 1 : Math.min(1, dt * 5));
-      // never under the ground
+      follow = 5;
+      this.shotLabel = 'CHASE CAM';
+    }
+    if (follow === Infinity || snap) this.specPos.copy(want);
+    else this.specPos.lerp(want, Math.min(1, dt * follow));
+    // never under the ground (except the cameras bolted to the car)
+    if (mode !== 'bonnet' && mode !== 'wheel') {
       const gy = this.world.terrain.heightAt(this.specPos.x, this.specPos.z) + 0.8;
       if (this.specPos.y < gy) this.specPos.y = gy;
     }
-    this.specLook.lerp(look, snap ? 1 : Math.min(1, dt * 8));
+    if (follow === Infinity && mode !== 'tv') this.specLook.copy(look);
+    else this.specLook.lerp(look, snap ? 1 : Math.min(1, dt * 8));
     this.specInit = true;
     cam.fov += (fov - cam.fov) * (snap ? 1 : Math.min(1, dt * 3));
     cam.updateProjectionMatrix();
@@ -452,7 +578,7 @@ export class CockpitView {
     const def = VEHICLES.find((v) => v.body.model === id) ?? VEHICLES[0];
     const car = createCarModel(sel.paint, sel.wheel, def.body);
     car.setExteriorVisible(false);
-    if (this.weather.headlights) car.enableHeadlights();
+    if (this.weather.headlights || this.stage.def.nightfall) car.enableHeadlights();
     const cockpit = new Cockpit(sel.paint, 'navigator', id);
     car.root.add(cockpit.group);
     car.root.add(this.tablet);
@@ -502,6 +628,7 @@ export class CockpitView {
 
   /** Called when a new run starts: trip back to zero. */
   resetTrip() {
+    this.roadWear.newRun();
     this.trip = { ...this.trip, start: this.stage.spawnDistance, watchAcc: 0, running: false };
   }
 
@@ -625,9 +752,20 @@ export class CockpitView {
     this.cockpit.group.visible = !outside;
     const viewCam = outside ? this.specCam : this.fp.camera;
     this.world.update(dt, viewCam.position, this.vel);
+    // night falls on long climbs; crowds cheer as the car comes past
+    if (this.stage.def.nightfall) {
+      const f = (this.lastDist - this.stage.startDistance) / (this.stage.finishDistance - this.stage.startDistance);
+      this.world.atmosphere.setDarkness(Math.min(1, Math.max(0, (f - 0.2) / 0.55)));
+    }
+    this.world.scenery.updateCrowds(dt, root.position, performance.now() / 1000);
+    if (t && t.dist > 0) this.roadWear.pass('car', t.dist, this.world.weather.rain);
+    if (performance.now() > this.wearAt) {
+      this.wearAt = performance.now() + 1000;
+      this.roadWear.refresh();
+    }
     if (this.cond && t) {
       this.world.scenery.updateObstacles(dt, t.dist);
-      const wet = zoneAmount(this.cond.wet, t.dist), fog = zoneAmount(this.cond.fog, t.dist);
+      const wet = Math.max(zoneAmount(this.cond.wet, t.dist), showerAmount(this.cond, t.x, t.z, t.t / 1000)), fog = zoneAmount(this.cond.fog, t.dist);
       const base = this.world.weather.rain;
       this.world.rain?.setIntensity(Math.max(base, wet * 0.85) / Math.max(base, 0.9));
       this.world.atmosphere.setFogMultiplier(fogMultiplier() * (1 + fog * 3.5));

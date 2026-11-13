@@ -97,8 +97,26 @@ export interface Obstacle {
   side: 1 | -1;
 }
 
+/**
+ * A rain shower drifting across the map: a circle that moves with the wind.
+ * Where it is depends on the stage clock, so the driver and the co-driver's
+ * radar agree on it.
+ */
+export interface Shower {
+  /** Centre at race time 0 (m) and drift (m/s). */
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  /** Radius (m) and how hard it rains in the middle (0..1). */
+  r: number;
+  amount: number;
+}
+
 export interface StageConditions {
   wet: Zone[];
+  /** Showers moving across the stage (shown on the co-driver's radar). */
+  showers: Shower[];
   fog: Zone[];
   obstacles: Obstacle[];
 }
@@ -115,19 +133,30 @@ function rngFor(seed: number) {
 }
 
 export function stageConditions(
-  stage: { def: { seed: number; surface: string }; startDistance: number; finishDistance: number; bridges: Array<{ distance: number; length: number }> },
+  stage: { def: { seed: number; surface: string }; startDistance: number; finishDistance: number; bridges: Array<{ distance: number; length: number }>; samples?: Array<{ x: number; z: number }> },
   runId: number,
   weather: WeatherId,
 ): StageConditions {
   const rand = rngFor(stage.def.seed * 7919 + runId * 104729);
   const len = stage.finishDistance - stage.startDistance;
   const at = (lo: number, hi: number) => stage.startDistance + len * (lo + rand() * (hi - lo));
-  const out: StageConditions = { wet: [], fog: [], obstacles: [] };
+  const out: StageConditions = { wet: [], showers: [], fog: [], obstacles: [] };
   const w = WEATHER[weather];
-  // a passing shower on a dry day (not when it's already raining, or snowing)
-  if (w.rain === 0 && w.snow === 0 && rand() < 0.55) {
-    const from = at(0.15, 0.6);
-    out.wet.push({ from, to: from + 350 + rand() * 600, amount: 0.5 + rand() * 0.4 });
+  // showers drifting across the map (not when it's snowing): one or two on a dry day,
+  // heavier bursts when it's already raining. Each is aimed to cross the road at
+  // some point of the stage at a time when a car could be there.
+  if (w.snow === 0 && stage.samples?.length) {
+    const n = w.rain === 0 ? (rand() < 0.75 ? 1 + (rand() < 0.4 ? 1 : 0) : 0) : rand() < 0.6 ? 1 : 0;
+    for (let i = 0; i < n; i++) {
+      const d = at(0.12, 0.85);
+      const p = stage.samples[Math.min(stage.samples.length - 1, Math.max(0, Math.round(d)))];
+      const speed = 3 + rand() * 6;
+      const dir = rand() * Math.PI * 2;
+      const vx = Math.cos(dir) * speed, vz = Math.sin(dir) * speed;
+      // when it's over that bit of road: roughly when you'd get there (at ~25 m/s), ± a bit
+      const tCross = (d - stage.startDistance) / 25 + (rand() - 0.5) * 60;
+      out.showers.push({ x: p.x - vx * tCross, z: p.z - vz * tCross, vx, vz, r: 160 + rand() * 220, amount: w.rain === 0 ? 0.55 + rand() * 0.4 : 0.9 });
+    }
   }
   // fog banks (thicker in bad weather)
   const fogs = rand() < (w.fogDensity > 0.01 ? 0.7 : 0.4) ? 1 + (rand() < 0.3 ? 1 : 0) : 0;
@@ -146,6 +175,24 @@ export function stageConditions(
   }
   out.obstacles.sort((a, b) => a.distance - b.distance);
   return out;
+}
+
+/** Where a shower is at race time t (s). */
+export function showerAt(s: Shower, t: number) {
+  return { x: s.x + s.vx * t, z: s.z + s.vz * t };
+}
+
+/** How hard it's raining from the moving showers at (x, z) at race time t (s): 0..1. */
+export function showerAmount(c: StageConditions, x: number, z: number, t: number): number {
+  let v = 0;
+  for (const s of c.showers ?? []) {
+    const p = showerAt(s, t);
+    const d = Math.hypot(p.x - x, p.z - z);
+    if (d > s.r) continue;
+    const edge = Math.min(1, (s.r - d) / (s.r * 0.35)); // soft edges
+    v = Math.max(v, s.amount * edge);
+  }
+  return v;
 }
 
 /** How much of a zone list applies at a stage distance (ramps in/out over 60 m). */

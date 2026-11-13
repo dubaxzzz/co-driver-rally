@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { sampleAt, type BuiltStage, type TreeStyle, type Obstacle } from '@cdr/shared';
+import { sampleAt, type BuiltStage, type CrowdZone, type TreeStyle, type Obstacle } from '@cdr/shared';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 import { mulberry32, type TerrainData } from '../tracks/TrackMeshes';
 
@@ -69,13 +69,279 @@ export class Scenery {
   ) {
     const rand = mulberry32(stage.def.seed + 7);
     const density = stage.def.scenery.treeDensity;
-    this.buildTrees(rand, Math.round((quality === 'high' ? 4200 : 1500) * density));
-    this.buildRocks(rand, quality === 'high' ? 500 : 220);
-    if (quality === 'high') this.buildGrass(rand, 5000);
+    // long stages get more of everything (the same count would be spread thin)
+    const lengthK = Math.max(1, stage.length / 6000);
+    this.lengthK = lengthK;
+    this.buildTrees(rand, Math.round((quality === 'high' ? 4200 : 1500) * density * lengthK));
+    this.buildRocks(rand, Math.round((quality === 'high' ? 500 : 220) * lengthK));
+    if (quality === 'high') this.buildGrass(rand, Math.round(5000 * lengthK));
     this.buildBarriersAndSigns();
     this.buildGates();
     this.buildBridges();
     this.buildRoadsideDetail(rand, quality);
+    this.buildCrowds(rand);
+    this.buildServicePark();
+    this.buildSplitSigns();
+  }
+
+  private lengthK = 1;
+
+  /** Is this point on (or within `margin` of) one of the forks' short cuts? */
+  private nearSplit(x: number, z: number, margin: number) {
+    for (const sp of this.stage.splits) {
+      const r = sp.width / 2 + margin;
+      for (let i = 0; i < sp.samples.length; i += 3) {
+        const q = sp.samples[i];
+        if ((q.x - x) ** 2 + (q.z - z) ** 2 < r * r) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Signs at each fork: which way is the short cut / the fast route. */
+  private buildSplitSigns() {
+    const st = this.stage;
+    const hw = st.def.roadWidth / 2;
+    const white = this.track(new THREE.MeshStandardMaterial({ color: 0xdedede, roughness: 0.7 }));
+    for (const sp of st.splits) {
+      const c = sampleAt(st.samples, sp.from - 70);
+      const side = sp.side === 'L' ? 1 : -1;
+      const x = c.x + Math.cos(c.h) * side * (hw + 2.8), z = c.z - Math.sin(c.h) * side * (hw + 2.8);
+      if (this.nearSplit(x, z, 2)) continue;
+      const y = this.terrain.heightAt(x, z);
+      const cv = document.createElement('canvas');
+      cv.width = 256;
+      cv.height = 128;
+      const g = cv.getContext('2d')!;
+      g.fillStyle = sp.kind === 'cut' ? '#7a3d12' : '#145c2e';
+      g.fillRect(0, 0, 256, 128);
+      g.strokeStyle = '#fff';
+      g.lineWidth = 6;
+      g.strokeRect(5, 5, 246, 118);
+      g.fillStyle = '#fff';
+      g.textAlign = 'center';
+      g.font = 'bold 30px sans-serif';
+      g.fillText(sp.kind === 'cut' ? 'SHORT CUT' : 'FAST ROUTE', 128, 44);
+      g.font = 'bold 50px sans-serif';
+      g.fillText(sp.side === 'L' ? '◀' : '▶', 128, 100);
+      const tex = this.track(new THREE.CanvasTexture(cv));
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const board = new THREE.Mesh(this.track(new THREE.PlaneGeometry(1.6, 0.8)), this.track(new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6 })));
+      board.position.set(x, y + 1.9, z);
+      board.rotation.y = c.h + Math.PI; // facing the cars coming up to it
+      const pole = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.05, 0.05, 1.9, 6)), white);
+      pole.position.set(x, y + 0.95, z);
+      this.group.add(board, pole);
+    }
+  }
+
+  // ---- spectators at hairpins and jumps ----
+  private crowds: Array<{ zone: CrowdZone; bodies: THREE.InstancedMesh; heads: THREE.InstancedMesh; tape?: THREE.Mesh; base: THREE.Matrix4[]; phase: number[]; centre: THREE.Vector3; scatter: number }> = [];
+
+  /** Rows of spectators behind tape on the outside of hairpins, tight corners and jumps. */
+  private buildCrowds(rand: () => number) {
+    const st = this.stage;
+    if (!st.crowds.length) return;
+    const hw = st.def.roadWidth / 2;
+    const bodyGeo = this.track(new THREE.CylinderGeometry(0.2, 0.24, 1.25, 6));
+    bodyGeo.translate(0, 0.62, 0);
+    const headGeo = this.track(new THREE.SphereGeometry(0.15, 6, 5));
+    headGeo.translate(0, 1.42, 0);
+    const bodyMat = this.track(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 }));
+    const headMat = this.track(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 }));
+    const tapeMat = this.track(new THREE.MeshStandardMaterial({ color: 0xff4b1f, emissive: 0x401000 }));
+    const jackets = [0xd62828, 0x1d4ed8, 0xf59e0b, 0x16a34a, 0x111111, 0xf5f5f5, 0x7c3aed, 0xea580c, 0x0ea5e9];
+    const skins = [0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0xffdbac];
+    const m = new THREE.Matrix4();
+    const col = new THREE.Color();
+    for (const zone of st.crowds) {
+      const n = Math.min(70, Math.round(zone.length / 1.4));
+      const bodies = new THREE.InstancedMesh(bodyGeo, bodyMat, n);
+      const heads = new THREE.InstancedMesh(headGeo, headMat, n);
+      const base: THREE.Matrix4[] = [];
+      const phase: number[] = [];
+      const centre = new THREE.Vector3();
+      for (let i = 0; i < n; i++) {
+        const d = zone.distance + rand() * zone.length;
+        const c = sampleAt(st.samples, d);
+        const lx = Math.cos(c.h) * zone.side, lz = -Math.sin(c.h) * zone.side;
+        const off = hw + 6.5 + rand() * 6;
+        const x = c.x + lx * off + (rand() - 0.5), z = c.z + lz * off + (rand() - 0.5);
+        if (this.terrain.roadDistanceAt(x, z) < hw + 5) continue; // not on another bit of road
+        const y = this.terrain.heightAt(x, z);
+        const sc = 0.9 + rand() * 0.25;
+        m.makeRotationY(rand() * Math.PI * 2).scale(new THREE.Vector3(sc, sc, sc)).setPosition(x, y, z);
+        const k = base.length;
+        bodies.setMatrixAt(k, m);
+        heads.setMatrixAt(k, m);
+        bodies.setColorAt(k, col.setHex(jackets[Math.floor(rand() * jackets.length)]));
+        heads.setColorAt(k, col.setHex(skins[Math.floor(rand() * skins.length)]));
+        base.push(m.clone());
+        phase.push(rand() * 10);
+        centre.add(new THREE.Vector3(x, y, z));
+      }
+      if (!base.length) continue;
+      bodies.count = heads.count = base.length;
+      centre.divideScalar(base.length);
+      bodies.instanceMatrix.needsUpdate = heads.instanceMatrix.needsUpdate = true;
+      bodies.computeBoundingSphere();
+      heads.computeBoundingSphere();
+      this.group.add(bodies, heads);
+      this.crowds.push({ zone, bodies, heads, base, phase, centre, scatter: 0 });
+      // tape on posts between the crowd and the road (one merged mesh per crowd)
+      const parts: THREE.BufferGeometry[] = [];
+      const pts: THREE.Vector3[] = [];
+      for (let d = zone.distance; d <= zone.distance + zone.length; d += 4) {
+        const c = sampleAt(st.samples, d);
+        const lx = Math.cos(c.h) * zone.side, lz = -Math.sin(c.h) * zone.side;
+        const x = c.x + lx * (hw + 4.5), z = c.z + lz * (hw + 4.5);
+        if (this.terrain.roadDistanceAt(x, z) < hw + 3) continue;
+        const y = this.terrain.heightAt(x, z);
+        parts.push(new THREE.CylinderGeometry(0.035, 0.035, 1.0, 5).translate(x, y + 0.5, z));
+        pts.push(new THREE.Vector3(x, y + 0.9, z));
+      }
+      const o = new THREE.Object3D();
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], b = pts[i];
+        const len = a.distanceTo(b);
+        if (len > 8) continue;
+        o.position.copy(a).add(b).multiplyScalar(0.5);
+        o.lookAt(b);
+        o.rotateY(Math.PI / 2);
+        o.updateMatrix();
+        parts.push(new THREE.BoxGeometry(len, 0.07, 0.01).applyMatrix4(o.matrix));
+      }
+      if (parts.length) {
+        const merged = mergeGeometries(parts.map((g) => g.toNonIndexed()));
+        parts.forEach((g) => g.dispose());
+        if (merged) {
+          const tape = new THREE.Mesh(this.track(merged), tapeMat);
+          this.group.add(tape);
+          this.crowds[this.crowds.length - 1].tape = tape;
+        }
+      }
+    }
+  }
+
+  /**
+   * Crowds come alive as a car comes past: they jump and wave, and scatter back
+   * from the tape if a car comes through it.
+   */
+  updateCrowds(dt: number, car: THREE.Vector3, time: number) {
+    const m = new THREE.Matrix4();
+    for (const c of this.crowds) {
+      const near = c.centre.distanceTo(car);
+      const visible = near < 500;
+      c.bodies.visible = c.heads.visible = visible;
+      if (c.tape) c.tape.visible = visible;
+      if (!visible) continue;
+      c.scatter = Math.max(0, c.scatter - dt * 0.15);
+      if (near > 90 && c.scatter <= 0) continue;
+      const excite = Math.max(0, 1 - near / 90);
+      for (let i = 0; i < c.base.length; i++) {
+        m.copy(c.base[i]);
+        const jump = Math.max(0, Math.sin(time * 9 + c.phase[i])) * 0.35 * excite;
+        // run back from the road
+        const back = c.scatter > 0 ? Math.min(1, c.scatter) * 4 : 0;
+        const e = m.elements;
+        if (back) {
+          const dx = e[12] - car.x, dz = e[14] - car.z;
+          const l = Math.max(0.1, Math.hypot(dx, dz));
+          e[12] += (dx / l) * back;
+          e[14] += (dz / l) * back;
+        }
+        e[13] += jump;
+        c.bodies.setMatrixAt(i, m);
+        c.heads.setMatrixAt(i, m);
+      }
+      c.bodies.instanceMatrix.needsUpdate = c.heads.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  /** A car went through the tape: the crowd runs back. */
+  scatterCrowd(index: number) {
+    const c = this.crowds.find((x) => x.zone.index === index);
+    if (c) c.scatter = 1.5;
+  }
+
+  /** Mid-stage service park: team awnings, vans, tyres and a SERVICE banner over the road. */
+  private buildServicePark() {
+    const sv = this.stage.service;
+    if (!sv) return;
+    const st = this.stage;
+    const hw = st.def.roadWidth / 2;
+    const mats = [0xd62828, 0x1d4ed8, 0x111111, 0xf59e0b].map((c) => this.track(new THREE.MeshStandardMaterial({ color: c, roughness: 0.7 })));
+    const white = this.track(new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.6 }));
+    const dark = this.track(new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 }));
+    const box = (w: number, h: number, d: number, mat: THREE.Material) => new THREE.Mesh(this.track(new THREE.BoxGeometry(w, h, d)), mat);
+    for (let i = 0; i < 6; i++) {
+      const d = sv.distance + 20 + i * ((sv.length - 40) / 5);
+      const c = sampleAt(st.samples, d);
+      for (const side of [1, -1]) {
+        if ((i + (side > 0 ? 0 : 1)) % 2) continue;
+        const lx = Math.cos(c.h) * side, lz = -Math.sin(c.h) * side;
+        const x = c.x + lx * (hw + 9), z = c.z + lz * (hw + 9);
+        const y = this.terrain.heightAt(x, z);
+        const g = new THREE.Group();
+        g.position.set(x, y, z);
+        g.rotation.y = c.h;
+        // awning
+        const roof = box(8, 0.15, 6, mats[i % mats.length]);
+        roof.position.y = 3;
+        g.add(roof);
+        for (const [px, pz] of [[-3.8, -2.8], [3.8, -2.8], [-3.8, 2.8], [3.8, 2.8]]) {
+          const leg = box(0.1, 3, 0.1, white);
+          leg.position.set(px, 1.5, pz);
+          g.add(leg);
+        }
+        // team van behind
+        const van = box(2.1, 2.3, 5.5, white);
+        van.position.y = 1.25;
+        const vg = new THREE.Group();
+        vg.add(van);
+        const stripe = box(2.12, 0.4, 5.52, mats[(i + 1) % mats.length]);
+        stripe.position.y = 1.2;
+        vg.add(stripe);
+        vg.translateX(side * 6.5);
+        g.add(vg);
+        // tyre stacks
+        for (let t = 0; t < 4; t++) {
+          const tyre = new THREE.Mesh(this.track(new THREE.TorusGeometry(0.32, 0.12, 6, 12)), dark);
+          tyre.rotation.x = Math.PI / 2;
+          tyre.position.set(-3 + (t % 2) * 0.8, 0.12 + Math.floor(t / 2) * 0.25, -2);
+          g.add(tyre);
+        }
+        this.group.add(g);
+      }
+    }
+    // SERVICE banner across the road at the entry
+    const c = sampleAt(st.samples, sv.distance);
+    const g = new THREE.Group();
+    g.position.set(c.x, c.y, c.z);
+    g.rotation.y = c.h;
+    for (const side of [1, -1]) {
+      const pole = box(0.2, 5.2, 0.2, white);
+      pole.position.set(side * (hw + 1.2), 2.6, 0);
+      g.add(pole);
+    }
+    const cv = document.createElement('canvas');
+    cv.width = 512;
+    cv.height = 64;
+    const cg = cv.getContext('2d')!;
+    cg.fillStyle = '#1d4ed8';
+    cg.fillRect(0, 0, 512, 64);
+    cg.fillStyle = '#fff';
+    cg.font = 'bold 40px sans-serif';
+    cg.textAlign = 'center';
+    cg.textBaseline = 'middle';
+    cg.fillText('SERVICE ZONE – STOP HERE', 256, 34);
+    const tex = this.track(new THREE.CanvasTexture(cv));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const banner = new THREE.Mesh(this.track(new THREE.PlaneGeometry(hw * 2 + 2.4, 0.9)), this.track(new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })));
+    banner.position.y = 4.6;
+    banner.rotation.y = Math.PI;
+    g.add(banner);
+    this.group.add(g);
   }
 
   /**
@@ -98,7 +364,7 @@ export class Scenery {
       return { x, z, y: this.terrain.heightAt(x, z), h: c.h };
     };
     const onBridge = (d: number) => st.bridges.some((b) => Math.abs(b.distance - d) < b.length / 2 + 25);
-    const inRiver = (x: number, z: number) => this.terrain.riverDistanceAt(x, z) < 16;
+    const inRiver = (x: number, z: number) => this.terrain.riverDistanceAt(x, z) < 16 || this.nearSplit(x, z, 3);
 
     // ---- marker posts: white with a reflector band (or tall orange snow poles) ----
     const postH = snow ? 2.6 : 1.0;
@@ -518,7 +784,7 @@ export class Scenery {
       col.setHSL(leafHue, 0.15 + rand() * 0.15, 0.82 + rand() * 0.18);
       leaves.setColorAt(placed, col);
       placed++;
-      if (this.physics && R && p.rd < 26 && colliders < 900) {
+      if (this.physics && R && p.rd < 26 && colliders < 900 * this.lengthK) {
         colliders++;
         const body = this.physics.world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(p.x, p.y + 2, p.z));
         this.physics.world.createCollider(R.ColliderDesc.cylinder(2, 0.32 * s).setFriction(0.6), body);
@@ -626,6 +892,10 @@ export class Scenery {
           const c = sampleAt(st.samples, d);
           const off = hw + 2.6;
           const x = c.x + Math.cos(c.h) * off * side, z = c.z - Math.sin(c.h) * off * side;
+          if (this.nearSplit(x, z, 3)) {
+            prev = null; // leave the mouth of a fork open
+            continue;
+          }
           const y = this.terrain.heightAt(x, z);
           const pt = new THREE.Vector3(x, y, z);
           posts.push(new THREE.Matrix4().makeTranslation(x, y + 0.4, z));

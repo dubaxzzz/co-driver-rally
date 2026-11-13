@@ -39,6 +39,18 @@ for (const def of STAGE_DEFS) {
     maxErr = Math.max(maxErr, Math.abs(r.distance - d));
   }
   check(maxErr < 3, `progress tracking is continuous (max error ${maxErr.toFixed(2)} m)`);
+  // forks: driving the short cut / bypass moves progress forward from the fork to the join
+  for (const sp of stage.splits) {
+    let h2 = Math.round(sp.from);
+    let prev = sp.from, back = 0;
+    for (const b of sp.samples) {
+      const r = projectOnStage(stage, b.x, b.z, h2);
+      h2 = r.index;
+      back = Math.max(back, prev - r.distance);
+      prev = r.distance;
+    }
+    check(back < 3 && Math.abs(prev - sp.to) < 30, `fork ${sp.index + 1} (${sp.kind}, ${Math.round(sp.length)} m vs ${Math.round(sp.to - sp.from)} m) counts as progress (ends at ${Math.round(prev)} / ${Math.round(sp.to)})`);
+  }
 }
 
 if (failures) {

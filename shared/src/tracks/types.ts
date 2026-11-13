@@ -18,6 +18,10 @@ export type SegmentDef =
       bridge?: boolean;
       /** Road surface for this segment (defaults to the stage surface). */
       surface?: SurfaceId;
+      /** Climb in % (negative = downhill) – mountain stages. */
+      grade?: number;
+      /** The mid-stage service zone is on this straight (long stages only). */
+      service?: boolean;
     }
   | {
       kind: 'corner';
@@ -28,6 +32,8 @@ export type SegmentDef =
       modifier?: CornerModifier;
       hazard?: HazardType;
       surface?: SurfaceId;
+      /** Climb in % (negative = downhill) – mountain stages. */
+      grade?: number;
     };
 
 export type TreeStyle = 'pine' | 'snowpine' | 'eucalyptus' | 'scrub';
@@ -69,6 +75,45 @@ export interface StageDef {
   /** Weather picked when this stage is selected (players can change it). */
   defaultWeather: WeatherId;
   scenery: StageScenery;
+  /** Mountain stages: the road follows its own climb, without the usual rolling hills. */
+  flatBase?: boolean;
+  /** The light fades from day to night along the stage. */
+  nightfall?: boolean;
+}
+
+/** Spectators behind tape at a hairpin or jump. Crossing the tape = time penalty. */
+export interface CrowdZone {
+  index: number;
+  /** Where the crowd starts and how long it lines the road (m). */
+  distance: number;
+  length: number;
+  /** +1 = on the left of the road, -1 = right. */
+  side: 1 | -1;
+}
+
+/**
+ * A fork in the road: a rough short cut that leaves the stage at `from` and
+ * rejoins it at `to`. Progress along it counts as the main road it skips.
+ */
+export interface StageSplit {
+  index: number;
+  from: number;
+  to: number;
+  /** Which way the short cut turns off at the fork. */
+  side: 'L' | 'R';
+  /** cut = shorter but rough and narrow; fast = longer but wide, smooth and flowing. */
+  kind: 'cut' | 'fast';
+  surface: SurfaceId;
+  width: number;
+  /** Centreline of the short cut (d = metres along the short cut). */
+  samples: CenterlineSample[];
+  length: number;
+}
+
+/** The mid-stage service zone (long stages only). */
+export interface ServiceZone {
+  distance: number;
+  length: number;
 }
 
 export interface CenterlineSample {
@@ -154,5 +199,10 @@ export interface BuiltStage {
   bridges: Bridge[];
   /** Rivers running under the bridges. */
   rivers: River[];
+  /** Crowds at hairpins and jumps. */
+  crowds: CrowdZone[];
+  service: ServiceZone | null;
+  /** Forks: short cuts through the inside of big loops of road. */
+  splits: StageSplit[];
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number; minY: number; maxY: number };
 }

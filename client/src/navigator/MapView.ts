@@ -1,4 +1,4 @@
-import type { StageConditions } from '@cdr/shared';
+import { showerAt, type StageConditions } from '@cdr/shared';
 import type { BuiltStage, RelayedTelemetry } from '@cdr/shared';
 
 /**
@@ -10,6 +10,8 @@ export class MapView {
   mode: 'follow' | 'full' = 'follow';
   /** Small thumbnails (stage picker) draw markers only – text labels would overlap. */
   labels = true;
+  /** Stage clock (s) – where the moving showers are on the radar. */
+  raceTime = 0;
   /** This run's showers, fog banks and obstacles (drawn on the map). */
   conditions: StageConditions | null = null;
   /** Fixed drawing size (when the canvas is not in the page, e.g. drawn onto the tablet). */
@@ -95,6 +97,39 @@ export class MapView {
     g.lineWidth = Math.max(3, st.def.roadWidth * scale);
     g.stroke();
 
+    // forks: short cuts (brown, dashed) and fast bypasses (green, dashed)
+    for (const sp of st.splits) {
+      const bs = sp.samples;
+      const bpath = () => {
+        g.beginPath();
+        for (let i = 0; i < bs.length; i += stride * 2) {
+          const [px, py] = toScreen(bs[i].x, bs[i].z);
+          if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+        }
+      };
+      bpath();
+      g.strokeStyle = '#2a3036';
+      g.lineWidth = Math.max(4, sp.width * scale + 4);
+      g.stroke();
+      bpath();
+      g.setLineDash([8, 6]);
+      g.strokeStyle = sp.kind === 'cut' ? '#b0703a' : '#3fbf6a';
+      g.lineWidth = Math.max(2.5, sp.width * scale);
+      g.stroke();
+      g.setLineDash([]);
+      if (this.labels) {
+        const m = bs[Math.floor(bs.length / 2)];
+        const [px, py] = toScreen(m.x, m.z);
+        g.font = '800 10px sans-serif';
+        g.textAlign = 'center';
+        g.fillStyle = sp.kind === 'cut' ? '#ffc08a' : '#8dffb3';
+        g.fillText(sp.kind === 'cut' ? `SHORT CUT ${Math.round(sp.length)} m (${sp.surface.toUpperCase()})` : `FAST ROUTE ${Math.round(sp.length)} m`, px, py - 10);
+        g.fillStyle = '#cfd6dd';
+        g.fillText(`road ${Math.round(sp.to - sp.from)} m`, px, py + 6);
+        g.textAlign = 'left';
+      }
+    }
+
     // rivers + bridges
     g.strokeStyle = '#2f6f8f';
     for (const r of st.rivers) {
@@ -161,6 +196,54 @@ export class MapView {
           g.textAlign = 'left';
           g.font = '800 10px sans-serif';
           g.fillText(o.kind === 'tree' ? 'TREE DOWN' : o.kind === 'rocks' ? 'ROCKS' : 'ANIMALS', px + 12, py + 3);
+        }
+      }
+    }
+
+    // weather radar: showers drifting across the map (where they are now, and in a minute)
+    if (this.conditions?.showers.length) {
+      for (const sh of this.conditions.showers) {
+        const now = showerAt(sh, this.raceTime);
+        const later = showerAt(sh, this.raceTime + 60);
+        const [px, py] = toScreen(now.x, now.z);
+        const r = sh.r * scale;
+        if (px < -r || py < -r || px > w + r || py > hgt + r) continue;
+        const grad = g.createRadialGradient(px, py, 0, px, py, r);
+        grad.addColorStop(0, `rgba(40,200,120,${0.45 * sh.amount})`);
+        grad.addColorStop(0.45, `rgba(60,150,255,${0.35 * sh.amount})`);
+        grad.addColorStop(1, 'rgba(60,150,255,0)');
+        g.fillStyle = grad;
+        g.beginPath();
+        g.arc(px, py, r, 0, Math.PI * 2);
+        g.fill();
+        // where it'll be in a minute
+        const [lx, ly] = toScreen(later.x, later.z);
+        g.setLineDash([5, 5]);
+        g.strokeStyle = 'rgba(120,190,255,0.6)';
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.arc(lx, ly, r, 0, Math.PI * 2);
+        g.stroke();
+        g.setLineDash([]);
+        g.strokeStyle = 'rgba(160,210,255,0.9)';
+        g.lineWidth = 2;
+        g.beginPath();
+        g.moveTo(px, py);
+        g.lineTo(lx, ly);
+        g.stroke();
+        const a = Math.atan2(ly - py, lx - px);
+        g.beginPath();
+        g.moveTo(lx, ly);
+        g.lineTo(lx - Math.cos(a - 0.5) * 9, ly - Math.sin(a - 0.5) * 9);
+        g.moveTo(lx, ly);
+        g.lineTo(lx - Math.cos(a + 0.5) * 9, ly - Math.sin(a + 0.5) * 9);
+        g.stroke();
+        if (this.labels) {
+          g.fillStyle = '#bfe3ff';
+          g.font = '800 10px sans-serif';
+          g.textAlign = 'center';
+          g.fillText('SHOWER', px, py);
+          g.textAlign = 'left';
         }
       }
     }

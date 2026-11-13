@@ -5,14 +5,14 @@ import { FRANCE_STAGE } from './stages/france';
 import { SWEDEN_STAGE } from './stages/sweden';
 import { TASMANIA_STAGE } from './stages/tasmania';
 import { WALES_STAGE } from './stages/wales';
-import { MORE_STAGES } from './stages/more';
+import { MORE_STAGES, MOUNTAIN_STAGE } from './stages/more';
 import type { BuiltStage, StageDef } from './types';
 
 export * from './types';
 export * from './builder';
 
 /** Register new stages here – both client and server pick them up. */
-export const STAGE_DEFS: StageDef[] = [FOREST_STAGE, SWEDEN_STAGE, FRANCE_STAGE, AUSTRALIA_STAGE, WALES_STAGE, TASMANIA_STAGE, ...MORE_STAGES];
+export const STAGE_DEFS: StageDef[] = [FOREST_STAGE, SWEDEN_STAGE, FRANCE_STAGE, AUSTRALIA_STAGE, WALES_STAGE, TASMANIA_STAGE, ...MORE_STAGES, MOUNTAIN_STAGE];
 export const DEFAULT_STAGE_ID = FOREST_STAGE.id;
 
 const cache = new Map<string, BuiltStage>();

@@ -19,6 +19,7 @@ export function resultsOverlay(result: RaceResult, stage: BuiltStage, actions: R
   const stat = (k: string, v: string) => h('div', {}, h('div', { class: 'k' }, k), h('div', { class: 'v' }, v));
   const splits = h('div', { class: 'splits' });
   result.splits.forEach((s) => splits.append(h('div', {}, h('span', {}, `Checkpoint ${s.index + 1}`), h('span', {}, formatTime(s.timeMs)))));
+  if (result.penaltyMs) splits.append(h('div', { class: 'pen' }, h('span', {}, 'Time penalties (included)'), h('span', {}, `+${Math.round(result.penaltyMs / 1000)} s`)));
   splits.append(h('div', {}, h('span', {}, 'Finish'), h('span', {}, formatTime(result.timeMs))));
   // Leaderboard against the AI crews (they may still be finishing – refreshes live)
   const board = h('div', { class: 'leaderboard', 'data-testid': 'leaderboard' });
