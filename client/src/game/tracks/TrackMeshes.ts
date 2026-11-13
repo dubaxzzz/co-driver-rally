@@ -124,7 +124,7 @@ function grassColour(sc: BuiltStage['def']['scenery'], noise: ReturnType<typeof 
 const MARGIN = 280;
 const CELL = 5;
 const VISIBLE_RADIUS = 300;
-const COLLIDE_RADIUS = 75;
+const COLLIDE_RADIUS = 120;
 /** Terrain tile size in cells (tiles only exist near the road). */
 const TILE = 32;
 
@@ -192,7 +192,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
   // drawn in ~400 m chunks (sharing one vertex buffer) so the far road is culled
   const road = new THREE.Group();
   road.name = 'road';
-  const CHUNK = 400;
+  const CHUNK = 160; // about the size of a terrain tile, so both drop out of view together
   const tri = roadGeo.index!.array as ArrayLike<number>;
   for (let c0 = 0; c0 < n - 1; c0 += CHUNK) {
     const c1 = Math.min(n - 1, c0 + CHUNK);
@@ -618,6 +618,8 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
     const frows = Math.ceil((b.maxZ - b.minZ + fm * 2) / FC) + 1;
     const fd = new Float32Array(fcols * frows).fill(1e12);
     const fy = new Float32Array(fcols * frows);
+    // the lowest bit of road near each point: the far landscape must stay under all of it
+    const fyMin = new Float32Array(fcols * frows).fill(1e9);
     const R = Math.ceil(fm / FC);
     for (let i = 0; i < n; i += 30) {
       const c0 = Math.round((samples[i].x - fox) / FC), r0 = Math.round((samples[i].z - foz) / FC);
@@ -630,6 +632,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
             fd[k] = d2;
             fy[k] = samples[i].y;
           }
+          if (d2 < 220 * 220 && samples[i].y < fyMin[k]) fyMin[k] = samples[i].y;
         }
     }
     const big = def.flatBase ? Math.max(520, (b.maxY - b.minY) * 0.45) : Math.max(60, sc.hills * 3);
@@ -647,7 +650,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
         let y = (dist > 1e5 ? b.minY : fy[k]) - 6 + hillsAt(x, z) + mountains;
         if (dist < VISIBLE_RADIUS + 10) y = heightAt(x, z) - 3; // just under the detailed tiles
         // its big triangles must never reach up over the road either
-        if (dist < FC * 2.3 && dist < 1e5) y = Math.min(y, fy[k] - 4);
+        if (fyMin[k] < 1e8) y = Math.min(y, fyMin[k] - 8);
         fPos[k * 3] = x;
         fPos[k * 3 + 1] = y;
         fPos[k * 3 + 2] = z;

@@ -1,4 +1,5 @@
-import { COUNTDOWN_MS, GRID_ROW_GAP_M, GRID_SIDE_OFFSET_M, MAX_PLAUSIBLE_SPEED_MS, MAX_TELEPORT_SLACK_M } from '../constants';
+import { decodeSwitches } from '../switches';
+import { ENGINE_WAIT_MS, COUNTDOWN_MS, GRID_ROW_GAP_M, GRID_SIDE_OFFSET_M, MAX_PLAUSIBLE_SPEED_MS, MAX_TELEPORT_SLACK_M } from '../constants';
 import { getStage, projectOnStage, type BuiltStage } from '../tracks';
 import type { CheckpointEvent, DriverRace, RaceResult, RaceState, RaceWarning, RallyConfig, TelemetryPacket } from '../types';
 import { DEFAULT_STAGE_ID } from '../tracks';
@@ -80,15 +81,45 @@ export class RaceController {
     this.trackers.clear();
     const list: DriverRace[] = drivers.map((d, slot) => ({ playerId: d.playerId, name: d.name, slot, checkpointsPassed: 0, splits: [], result: null, retired: false }));
     for (const d of list) this.trackers.set(d.playerId, new Tracker(gridSpot(this.stage, d.slot, list.length).distance));
+    // The countdown doesn't run yet: every driver has to start their car first
+    // (startAt stays null until they have – or until the wait runs out).
+    this.enginesOn.clear();
     this.state = {
       ...this.state,
       phase: 'countdown',
       runId: this.state.runId + 1,
-      startAt: now + COUNTDOWN_MS,
+      startAt: null,
       finishedAt: null,
       drivers: list,
       aiHost: list[0]?.playerId ?? null,
     };
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.beginCountdown(Date.now());
+    }, ENGINE_WAIT_MS);
+    this.events.onState(this.state);
+    return this.state;
+  }
+
+  private enginesOn = new Set<string>();
+
+  /** A driver's engine is running: once every driver's is, the countdown starts. */
+  engineStarted(playerId: string, now = Date.now()) {
+    if (this.state.phase !== 'countdown' || this.state.startAt !== null || !this.driver(playerId)) return;
+    this.enginesOn.add(playerId);
+    const waiting = this.state.drivers.filter((d) => !d.retired && !this.enginesOn.has(d.playerId));
+    if (!waiting.length) this.beginCountdown(now);
+  }
+
+  /** Who still has to start their car (for the "waiting for…" message). */
+  waitingForEngines(): string[] {
+    return this.state.drivers.filter((d) => !d.retired && !this.enginesOn.has(d.playerId)).map((d) => d.playerId);
+  }
+
+  private beginCountdown(now: number) {
+    if (this.state.phase !== 'countdown' || this.state.startAt !== null) return;
+    this.clearTimer();
+    this.state = { ...this.state, startAt: now + COUNTDOWN_MS };
     this.timer = setTimeout(() => {
       this.timer = null;
       if (this.state.phase === 'countdown') {
@@ -97,7 +128,6 @@ export class RaceController {
       }
     }, COUNTDOWN_MS);
     this.events.onState(this.state);
-    return this.state;
   }
 
   /** Changes stage / weather / AI. Only allowed in the lobby. */
@@ -126,6 +156,8 @@ export class RaceController {
     const d = this.driver(playerId);
     if (!d || d.result || d.retired || this.state.phase === 'lobby' || this.state.phase === 'finished') return false;
     this.patchDriver(playerId, { retired: true });
+    // someone left while the start was waiting for engines: maybe everyone left is ready now
+    if (this.state.phase === 'countdown' && this.state.startAt === null && !this.waitingForEngines().length) this.beginCountdown(now);
     if (this.state.aiHost === playerId) {
       const next = this.state.drivers.find((x) => !x.retired && !x.result && x.playerId !== playerId);
       if (next) this.state = { ...this.state, aiHost: next.playerId };
@@ -143,6 +175,8 @@ export class RaceController {
     const tr = this.trackers.get(playerId);
     const d = this.driver(playerId);
     if (!tr || !d) return this.state.phase === 'lobby'; // not in this run
+    // waiting at the start for everyone to fire their engine up
+    if (this.state.phase === 'countdown' && this.state.startAt === null && p.sw !== undefined && decodeSwitches(p.sw).engine) this.engineStarted(playerId, now);
     if (this.state.phase !== 'racing' || d.result || d.retired) return true; // relay only
 
     // --- plausibility (anti-teleport) ---

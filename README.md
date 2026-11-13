@@ -109,7 +109,6 @@ Set `CLIENT_ORIGIN` if the page is served from a different origin than the serve
 | Spectator push when stuck or off the road (+10 s) | H | Y |
 | Fire the push-to-pass boost (once your co-driver has armed it) | B | – |
 | Roadside fix when you're on your own (car stopped) | F | – |
-| Tyre choice before the stage | click, or 1–4 | – |
 | Pause menu | Esc | Start |
 | Everything else (ignition, start, lights, wipers…) | **click the switch in the car** with the mouse (tap on a touch screen) | – |
 
@@ -130,6 +129,8 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
   they change the physics (power, shift time, grip, stiffness, braking, crash resistance).
 - **Personal bests** per stage and weather show in the lobby; beat one and the results say so.
 - Progress is saved in this browser (Settings → Reset career to start over).
+- **The start waits for you:** after the host starts a stage, nothing happens until every
+  driver has started their car (ignition, then START). Then there's a 5-second countdown.
 - **Every update resets everyone.** Each deploy gets a new build id; the first time a
   player opens the game after an update, their money, cars and championship start fresh (name and settings are kept) and a message tells them why.
 
@@ -235,12 +236,10 @@ fades from day through sunset to night as you climb, so lights and the light pod
 
 ## Tyres, breakdowns, boost and engine life
 
-- **Tyre choice:** before every stage the driver picks a compound (it stays open until you
-  drive off the line): **Soft** (most grip in the dry, wears fast), **Hard** (less grip, lasts),
-  **Wet** (grips in rain and showers, slides in the dry) or **Snow** (studded: amazing on snow
-  and ice, poor on tarmac). Your last choice is remembered. In the championship you only have
-  a few sets per season (3 soft, 3 hard, 2 wet, 2 snow); an empty compound can't be picked.
-  Softer and special tyres cost more per % worn.
+- **Tyres:** each stage the car gets the right compound for the conditions – **Soft** in the
+  dry (most grip, wears fast), **Wet** in the rain, studded **Snow** on snow and ice, or
+  **Hard** when the championship allocation of the others has run out (3 soft, 3 hard, 2 wet,
+  2 snow per season). The compound shows on the co-driver's car panel.
 - **Mechanical failures:** big hits can break things: a **puncture** (that corner loses
   grip and drags, the wheel looks flat), the **power steering** (heavy, slow steering and less
   lock), the **turbo pipe** (−22% power) or the **gearbox** (a gear is gone and the box skips

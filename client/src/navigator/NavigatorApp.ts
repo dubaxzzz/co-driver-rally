@@ -339,7 +339,7 @@ export class NavigatorApp {
     let ms = 0;
     if (s.phase === 'racing' && s.startAt) ms = Math.max(0, now - s.startAt);
     if (me?.result) ms = me.result.timeMs;
-    sp.time.textContent = s.phase === 'countdown' && s.startAt ? `GO IN ${Math.max(0, Math.ceil((s.startAt - now) / 1000))}` : formatTime(ms);
+    sp.time.textContent = s.phase === 'countdown' ? (s.startAt ? `GO IN ${Math.max(0, Math.ceil((s.startAt - now) / 1000))}` : 'STARTING UP') : formatTime(ms);
     const leader = rows[0];
     if (me?.result) sp.gap.textContent = 'FINISHED';
     else if (me?.retired) sp.gap.textContent = 'RETIRED';
@@ -551,7 +551,7 @@ export class NavigatorApp {
     if (s?.phase === 'racing' && s.startAt) ms = Math.max(0, now - s.startAt);
     const res = this.driverRace()?.result;
     if (res) ms = res.timeMs;
-    tab.timer = s?.phase === 'countdown' && s.startAt ? `GO IN ${Math.max(0, Math.ceil((s.startAt - now) / 1000))}` : formatTime(ms);
+    tab.timer = s?.phase === 'countdown' ? (s.startAt ? `GO IN ${Math.max(0, Math.ceil((s.startAt - now) / 1000))}` : 'START THE CAR') : formatTime(ms);
     this.els.timer.textContent = tab.timer;
     const age = performance.now() - this.lastPacketAt;
     if (!t) {

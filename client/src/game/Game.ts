@@ -394,7 +394,7 @@ export class Game {
     const life = this.ctx.kind === 'championship' ? champ.life() : { engine: 1, gearbox: 1 };
     this.vehicle.engineLife = life.engine;
     this.gearboxLife = life.gearbox;
-    this.openTyreChoice();
+    this.chooseTyres();
     this.serviceState = 'none';
     this.closeService();
     this.fuseSpares = SPARE_FUSES;
@@ -609,6 +609,7 @@ export class Game {
   private roadWear: RoadWear | null = null;
   private wearRefreshAt = 0;
   private staticsAt = 0;
+  private startHintAt = 0;
   private crowdHit = new Set<number>();
   private stuckFor = 0;
   private tyreUsed = 0;
@@ -1140,46 +1141,16 @@ export class Game {
     this.boostEl.classList.toggle('on', st === 2);
   }
 
-  // ---- tyre choice before the stage ----
-  private tyreEl: HTMLElement | null = null;
-  private openTyreChoice() {
-    this.tyreEl?.remove();
+  // ---- tyres for the stage: picked for the conditions (no menu at the start) ----
+  private tyreSetUsed = false;
+  private chooseTyres() {
     const champSets = this.ctx.kind === 'championship' ? champ.tyreSets() : null;
-    const suggest = suggestedCompound(this.stage.def.surface, this.weather.rain, this.weather.snow);
-    const pref = settings.get().tyre;
-    let pick: TyreCompound = champSets && !champSets[pref ?? suggest] ? suggest : (pref ?? suggest);
+    let pick: TyreCompound = suggestedCompound(this.stage.def.surface, this.weather.rain, this.weather.snow);
     if (champSets && !champSets[pick]) pick = TYRE_COMPOUNDS.find((c) => champSets[c] > 0) ?? 'hard';
     this.vehicle.compound = pick;
-    const btns = TYRE_COMPOUNDS.map((c, i) => {
-      const info = COMPOUND_INFO[c];
-      const left = champSets ? champSets[c] : null;
-      const b = h('button', { class: `tyre-btn ${c === pick ? 'sel' : ''}`, 'data-testid': `tyre-${c}`, disabled: left === 0 ? true : undefined },
-        h('b', {}, `${i + 1} · ${info.name}`), h('span', {}, info.desc), left !== null ? h('i', {}, `${left} set${left === 1 ? '' : 's'} left`) : null) as HTMLButtonElement;
-      b.onclick = () => choose(c);
-      return b;
-    });
-    const choose = (c: TyreCompound) => {
-      if (champSets && !champSets[c]) return;
-      this.vehicle.compound = c;
-      settings.update({ tyre: c });
-      btns.forEach((b, i) => b.classList.toggle('sel', TYRE_COMPOUNDS[i] === c));
-    };
-    this.tyreEl = h('div', { class: 'tyre-choice', 'data-testid': 'tyre-choice' },
-      h('div', { class: 'panel-title' }, `Tyres for this stage${champSets ? ' (season allocation)' : ''}`), ...btns,
-      h('div', { class: 'setup-desc' }, `Suggested: ${COMPOUND_INFO[suggest].name}. Closes when you drive off the line – press 1-4.`));
-    this.container.append(this.tyreEl);
-    const key = (e: KeyboardEvent) => {
-      if (!this.tyreEl) return window.removeEventListener('keydown', key);
-      if (/^[1-4]$/.test(e.key)) choose(TYRE_COMPOUNDS[Number(e.key) - 1]);
-    };
-    window.addEventListener('keydown', key);
+    this.tyreSetUsed = false;
   }
-  private closeTyreChoice() {
-    if (!this.tyreEl) return;
-    this.tyreEl.remove();
-    this.tyreEl = null;
-    if (this.ctx.kind === 'championship') champ.useTyreSet(this.vehicle.compound);
-  }
+
 
   private closeService() {
     this.animateMechanics(false);
@@ -1758,8 +1729,11 @@ export class Game {
     this.updateRally(dt, v);
     this.updateFixAndBoost(dt);
     this.wearAndTear(dt);
-    // the tyre choice stays open until the car moves off the line (or 15 s into the stage)
-    if (this.tyreEl && this.raceState?.phase === 'racing' && (this.race.distance > this.stage.spawnDistance + 6 || this.raceTimeMs() > 15000)) this.closeTyreChoice();
+    // a championship set of tyres is used up once the stage is under way
+    if (!this.tyreSetUsed && this.raceState?.phase === 'racing') {
+      this.tyreSetUsed = true;
+      if (this.ctx.kind === 'championship') champ.useTyreSet(this.vehicle.compound);
+    }
     v.wetness = Math.min(1, Math.max(0, (1 - v.weatherGrip) / 0.2));
     const river = this.world.terrain.waterAt(p0.x, p0.z);
     v.inWater = !!river && p0.y < river.waterY + 0.6;
@@ -1811,11 +1785,16 @@ export class Game {
     const pos = v.model.root.position.clone();
     this.race.update(pos.x, pos.z, v.telemetry.speed, false);
 
+    // Waiting at the start: the countdown only begins once every driver's engine is running
+    if (phase === 'countdown' && !this.raceState?.startAt && this.clock > this.startHintAt) {
+      this.startHintAt = this.clock + 2.2;
+      this.hud.warn(v.engineOn ? 'ENGINE RUNNING – WAITING FOR THE OTHER DRIVERS TO START UP' : 'START THE CAR – THE COUNTDOWN BEGINS WHEN YOUR ENGINE IS RUNNING', 2.2);
+    }
     // Countdown display
     if (phase === 'countdown' && this.raceState?.startAt) {
       const remain = this.raceState.startAt - net.serverNow();
       const n = Math.ceil(remain / 1000);
-      if (n !== this.lastCountdownShown && n > 0 && n <= 3) {
+      if (n !== this.lastCountdownShown && n > 0 && n <= 5) {
         this.lastCountdownShown = n;
         this.hud.center(String(n));
         audio.countdown(n);
@@ -1824,7 +1803,7 @@ export class Game {
 
     // Off-road safety: fell through/away, or stuck upside down
     const roadY = sampleAt(this.stage.samples, this.race.distance).y;
-    if (pos.y < roadY - 25 || Math.abs(this.race.lateral) > 70) this.resetVehicle();
+    if (pos.y < roadY - 25 || Math.abs(this.race.lateral) > 110) this.resetVehicle();
     // stuck in the river?
     if (v.inWater && !v.flooded && Math.abs(v.telemetry.speed) < 2) {
       this.underwaterFor += dt;

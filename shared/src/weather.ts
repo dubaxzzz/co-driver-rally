@@ -133,7 +133,7 @@ function rngFor(seed: number) {
 }
 
 export function stageConditions(
-  stage: { def: { seed: number; surface: string }; startDistance: number; finishDistance: number; bridges: Array<{ distance: number; length: number }>; samples?: Array<{ x: number; z: number }> },
+  stage: { def: { seed: number; surface: string }; startDistance: number; finishDistance: number; bridges: Array<{ distance: number; length: number }>; samples?: Array<{ x: number; z: number }>; service?: { apronFrom: number; apronTo: number } | null },
   runId: number,
   weather: WeatherId,
 ): StageConditions {
@@ -166,12 +166,19 @@ export function stageConditions(
   }
   // something on the road (never on or right next to a bridge)
   const kinds: ObstacleKind[] = ['tree', 'rocks', 'animals'];
-  const n = rand() < 0.75 ? 1 + (rand() < 0.35 ? 1 : 0) : 0;
-  for (let i = 0; i < n; i++) {
-    let d = at(0.2, 0.9);
-    for (let tries = 0; tries < 5 && stage.bridges.some((b) => Math.abs(b.distance - d) < b.length / 2 + 60); tries++) d = at(0.2, 0.9);
+  const base = rand() < 0.75 ? 1 + (rand() < 0.35 ? 1 : 0) : 0;
+  const long = len > 12000;
+  const n = long ? Math.max(10, base * 10) : base;
+  for (let i = 0, placed = 0; i < n * 3 && placed < n; i++) {
+    const lo = long ? 0.04 : 0.2, hi = long ? 0.96 : 0.9;
+    const blocked = (x: number) => stage.bridges.some((b) => Math.abs(b.distance - x) < b.length / 2 + 60) || (!!stage.service && x > stage.service.apronFrom - 300 && x < stage.service.apronTo + 200);
+    let d = at(lo, hi);
+    for (let tries = 0; tries < 5 && blocked(d); tries++) d = at(lo, hi);
+    if (blocked(d)) continue;
     if (out.obstacles.some((o) => Math.abs(o.distance - d) < 250)) continue;
-    out.obstacles.push({ kind: kinds[Math.floor(rand() * kinds.length)], distance: d, side: rand() < 0.5 ? 1 : -1 });
+    const kind: ObstacleKind = long ? (rand() < 0.5 ? 'tree' : rand() < 0.8 ? 'animals' : 'rocks') : kinds[Math.floor(rand() * kinds.length)];
+    out.obstacles.push({ kind, distance: d, side: rand() < 0.5 ? 1 : -1 });
+    placed++;
   }
   out.obstacles.sort((a, b) => a.distance - b.distance);
   return out;

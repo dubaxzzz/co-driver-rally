@@ -5,7 +5,7 @@
  */
 import { io, type Socket } from 'socket.io-client';
 import { getStage, DEFAULT_STAGE_ID, sampleAt } from '../shared/src/index';
-import type { ClientToServerEvents, ServerToClientEvents, Ack, JoinResult, TelemetryPacket, RaceResult } from '../shared/src/index';
+import type { ClientToServerEvents, ServerToClientEvents, Ack, JoinResult, TelemetryPacket, RaceResult, RaceState } from '../shared/src/index';
 
 type S = Socket<ServerToClientEvents, ClientToServerEvents>;
 const URL = process.env.SERVER_URL ?? 'http://localhost:3001';
@@ -94,6 +94,13 @@ await call((a) => nav.emit('room:ready', true, a));
 await call((a) => third.emit('room:ready', true, a));
 const st = await call<{ runId: number }>((a) => driver.emit('race:start', a as never));
 const runId = st.ok ? st.data.runId : 1;
+check(st.ok && (st.data as unknown as RaceState).startAt === null, 'the countdown waits until the cars are started');
+const notYet = await waitFor<{ phase: string }>(nav, 'race:state', 2500, (s) => s.phase === 'racing');
+check(!notYet, 'no racing while an engine is still off');
+// the driver fires the engine up (switch bit 2 = engine running)
+const counting = waitFor<RaceState>(nav, 'race:state', 3000, (s) => s.phase === 'countdown' && !!s.startAt);
+driver.emit('telemetry', { ...packet(runId, 0, stage.spawnDistance), sw: 3 });
+check(!!(await counting), 'the countdown starts once the engine is running');
 const racing = await waitFor<{ phase: string }>(nav, 'race:state', 15000, (s) => s.phase === 'racing');
 check(!!racing, 'countdown ends and both see phase "racing"');
 const lateCfg = await call((a) => driver.emit('room:configure', { weather: 'clear' }, a as never));

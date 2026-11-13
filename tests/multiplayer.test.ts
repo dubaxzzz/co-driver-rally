@@ -108,6 +108,11 @@ const runId = st.ok ? st.data.runId : 1;
 const g0 = gridSpot(stage, 0, 2);
 const g1 = gridSpot(stage, 1, 2);
 check(g0.lateral > 0 && g1.lateral < 0 && g0.distance === g1.distance, 'two cars start side by side');
+// both drivers start their engines; the countdown waits for the second one
+host.emit('telemetry', { ...packet(runId, 0, g0.distance, g0.lateral), sw: 3 });
+const stillWaiting = await waitFor<RaceState>(s4, 'race:state', 1500, (s) => s.phase === 'countdown' && !!s.startAt);
+check(!stillWaiting, 'the countdown waits for every driver to start their car');
+s3.emit('telemetry', { ...packet(runId, 0, g1.distance, g1.lateral), sw: 3 });
 check(!!(await racingP), 'everybody sees the countdown end');
 const lateRole = await call((a) => s4.emit('room:role', { role: 'driver' }, a));
 check(!lateRole.ok, 'no seat changes during a stage');

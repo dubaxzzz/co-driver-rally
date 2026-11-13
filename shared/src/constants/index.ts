@@ -14,7 +14,10 @@ export const TELEMETRY_MAX_PER_SECOND = 40;
 export const INTERPOLATION_DELAY_MS = 120;
 
 /** Pre-stage: time to do the cockpit checks (ignition, start, lights) before GO. */
-export const COUNTDOWN_MS = 10000;
+/** The 3-2-1 countdown, once every driver has started their engine. */
+export const COUNTDOWN_MS = 5000;
+/** How long the start waits for engines before counting down anyway. */
+export const ENGINE_WAIT_MS = 120000;
 /** Up to four people per lobby: any mix of drivers and navigators. */
 export const MAX_MEMBERS = 4;
 export const MAX_DRIVERS = 4;
