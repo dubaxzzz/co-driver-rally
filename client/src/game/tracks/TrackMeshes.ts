@@ -266,6 +266,61 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
     for (const k of bidx) extraIdx.push(k + off);
   }
 
+  // ---- the pit apron at the service zone (long stages) ----
+  const sv = stage.service;
+  /** Where a point is relative to the pit apron (null when well away from it). */
+  const pitLocal = (x: number, z: number) => {
+    if (!sv) return null;
+    const c = sampleAt(samples, sv.boxD);
+    const along = (x - c.x) * Math.sin(c.h) + (z - c.z) * Math.cos(c.h);
+    const out = ((x - c.x) * Math.cos(c.h) + (z - c.z) * -Math.sin(c.h)) * sv.side;
+    const d = sv.boxD + along;
+    const m = 6;
+    if (d < sv.apronFrom - m || d > sv.apronTo + m || out < hw - 1 || out > sv.lat1 + m) return null;
+    const edge = Math.min(1, (d - (sv.apronFrom - m)) / m, (sv.apronTo + m - d) / m, (sv.lat1 + m - out) / m);
+    return { d, out, edge: Math.max(0, edge), roadY: sampleAt(samples, d).y };
+  };
+  if (sv) {
+    const rows = Math.ceil((sv.apronTo - sv.apronFrom) / 4) + 1;
+    const lats = [sv.lat0, (sv.lat0 + sv.lat1) / 2, sv.lat1];
+    const ap = new Float32Array(rows * lats.length * 3);
+    const auv = new Float32Array(rows * lats.length * 2);
+    for (let r = 0; r < rows; r++) {
+      const d = Math.min(sv.apronTo, sv.apronFrom + r * 4);
+      const q = sampleAt(samples, d);
+      const lx = Math.cos(q.h) * sv.side, lz = -Math.sin(q.h) * sv.side;
+      lats.forEach((lat, j) => {
+        const o = (r * lats.length + j) * 3;
+        ap[o] = q.x + lx * lat;
+        ap[o + 1] = q.y + 0.04;
+        ap[o + 2] = q.z + lz * lat;
+        auv[(r * lats.length + j) * 2] = (lat - sv.lat0) / (sv.lat1 - sv.lat0);
+        auv[(r * lats.length + j) * 2 + 1] = (d - sv.apronFrom) / (sv.apronTo - sv.apronFrom);
+      });
+    }
+    const aidx: number[] = [];
+    for (let r = 0; r < rows - 1; r++)
+      for (let j = 0; j < lats.length - 1; j++) {
+        const a = r * lats.length + j, b2 = a + 1, c2 = a + lats.length, d2 = c2 + 1;
+        // wound to face up on either side of the road
+        if (sv.side < 0) aidx.push(a, b2, c2, b2, d2, c2);
+        else aidx.push(a, c2, b2, b2, c2, d2);
+      }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(ap, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(auv, 2));
+    g.setIndex(aidx);
+    g.computeVertexNormals();
+    g.computeBoundingSphere();
+    const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map: pitTexture(sv), roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+    mesh.receiveShadow = true;
+    mesh.name = 'pit-apron';
+    road.add(mesh);
+    const off = baseVerts + extraPos.length / 3;
+    for (const v of ap) extraPos.push(v);
+    for (const k of aidx) extraIdx.push(k + off);
+  }
+
   // the terrain follows the short cuts too
   const ts = stage.splits.length ? samples.concat(...stage.splits.map((sp) => sp.samples)) : samples;
   const tn = ts.length;
@@ -278,7 +333,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
   const grows = Math.ceil((b.maxZ - b.minZ + MARGIN * 2) / CELL) + 1;
   const T = TILE;
   const tilesX = Math.ceil(gcols / T), tilesZ = Math.ceil(grows / T);
-  type Tile = { tx: number; tz: number; heights: Float32Array; dists: Float32Array; rdists: Float32Array; best: Int32Array; d2b: Float32Array; best2: Int32Array };
+  type Tile = { tx: number; tz: number; heights: Float32Array; dists: Float32Array; rdists: Float32Array; best: Int32Array; d2b: Float32Array; best2: Int32Array; ry: Float32Array };
   const tiles: Array<Tile | null> = new Array(tilesX * tilesZ).fill(null);
   const reach = VISIBLE_RADIUS + 30;
   const tileM = T * CELL;
@@ -289,7 +344,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
     for (let tz = t0z; tz <= t1z; tz++)
       for (let tx = t0x; tx <= t1x; tx++) {
         const k = tz * tilesX + tx;
-        if (!tiles[k]) tiles[k] = { tx, tz, heights: new Float32Array(T * T), dists: new Float32Array(T * T).fill(1e9), rdists: new Float32Array(T * T).fill(1e9), best: new Int32Array(T * T).fill(-1), d2b: new Float32Array(T * T).fill(1e9), best2: new Int32Array(T * T).fill(-1) };
+        if (!tiles[k]) tiles[k] = { tx, tz, heights: new Float32Array(T * T), dists: new Float32Array(T * T).fill(1e9), rdists: new Float32Array(T * T).fill(1e9), best: new Int32Array(T * T).fill(-1), d2b: new Float32Array(T * T).fill(1e9), best2: new Int32Array(T * T).fill(-1), ry: new Float32Array(T * T) };
       }
   }
   const tileOf = (c: number, r: number) => (c < 0 || r < 0 || c >= gcols || r >= grows ? null : tiles[Math.floor(r / T) * tilesX + Math.floor(c / T)]);
@@ -372,6 +427,12 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
         let y = baseY - 0.18 + blend * hillsAt(x, z);
         // shallow drainage ditch beside the road
         if (dist > hw + 1.5 && dist < hw + 6) y -= Math.sin(((dist - hw - 1.5) / 4.5) * Math.PI) * 0.45;
+        // the pit apron at the service zone: flat ground level with the road
+        const pit = pitLocal(x, z);
+        if (pit) {
+          const k = pit.edge;
+          y = y + (pit.roadY - 0.06 - y) * k;
+        }
         // River channel: carved everywhere except right next to the road – apart
         // from under its own bridge, where the river flows beneath the deck.
         if (stage.rivers.length) {
@@ -389,7 +450,8 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
           }
         }
         tl.heights[ci] = y;
-        tl.dists[ci] = dist;
+        tl.ry[ci] = roadY;
+        tl.dists[ci] = pit && pit.edge > 0.5 ? Math.min(dist, hw) : dist;
         lowest = Math.min(lowest, y);
       }
   }
@@ -423,6 +485,17 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
       }
     }
   }
+  // The ground must never come up over the road: next to the road (anywhere a
+  // terrain triangle could reach across it) it stays just below the road surface.
+  {
+    const reachRoad = hw + 1.4 + CELL * 1.5;
+    for (const tl of tiles) {
+      if (!tl) continue;
+      for (let ci = 0; ci < T * T; ci++) {
+        if (tl.dists[ci] < reachRoad && tl.best[ci] >= 0) tl.heights[ci] = Math.min(tl.heights[ci], tl.ry[ci] - 0.22);
+      }
+    }
+  }
   const get = (arr: 'heights' | 'dists' | 'rdists', c: number, r: number, fallback: number) => {
     const tl = tileOf(c, r);
     return tl ? tl[arr][cellIdx(c, r)] : fallback;
@@ -434,6 +507,8 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
   const tmp = new THREE.Color();
   const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
   const snowWhite = new THREE.Color(0xe9eef2);
+  // big mountains: the top fifth is under snow
+  const snowLineY = b.maxY - Math.max(150, (b.maxY - b.minY) * 0.2);
   const terrain = new THREE.Group();
   terrain.name = 'terrain';
   const colPos: number[] = [];
@@ -465,7 +540,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
         if (d < hw + 5) tmp.lerp(verge, (1 - Math.max(0, (d - hw) / 5)) * 0.55);
         if (rd < 22) tmp.lerp(riverBank, Math.max(0, 1 - rd / 22) * 0.8);
         // mountain stages: snow on the high ground
-        if (def.flatBase && y > b.maxY - 150) tmp.lerp(snowWhite, Math.min(0.92, (y - (b.maxY - 150)) / 90));
+        if (def.flatBase && y > snowLineY) tmp.lerp(snowWhite, Math.min(0.92, (y - snowLineY) / 120));
         tCol[i * 3] = tmp.r;
         tCol[i * 3 + 1] = tmp.g;
         tCol[i * 3 + 2] = tmp.b;
@@ -557,8 +632,8 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
           }
         }
     }
-    const big = def.flatBase ? 520 : Math.max(60, sc.hills * 3);
-    const snowLine = b.maxY - 150;
+    const big = def.flatBase ? Math.max(520, (b.maxY - b.minY) * 0.45) : Math.max(60, sc.hills * 3);
+    const snowLine = snowLineY;
     const fPos = new Float32Array(fcols * frows * 3);
     const fCol = new Float32Array(fcols * frows * 3);
     const snowC = new THREE.Color(0xeef2f5);
@@ -571,6 +646,8 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
         const mountains = (noise(x * 0.0011 + 7, z * 0.0011, 4) - 0.42) * big * ramp * ramp;
         let y = (dist > 1e5 ? b.minY : fy[k]) - 6 + hillsAt(x, z) + mountains;
         if (dist < VISIBLE_RADIUS + 10) y = heightAt(x, z) - 3; // just under the detailed tiles
+        // its big triangles must never reach up over the road either
+        if (dist < FC * 2.3 && dist < 1e5) y = Math.min(y, fy[k] - 4);
         fPos[k * 3] = x;
         fPos[k * 3 + 1] = y;
         fPos[k * 3 + 2] = z;
@@ -880,4 +957,55 @@ export class RoadWear {
     attr.addUpdateRange(r0 * 16, Math.max(0, r1 - r0) * 16);
     attr.needsUpdate = true;
   }
+}
+
+/** Concrete pit apron with the yellow pit box painted on it. */
+function pitTexture(sv: NonNullable<BuiltStage['service']>) {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 1024;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#8d8e8c';
+  g.fillRect(0, 0, 256, 1024);
+  const rnd = mulberry32(5);
+  for (let i = 0; i < 2500; i++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.05)';
+    g.fillRect(rnd() * 256, rnd() * 1024, 2, 2);
+  }
+  // expansion joints
+  g.strokeStyle = 'rgba(0,0,0,0.25)';
+  g.lineWidth = 2;
+  for (let y = 0; y < 1024; y += 64) {
+    g.beginPath();
+    g.moveTo(0, y);
+    g.lineTo(256, y);
+    g.stroke();
+  }
+  const W = sv.lat1 - sv.lat0, L = sv.apronTo - sv.apronFrom;
+  const u = (lat: number) => ((lat - sv.lat0) / W) * 256;
+  const v = (d: number) => (1 - (d - sv.apronFrom) / L) * 1024; // canvas y runs the other way
+  // the box
+  const x0 = u(sv.boxLat - sv.boxWid / 2), x1 = u(sv.boxLat + sv.boxWid / 2);
+  const y0 = v(sv.boxD + sv.boxLen / 2), y1 = v(sv.boxD - sv.boxLen / 2);
+  g.fillStyle = 'rgba(255,196,0,0.18)';
+  g.fillRect(x0, y0, x1 - x0, y1 - y0);
+  g.strokeStyle = '#ffc400';
+  g.lineWidth = 6;
+  g.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  g.save();
+  g.translate((x0 + x1) / 2, (y0 + y1) / 2);
+  g.rotate(Math.PI / 2);
+  g.fillStyle = '#ffc400';
+  g.font = 'bold 34px sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('PIT', 0, 0);
+  g.restore();
+  // white line along the road edge with a gap at the way in and out
+  g.fillStyle = '#f2f2f2';
+  g.fillRect(0, v(sv.apronTo - 18), 6, v(sv.apronFrom + 18) - v(sv.apronTo - 18));
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
 }

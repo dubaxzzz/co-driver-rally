@@ -270,7 +270,8 @@ function mountainSegments(): SegmentDef[] {
       segs.push(st);
       // hairpins alternate so each leg sits just above the last one
       const dir: 'L' | 'R' = heading > 0 ? 'R' : 'L';
-      segs.push({ kind: 'corner', dir, severity: 'H', angle: 180, grade: grade * 0.5 });
+      // wide hairpins (radius 17 m) so the terraces have room between them
+      segs.push({ kind: 'corner', dir, severity: 1, angle: 180, grade: grade * 0.5 });
       heading = -heading;
     }
     segs.push({ kind: 'straight', length: legLen, grade });
@@ -279,15 +280,15 @@ function mountainSegments(): SegmentDef[] {
     heading = 0;
   };
   // valley forest: flowing, a river crossing
-  twisty(40, [2, 5], [70, 170], 2.2, { bridge: 12 });
+  twisty(40, [2, 5], [70, 170], 12, { bridge: 12 });
   // the first face
-  switchbacks(9, [190, 230], 9);
+  switchbacks(9, [190, 230], 23);
   // the ridge: quicker, crests and jumps, the service zone half way
-  twisty(62, [2, 5], [70, 175], 1.6, { jumps: true, service: 30 });
+  twisty(62, [2, 5], [70, 175], 15.5, { jumps: true, service: 30 });
   // the big face, gravel turning to snow near the top
-  switchbacks(11, [210, 250], 9.5, 'snow');
+  switchbacks(11, [210, 250], 24, 'snow');
   // the summit: snow and ice, very tight
-  twisty(34, [1, 4], [50, 125], 2.4, { mix: 'snow' });
+  twisty(34, [1, 4], [50, 125], 17, { mix: 'snow' });
   segs.push({ kind: 'straight', length: 160, grade: 0 });
   return segs;
 }
@@ -299,13 +300,13 @@ export const MOUNTAIN_STAGE: StageDef = {
   id: 'col-couronne',
   name: 'Col de la Couronne',
   location: 'Hautes-Alpes, France',
-  description: '30 km climb: valley forest, two walls of hairpins, a service zone on the ridge and a snowy summit as night falls.',
+  description: '30 km, 5 km up: valley forest, two walls of hairpins, a service zone on the ridge and a snowy summit as night falls.',
   surface: 'gravel',
   offroad: 'grass',
   roadWidth: 7.5,
   seed: 7700,
   checkpointFractions: [0.15, 0.3, 0.45, 0.6, 0.75, 0.9],
-  referenceTimeMs: Math.round((mountainLength / 1000) * 39 * 1000),
+  referenceTimeMs: Math.round((mountainLength / 1000) * 44 * 1000),
   defaultWeather: 'clear',
   scenery: sc({ trees: 'pine', treeDensity: 1.0, grassA: 0x4f6a35, grassB: 0x667a45, patch: 0x7a7468, verge: 0x6a6052, rock: 0x8c8a84, hills: 60 }),
   segments: mountainSegs,

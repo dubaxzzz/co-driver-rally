@@ -628,7 +628,7 @@ export class NavigatorApp {
         }
       }
       const svc = this.stage.service;
-      if (svc && !tab.alert && t.dist > svc.distance - 800 && t.dist < svc.distance + svc.length) tab.alert = t.dist < svc.distance ? `SERVICE ZONE IN ${Math.round((svc.distance - t.dist) / 10) * 10} m – STOP THERE TO FIX THE CAR` : 'SERVICE ZONE – STOP AND PICK THE JOBS';
+      if (svc && !tab.alert && t.dist > svc.apronFrom - 800 && t.dist < svc.apronTo) tab.alert = t.dist < svc.apronFrom ? `SERVICE IN ${Math.round((svc.apronFrom - t.dist) / 10) * 10} m – PIT ON THE ${svc.side < 0 ? 'RIGHT' : 'LEFT'}, STOP IN THE YELLOW BOX` : 'SERVICE – INTO THE PIT BOX AND PICK THE JOBS ON THE BOARD';
       // the car itself comes first: only the co-driver can see these
       const sy = tab.sys;
       if (sy && sy.fuse >= 0) tab.alert = this.fuseSpares > 0 ? `FUSE BLOWN: ${FUSES[sy.fuse]} – FIT A SPARE ON THE CAR PANEL (P)` : `FUSE BLOWN: ${FUSES[sy.fuse]} – NO SPARES LEFT, TELL THE DRIVER`;

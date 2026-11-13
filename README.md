@@ -193,15 +193,18 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 
 ## The long stage, service zone, crowds and penalties
 
-**Col de la Couronne** is a 30 km climb (about 20 minutes): flowing valley roads, two faces of
+**Col de la Couronne** is a 31 km climb of **about 5 km straight up** (about 25 minutes; grades up to 25%, the HUD shows how high you've climbed): flowing valley roads, two faces of
 stacked hairpins up the mountain, a ridge, and a snowy summit. Far mountains and valleys
 fill the horizon, steep banks turn to rock, and the snow starts near the top. The light
 fades from day through sunset to night as you climb, so lights and the light pod matter.
 
-- **Service zone** (this stage only, about half way): a SERVICE banner over the road with team
-  awnings and vans. Stop in it and pick the jobs – bodywork & windscreen, engine & cooling,
-  a new set of tyres, fuses & spares. The **stage clock keeps running** while they work; go
-  over 3 minutes and you're late (+10 s per 10 s over). Or skip it and drive on.
+- **Service zone** (this stage only, about half way): a SERVICE ZONE sign, then a PIT arrow –
+  pull off the road onto the concrete pit apron (on the right) and stop in the **yellow PIT
+  box**. The mechanics hold the car and a board stands in front of you: **click the jobs on the
+  board** through the windscreen (or press 1–4, Enter to start, Esc to drive on) – bodywork &
+  windscreen, engine & cooling, a new set of tyres, fuses & spares. Mechanics in orange overalls
+  work round the car while the board counts down. The **stage clock keeps running**; go over
+  3 minutes of work and you're late (+10 s per 10 s over). Don't want service? Just drive past.
 - **Crowds** stand behind tape on the outside of hairpins, the tightest corners and jumps on
   every stage. They jump and cheer as you come past; go through the tape and they scatter –
   **+5 s**.
@@ -279,7 +282,7 @@ The driver picks everything in the **lobby** (the navigator's screen follows):
 | Sardinia Ridge | Sardinia | sandy gravel full of jumps |
 | Mojave Run | USA | very fast desert gravel, big jumps |
 | Moorland Mud | Yorkshire | gravel and deep mud, bridge |
-| **Col de la Couronne** | Hautes-Alpes, France | **30 km mountain climb** (~980 m up): valley forest, two walls of hairpin switchbacks, a ridge with the **service zone**, a snowy summit – and night falls on the way up |
+| **Col de la Couronne** | Hautes-Alpes, France | **31 km mountain climb, ~5,000 m up**: valley forest, two walls of hairpin switchbacks, a ridge with the **service zone**, a snowy summit – and night falls on the way up |
 
 The twelve newer stages are laid out from a seed (`shared/src/tracks/stages/more.ts`):
 corners alternate so the road always makes progress and can never cross itself.
@@ -357,6 +360,8 @@ The driving screen has no checklist or key-hint boxes – just the timer, progre
 **Hands:** proper gloves on the wheel; on every gear change the right hand leaves the wheel,
 grabs the gear stick, knocks it and comes back (it stays on the stick for quick double
 shifts), and it goes to the hydraulic handbrake while you pull it.
+
+**The ground never covers the road:** next to the road the ground is held just below the road surface, and the distant landscape is kept under it too.
 
 **Long stages stay smooth:** only the trees, barriers and pieces of road and ground near a car
 take part in the physics (the rest are switched off), and long stages draw a little less far.

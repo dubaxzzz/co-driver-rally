@@ -114,6 +114,21 @@ export interface StageSplit {
 export interface ServiceZone {
   distance: number;
   length: number;
+  /**
+   * The pit area beside the road: a flat concrete apron you drive onto, with a
+   * marked box where you stop to service the car. `side` +1 = left, -1 = right.
+   */
+  side: 1 | -1;
+  /** Apron: along the road from..to (stage distance), out from lat0 to lat1 metres from the centre line. */
+  apronFrom: number;
+  apronTo: number;
+  lat0: number;
+  lat1: number;
+  /** The pit box: centre (stage distance, metres out from the centre line) and size. */
+  boxD: number;
+  boxLat: number;
+  boxLen: number;
+  boxWid: number;
 }
 
 export interface CenterlineSample {

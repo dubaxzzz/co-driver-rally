@@ -1,4 +1,4 @@
-import type { BuiltStage } from '@cdr/shared';
+import { sampleAt, type BuiltStage } from '@cdr/shared';
 import type { DamageZones } from '../game/vehicle/Vehicle';
 import { formatDistance, formatSpeed, formatTime } from '../settings';
 import { h } from './dom';
@@ -107,7 +107,9 @@ export class Hud {
     this.timerEl.textContent = formatTime(timeMs);
     this.fill.style.width = `${progress01 * 100}%`;
     this.cps.forEach((c, i) => c.classList.toggle('done', i < cpPassed));
-    this.progLeft.textContent = formatDistance(Math.max(0, distance - this.stage.startDistance));
+    // mountain stages also show how high you've climbed
+    const climbed = this.stage.def.flatBase ? ` · ↑ ${Math.round(sampleAt(this.stage.samples, distance).y - this.stage.samples[0].y).toLocaleString()} m` : '';
+    this.progLeft.textContent = formatDistance(Math.max(0, distance - this.stage.startDistance)) + climbed;
     this.progRight.textContent = `${formatDistance(remaining)} TO FINISH`;
   }
 

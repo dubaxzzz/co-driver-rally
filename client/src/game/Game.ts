@@ -703,25 +703,45 @@ export class Game {
     if (racing && Math.abs(v.telemetry.speed) < 2 && (this.stuckFor > 2 || (Math.abs(this.race.lateral) > hw + 1.2 && this.stuckFor > 0.5))) {
       if (Math.random() < dt * 0.6) this.hud.warn('STUCK? PRESS H – SPECTATORS PUSH YOU OUT (+10 s)', 1.6);
     }
-    // the service zone (long stages): stop in it to service the car
+    // the service zone (long stages): drive onto the pit apron and stop in the yellow box
     const sv = st.service;
-    if (sv && racing && this.serviceState === 'none' && d > sv.distance && d < sv.distance + sv.length) {
-      if (Math.abs(v.telemetry.speed) < 2) this.openService();
-      else if (Math.random() < dt * 0.8) this.hud.warn('SERVICE ZONE – STOP TO SERVICE THE CAR', 1.2);
+    if (sv && racing && this.serviceState === 'none' && d > sv.apronFrom - 220 && d < sv.apronTo) {
+      const pit = this.pitLocal(v.position.x, v.position.z);
+      const inBox = !!pit && Math.abs(pit.d - sv.boxD) < sv.boxLen / 2 + 0.8 && Math.abs(pit.out - sv.boxLat) < sv.boxWid / 2 + 0.8;
+      if (inBox && Math.abs(v.telemetry.speed) < 1.5) this.openService();
+      else if (Math.random() < dt * 0.7) {
+        const way = sv.side < 0 ? 'RIGHT' : 'LEFT';
+        this.hud.warn(d < sv.apronFrom ? `SERVICE: PIT ON THE ${way} – PULL IN AND STOP IN THE YELLOW BOX` : inBox ? 'STOP IN THE BOX' : `PIT BOX ON THE ${way} – STOP IN THE YELLOW BOX`, 1.2);
+      }
     }
     if (this.serviceState === 'menu') v.frozen = true;
+    // lean in to the service board (zoom and look at it) while in the box
+    const atBoard = (this.serviceState === 'menu' || this.serviceState === 'working') && !!this.board;
+    if (atBoard) {
+      const cam = this.fp.camera;
+      const local = this.board!.mesh.position.clone().sub(cam.getWorldPosition(new THREE.Vector3())).applyQuaternion(v.model.root.quaternion.clone().invert());
+      this.fp.targetYaw = Math.atan2(local.x, local.z);
+      this.fp.targetPitch = Math.atan2(local.y, Math.hypot(local.x, local.z)) + 0.03;
+    }
+    const wantFov = atBoard ? 40 : 74;
+    if (Math.abs(this.fp.camera.fov - wantFov) > 0.05) {
+      this.fp.camera.fov += (wantFov - this.fp.camera.fov) * Math.min(1, dt * 4);
+      this.fp.camera.updateProjectionMatrix();
+    }
     if (this.serviceState === 'working') {
       v.frozen = true;
       const left = Math.ceil((this.serviceUntil - performance.now()) / 1000);
-      if (this.serviceTimerEl) this.serviceTimerEl.textContent = `${Math.max(0, left)} s`;
+      if (left !== this.serviceShown) {
+        this.serviceShown = left;
+        this.drawServiceBoard();
+      }
+      this.animateMechanics(true);
       if (left <= 0) this.finishService();
     }
   }
 
   // ---- mid-stage service: pick jobs, the clock keeps running ----
   private serviceState: 'none' | 'menu' | 'working' | 'done' = 'none';
-  private serviceEl: HTMLElement | null = null;
-  private serviceTimerEl: HTMLElement | null = null;
   private serviceUntil = 0;
   private serviceJobs = new Set<string>();
   private static SERVICE_BUDGET = 180;
@@ -738,37 +758,153 @@ export class Game {
     ];
   }
 
+  /** Where a point is relative to the pit apron: stage distance and metres out from the centre line. */
+  private pitLocal(x: number, z: number) {
+    const sv = this.stage.service;
+    if (!sv) return null;
+    const c = sampleAt(this.stage.samples, sv.boxD);
+    const along = (x - c.x) * Math.sin(c.h) + (z - c.z) * Math.cos(c.h);
+    const out = ((x - c.x) * Math.cos(c.h) + (z - c.z) * -Math.sin(c.h)) * sv.side;
+    return { d: sv.boxD + along, out };
+  }
+
+  // ---- the service board: stands in front of the pit box; click the jobs on it ----
+  private board: { mesh: THREE.Mesh; canvas: HTMLCanvasElement; tex: THREE.CanvasTexture; rects: Map<string, { x: number; y: number; w: number; h: number }> } | null = null;
+  private serviceShown = -1;
+  private mechanics: THREE.Group | null = null;
+
+  private ensureBoard() {
+    if (this.board) return this.board;
+    const sv = this.stage.service!;
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 400;
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.2), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
+    const c = sampleAt(this.stage.samples, sv.boxD + sv.boxLen / 2 + 1.2);
+    const x = c.x + Math.cos(c.h) * sv.side * sv.boxLat, z = c.z - Math.sin(c.h) * sv.side * sv.boxLat;
+    mesh.position.set(x, c.y + 1.5, z);
+    mesh.rotation.y = c.h + Math.PI; // facing the car in the box
+    mesh.name = 'service-board';
+    // a stand under it
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.9, 0.08), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+    leg.position.set(0, -1.05, -0.02);
+    mesh.add(leg);
+    this.scene.add(mesh);
+    this.board = { mesh, canvas, tex, rects: new Map() };
+    return this.board;
+  }
+
+  private drawServiceBoard() {
+    const bd = this.ensureBoard();
+    const g = bd.canvas.getContext('2d')!;
+    const W = bd.canvas.width, H = bd.canvas.height;
+    bd.rects.clear();
+    g.fillStyle = '#10151b';
+    g.fillRect(0, 0, W, H);
+    g.fillStyle = '#1d4ed8';
+    g.fillRect(0, 0, W, 52);
+    g.fillStyle = '#fff';
+    g.textBaseline = 'middle';
+    g.textAlign = 'center';
+    g.font = 'bold 28px sans-serif';
+    if (this.serviceState === 'working') {
+      g.fillText('MECHANICS AT WORK', W / 2, 28);
+      const left = Math.max(0, Math.ceil((this.serviceUntil - performance.now()) / 1000));
+      g.font = 'bold 170px sans-serif';
+      g.fillText(`${left}`, W / 2, 200);
+      g.font = 'bold 26px sans-serif';
+      g.fillStyle = '#9fb3c8';
+      g.fillText(this.serviceJobList().filter((j) => this.serviceJobs.has(j.id)).map((j) => j.label).join(' · '), W / 2, 350, W - 40);
+    } else {
+      g.fillText('SERVICE – CLICK THE JOBS YOU WANT', W / 2, 28);
+      const jobs = this.serviceJobList();
+      jobs.forEach((j, i) => {
+        const x = 14 + i * 196, y = 64, w = 184, hh = 176;
+        const on = this.serviceJobs.has(j.id);
+        g.fillStyle = on ? '#ff4b1f' : '#25303b';
+        g.fillRect(x, y, w, hh);
+        g.strokeStyle = on ? '#ffd2c2' : '#3c4a58';
+        g.lineWidth = 3;
+        g.strokeRect(x + 1.5, y + 1.5, w - 3, hh - 3);
+        g.fillStyle = '#fff';
+        g.font = 'bold 40px sans-serif';
+        g.fillText(on ? '✔' : String(i + 1), x + w / 2, y + 36);
+        g.font = 'bold 22px sans-serif';
+        const words = j.label.split(' ');
+        const half = Math.ceil(words.length / 2);
+        g.fillText(words.slice(0, half).join(' '), x + w / 2, y + 82, w - 14);
+        g.fillText(words.slice(half).join(' '), x + w / 2, y + 108, w - 14);
+        g.font = '17px sans-serif';
+        g.fillStyle = on ? '#fff' : '#9fb3c8';
+        g.fillText(j.detail, x + w / 2, y + 136, w - 14);
+        g.font = 'bold 22px sans-serif';
+        g.fillStyle = '#fff';
+        g.fillText(`${j.sec} s`, x + w / 2, y + 160);
+        bd.rects.set(`job:${j.id}`, { x, y, w, h: hh });
+      });
+      const t = jobs.filter((j) => this.serviceJobs.has(j.id)).reduce((a, j) => a + j.sec, 0);
+      const late = Math.max(0, t - Game.SERVICE_BUDGET);
+      g.font = 'bold 21px sans-serif';
+      g.fillStyle = late ? '#ff6b6b' : '#cfd6dd';
+      g.fillText(`Work ${t} s of ${Game.SERVICE_BUDGET} s${late ? ` – late: +${Math.ceil(late / 10) * 10} s penalty` : ' – the stage clock keeps running'}`, W / 2, 262);
+      const btn = (id: string, x: number, label: string, color: string) => {
+        g.fillStyle = color;
+        g.fillRect(x, 290, 378, 96);
+        g.fillStyle = '#fff';
+        g.font = 'bold 28px sans-serif';
+        g.fillText(label, x + 189, 338);
+        bd.rects.set(id, { x, y: 290, w: 378, h: 96 });
+      };
+      btn('skip', 14, 'DRIVE ON (Esc)', '#3c4a58');
+      btn('go', 408, t ? `START – ${t} s (Enter)` : 'PICK A JOB', t ? '#16a34a' : '#25303b');
+    }
+    bd.tex.needsUpdate = true;
+  }
+
+  /** A click in the 3D view: did it hit a button on the service board? */
+  private serviceClick = (e: PointerEvent) => {
+    if (this.serviceState !== 'menu' || !this.board) return;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.fp.camera);
+    const hit = ray.intersectObject(this.board.mesh, false)[0];
+    if (!hit?.uv) return;
+    const x = hit.uv.x * this.board.canvas.width, y = (1 - hit.uv.y) * this.board.canvas.height;
+    for (const [id, b] of this.board.rects) {
+      if (x < b.x || x > b.x + b.w || y < b.y || y > b.y + b.h) continue;
+      e.stopPropagation();
+      this.serviceAction(id);
+      return;
+    }
+  };
+
+  private serviceAction(id: string) {
+    audio.click();
+    if (id === 'go') return this.startService();
+    if (id === 'skip') return this.skipService();
+    const job = id.slice(4);
+    if (this.serviceJobs.has(job)) this.serviceJobs.delete(job);
+    else this.serviceJobs.add(job);
+    this.drawServiceBoard();
+  }
+
   private openService() {
     this.serviceState = 'menu';
     this.vehicle.frozen = true;
     this.serviceJobs.clear();
-    const jobs = this.serviceJobList();
-    const total = h('div', { class: 'svc-total' });
-    const rows = jobs.map((j) => {
-      const row = h('button', { class: 'svc-job', 'data-testid': `svc-${j.id}` }, h('b', {}, j.label), h('span', {}, j.detail), h('i', {}, `${j.sec} s`)) as HTMLButtonElement;
-      row.onclick = () => {
-        if (this.serviceJobs.has(j.id)) this.serviceJobs.delete(j.id);
-        else this.serviceJobs.add(j.id);
-        row.classList.toggle('on', this.serviceJobs.has(j.id));
-        draw();
-      };
-      return row;
-    });
-    const draw = () => {
-      const t = jobs.filter((j) => this.serviceJobs.has(j.id)).reduce((a, j) => a + j.sec, 0);
-      const late = Math.max(0, t - Game.SERVICE_BUDGET);
-      total.textContent = `Work: ${t} s of ${Game.SERVICE_BUDGET} s${late ? ` – ${late} s over: +${Math.ceil(late / 10) * 10} s penalty` : ''}`;
-      total.classList.toggle('late', late > 0);
-    };
-    draw();
-    const go = h('button', { class: 'btn primary', 'data-testid': 'svc-go', onclick: () => this.startService() }, 'Start service (Enter)');
-    const skip = h('button', { class: 'btn', 'data-testid': 'svc-skip', onclick: () => this.skipService() }, 'Skip – drive on (Esc)');
-    this.serviceTimerEl = null;
-    this.serviceEl = h('div', { class: 'svc-panel', 'data-testid': 'service' },
-      h('div', { class: 'panel-title' }, '🔧 Service zone'),
-      h('p', {}, 'Pick the jobs. The stage clock keeps running while the mechanics work – go over 3 minutes and you are late (time penalty).'),
-      ...rows, total, h('div', { class: 'svc-actions' }, skip, go));
-    this.container.append(this.serviceEl);
+    // a sensible default: whatever is actually worn or broken
+    const v = this.vehicle;
+    const dm = v.damage;
+    if (dm.front + dm.left + dm.right + dm.rear + dm.windscreen > 0.4) this.serviceJobs.add('body');
+    if (dm.engine > 0.15) this.serviceJobs.add('engine');
+    if (v.tyreWear > 0.3) this.serviceJobs.add('tyres');
+    if (this.sys.fuse >= 0 || this.fuseSpares < SPARE_FUSES) this.serviceJobs.add('fuses');
+    this.drawServiceBoard();
+    this.hud.warn('THE MECHANICS ARE READY – CLICK THE JOBS ON THE BOARD', 2.5);
+    this.renderer.domElement.addEventListener('pointerdown', this.serviceClick, true);
     window.addEventListener('keydown', this.serviceKey);
   }
 
@@ -776,20 +912,54 @@ export class Game {
     if (this.serviceState !== 'menu') return;
     if (e.key === 'Enter') this.startService();
     else if (e.key === 'Escape') this.skipService();
-    else if (/^[1-4]$/.test(e.key)) (this.serviceEl?.querySelectorAll('.svc-job')[Number(e.key) - 1] as HTMLButtonElement | undefined)?.click();
+    else if (/^[1-4]$/.test(e.key)) this.serviceAction(`job:${this.serviceJobList()[Number(e.key) - 1].id}`);
   };
 
   private startService() {
     if (this.serviceState !== 'menu') return;
     const jobs = this.serviceJobList().filter((j) => this.serviceJobs.has(j.id));
     const t = jobs.reduce((a, j) => a + j.sec, 0);
-    if (!t) return this.skipService();
+    if (!t) return;
     const late = Math.max(0, t - Game.SERVICE_BUDGET);
     if (late) this.addPenalty('Late out of service', Math.ceil(late / 10) * 10);
     this.serviceState = 'working';
     this.serviceUntil = performance.now() + t * 1000;
-    this.serviceTimerEl = h('div', { class: 'svc-timer' }, `${t} s`);
-    this.serviceEl?.replaceChildren(h('div', { class: 'panel-title' }, '🔧 Mechanics at work'), h('p', {}, jobs.map((j) => j.label).join(' · ')), this.serviceTimerEl);
+    this.serviceShown = -1;
+    this.drawServiceBoard();
+  }
+
+  /** Mechanics in orange overalls working round the car. */
+  private animateMechanics(on: boolean) {
+    if (!on) {
+      if (this.mechanics) this.mechanics.visible = false;
+      return;
+    }
+    if (!this.mechanics) {
+      this.mechanics = new THREE.Group();
+      const body = new THREE.CylinderGeometry(0.22, 0.26, 1.2, 8).translate(0, 0.6, 0);
+      const head = new THREE.SphereGeometry(0.15, 8, 6).translate(0, 1.38, 0);
+      const suit = new THREE.MeshStandardMaterial({ color: 0xff7a1a, roughness: 0.8 });
+      const skin = new THREE.MeshStandardMaterial({ color: 0xe0ac69, roughness: 0.8 });
+      for (let i = 0; i < 4; i++) {
+        const m = new THREE.Group();
+        m.add(new THREE.Mesh(body, suit), new THREE.Mesh(head, skin));
+        this.mechanics.add(m);
+      }
+      this.scene.add(this.mechanics);
+    }
+    this.mechanics.visible = true;
+    const root = this.vehicle.model.root;
+    const t = performance.now() / 1000;
+    const spots: Array<[number, number]> = [[1.4, 1.3], [-1.4, 1.3], [1.4, -1.3], [-1.4, -1.3]];
+    this.mechanics.children.forEach((m, i) => {
+      const [lx, lz] = spots[i];
+      const p = new THREE.Vector3(lx, -0.45, lz).applyQuaternion(root.quaternion).add(root.position);
+      m.position.copy(p);
+      // crouching and standing at the wheels
+      const crouch = 0.75 + 0.25 * Math.abs(Math.sin(t * 2 + i));
+      m.scale.set(1, crouch, 1);
+      m.lookAt(root.position.x, p.y, root.position.z);
+    });
   }
 
   private finishService() {
@@ -1012,8 +1182,18 @@ export class Game {
   }
 
   private closeService() {
-    this.serviceEl?.remove();
-    this.serviceEl = null;
+    this.animateMechanics(false);
+    if (this.board) {
+      // look back at the road
+      this.fp.targetYaw = 0;
+      this.fp.targetPitch = -0.1;
+    }
+    if (this.board) {
+      this.scene.remove(this.board.mesh);
+      this.board.tex.dispose();
+      this.board = null;
+    }
+    this.renderer?.domElement.removeEventListener('pointerdown', this.serviceClick, true);
     window.removeEventListener('keydown', this.serviceKey);
   }
 

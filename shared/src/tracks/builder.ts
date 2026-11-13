@@ -111,7 +111,12 @@ export function buildStage(def: StageDef): BuiltStage {
     const segSurface = seg.surface ?? def.surface;
     const segStart = d;
     if (seg.kind === 'straight') {
-      if (seg.service) service = { distance: d + 25, length: Math.max(40, seg.length - 50) };
+      if (seg.service) {
+        const len = Math.max(40, seg.length - 50);
+        const mid = d + 25 + len / 2;
+        const hw = def.roadWidth / 2;
+        service = { distance: d + 25, length: len, side: -1, apronFrom: mid - 70, apronTo: mid + 70, lat0: hw - 0.4, lat1: hw + 15, boxD: mid, boxLat: hw + 8.5, boxLen: 9, boxWid: 4.6 };
+      }
       // jumps draw a crowd on one side
       if (seg.feature === 'jump') crowdAt.push({ d: d + seg.length / 2 - 30, length: 50, side: (Math.round(d) % 2 ? 1 : -1) as 1 | -1 });
       spans.push({ from: d, to: d + seg.length, k0: 0, k1: 0 });

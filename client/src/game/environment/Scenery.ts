@@ -264,7 +264,10 @@ export class Scenery {
     if (c) c.scatter = 1.5;
   }
 
-  /** Mid-stage service park: team awnings, vans, tyres and a SERVICE banner over the road. */
+  /**
+   * Mid-stage service park: a concrete pit apron beside the road with a marked
+   * box, team awnings, vans and tyres behind it, and signs to the way in.
+   */
   private buildServicePark() {
     const sv = this.stage.service;
     if (!sv) return;
@@ -274,75 +277,72 @@ export class Scenery {
     const white = this.track(new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.6 }));
     const dark = this.track(new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 }));
     const box = (w: number, h: number, d: number, mat: THREE.Material) => new THREE.Mesh(this.track(new THREE.BoxGeometry(w, h, d)), mat);
-    for (let i = 0; i < 6; i++) {
-      const d = sv.distance + 20 + i * ((sv.length - 40) / 5);
+    const at = (d: number, out: number) => {
       const c = sampleAt(st.samples, d);
-      for (const side of [1, -1]) {
-        if ((i + (side > 0 ? 0 : 1)) % 2) continue;
-        const lx = Math.cos(c.h) * side, lz = -Math.sin(c.h) * side;
-        const x = c.x + lx * (hw + 9), z = c.z + lz * (hw + 9);
-        const y = this.terrain.heightAt(x, z);
-        const g = new THREE.Group();
-        g.position.set(x, y, z);
-        g.rotation.y = c.h;
-        // awning
-        const roof = box(8, 0.15, 6, mats[i % mats.length]);
-        roof.position.y = 3;
-        g.add(roof);
-        for (const [px, pz] of [[-3.8, -2.8], [3.8, -2.8], [-3.8, 2.8], [3.8, 2.8]]) {
-          const leg = box(0.1, 3, 0.1, white);
-          leg.position.set(px, 1.5, pz);
-          g.add(leg);
-        }
-        // team van behind
-        const van = box(2.1, 2.3, 5.5, white);
-        van.position.y = 1.25;
-        const vg = new THREE.Group();
-        vg.add(van);
-        const stripe = box(2.12, 0.4, 5.52, mats[(i + 1) % mats.length]);
-        stripe.position.y = 1.2;
-        vg.add(stripe);
-        vg.translateX(side * 6.5);
-        g.add(vg);
-        // tyre stacks
-        for (let t = 0; t < 4; t++) {
-          const tyre = new THREE.Mesh(this.track(new THREE.TorusGeometry(0.32, 0.12, 6, 12)), dark);
-          tyre.rotation.x = Math.PI / 2;
-          tyre.position.set(-3 + (t % 2) * 0.8, 0.12 + Math.floor(t / 2) * 0.25, -2);
-          g.add(tyre);
-        }
-        this.group.add(g);
+      const x = c.x + Math.cos(c.h) * sv.side * out, z = c.z - Math.sin(c.h) * sv.side * out;
+      return { x, z, y: this.terrain.heightAt(x, z), h: c.h };
+    };
+    // team awnings with vans and tyres along the back of the apron
+    for (let i = 0; i < 4; i++) {
+      const d = sv.apronFrom + 22 + i * ((sv.apronTo - sv.apronFrom - 44) / 3);
+      const p = at(d, sv.lat1 + 4);
+      const g = new THREE.Group();
+      g.position.set(p.x, p.y, p.z);
+      g.rotation.y = p.h;
+      const roof = box(6, 0.15, 8, mats[i % mats.length]);
+      roof.position.set(0, 3, 0);
+      g.add(roof);
+      for (const [px, pz] of [[-2.8, -3.8], [2.8, -3.8], [-2.8, 3.8], [2.8, 3.8]]) {
+        const leg = box(0.1, 3, 0.1, white);
+        leg.position.set(px, 1.5, pz);
+        g.add(leg);
       }
+      // the team van behind the awning (+x is the left of the road, so "out" is side × x)
+      const van = box(2.1, 2.3, 5.5, white);
+      van.position.set(sv.side * 6, 1.25, 0);
+      g.add(van);
+      const stripe = box(2.12, 0.4, 5.52, mats[(i + 1) % mats.length]);
+      stripe.position.set(sv.side * 6, 1.2, 0);
+      g.add(stripe);
+      for (let t = 0; t < 6; t++) {
+        const tyre = new THREE.Mesh(this.track(new THREE.TorusGeometry(0.32, 0.12, 6, 12)), dark);
+        tyre.rotation.x = Math.PI / 2;
+        tyre.position.set(sv.side * 1 + (t % 2) * 0.8, 0.12 + Math.floor(t / 2) * 0.25, -2.5);
+        g.add(tyre);
+      }
+      this.group.add(g);
     }
-    // SERVICE banner across the road at the entry
-    const c = sampleAt(st.samples, sv.distance);
-    const g = new THREE.Group();
-    g.position.set(c.x, c.y, c.z);
-    g.rotation.y = c.h;
-    for (const side of [1, -1]) {
-      const pole = box(0.2, 5.2, 0.2, white);
-      pole.position.set(side * (hw + 1.2), 2.6, 0);
-      g.add(pole);
-    }
-    const cv = document.createElement('canvas');
-    cv.width = 512;
-    cv.height = 64;
-    const cg = cv.getContext('2d')!;
-    cg.fillStyle = '#1d4ed8';
-    cg.fillRect(0, 0, 512, 64);
-    cg.fillStyle = '#fff';
-    cg.font = 'bold 40px sans-serif';
-    cg.textAlign = 'center';
-    cg.textBaseline = 'middle';
-    cg.fillText('SERVICE ZONE – STOP HERE', 256, 34);
-    const tex = this.track(new THREE.CanvasTexture(cv));
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const banner = new THREE.Mesh(this.track(new THREE.PlaneGeometry(hw * 2 + 2.4, 0.9)), this.track(new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })));
-    banner.position.y = 4.6;
-    banner.rotation.y = Math.PI;
-    g.add(banner);
-    this.group.add(g);
+    // signs: the zone banner over the road, and PIT arrows at the way in
+    const sign = (d: number, out: number, text: string, w: number, color: string, tall = 2.2) => {
+      const p = at(d, out);
+      const cv = document.createElement('canvas');
+      cv.width = 512;
+      cv.height = 128;
+      const cg = cv.getContext('2d')!;
+      cg.fillStyle = color;
+      cg.fillRect(0, 0, 512, 128);
+      cg.strokeStyle = '#fff';
+      cg.lineWidth = 8;
+      cg.strokeRect(6, 6, 500, 116);
+      cg.fillStyle = '#fff';
+      cg.font = 'bold 58px sans-serif';
+      cg.textAlign = 'center';
+      cg.textBaseline = 'middle';
+      cg.fillText(text, 256, 68);
+      const tex = this.track(new THREE.CanvasTexture(cv));
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const board = new THREE.Mesh(this.track(new THREE.PlaneGeometry(w, w / 4)), this.track(new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })));
+      board.position.set(p.x, p.y + tall, p.z);
+      board.rotation.y = p.h + Math.PI;
+      const pole = box(0.12, tall, 0.12, white);
+      pole.position.set(p.x, p.y + tall / 2, p.z);
+      this.group.add(board, pole);
+    };
+    sign(sv.apronFrom - 120, -(hw + 2.5), 'SERVICE ZONE', 3.2, '#1d4ed8', 2.4);
+    sign(sv.apronFrom - 40, hw + 2.2, sv.side < 0 ? 'PIT  ▶' : '◀  PIT', 2.2, '#d62828');
+    sign(sv.boxD + sv.boxLen / 2 + 9, sv.boxLat + 3.5, 'PIT BOX', 2.0, '#f59e0b', 2.6);
   }
+
 
   /**
    * The little things that make a rally road look real: marker posts along the

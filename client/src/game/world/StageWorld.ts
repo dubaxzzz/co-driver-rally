@@ -42,8 +42,10 @@ export function buildStageWorld(
   }
   // long stages draw a little less far (the far landscape and fog cover the rest)
   const long = stage.length > 12000;
-  const viewRoad = long ? 750 : 1000;
-  const viewGround = long ? 600 : 800;
+  // the road is never drawn further than the ground beside it (or the coarse far
+  // landscape would show through over it)
+  const viewRoad = long ? 620 : 820;
+  const viewGround = long ? 620 : 820;
   const sceneryView = long ? 520 : 650;
   const atmosphere = new Atmosphere(scene, weather, stage.def.scenery, opts.quality === 'high', opts.fogMultiplier, !!stage.def.flatBase);
   const scenery = new Scenery(stage, track.data, opts.physics, opts.quality);
