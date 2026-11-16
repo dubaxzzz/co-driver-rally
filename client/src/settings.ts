@@ -1,3 +1,4 @@
+import './progressReset'; // must wipe old progress before the garage loads
 /** User preferences + garage selection (local to this device). */
 import { DEFAULT_CONFIG, PAINTS, VEHICLES, WHEELS, type RallyConfig, type TyreCompound } from '@cdr/shared';
 import { career } from './career';

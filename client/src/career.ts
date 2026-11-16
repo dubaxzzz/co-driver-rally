@@ -27,6 +27,8 @@ export interface CareerSave {
   stats: { stages: number; wins: number; earned: number };
   /** Today's Daily Challenge progress. */
   daily: { date: string; bestMs: number | null; medal: 'none' | 'bronze' | 'silver' | 'gold'; finished: boolean };
+  /** The current limited event (date = its key). */
+  limited?: { date: string; bestMs: number | null; medal: 'none' | 'bronze' | 'silver' | 'gold'; finished: boolean };
 }
 
 const KEY = 'cdr.career';
@@ -140,6 +142,10 @@ export const career = {
     return true;
   },
   best: (key: string): number | null => save.bests[key] ?? null,
+  setLimited(limited: CareerSave['daily']) {
+    save = { ...save, limited };
+    commit();
+  },
   setDaily(daily: CareerSave['daily']) {
     save = { ...save, daily };
     commit();

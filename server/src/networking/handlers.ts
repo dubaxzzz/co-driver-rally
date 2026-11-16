@@ -9,6 +9,9 @@ import {
   validateConfig,
   dailyChallenge,
   dailyKey,
+  isLimitedKey,
+  limitedEvent,
+  limitedKey,
   SHARED_SWITCHES,
   validateSysCommand,
   type SharedSwitch,
@@ -27,6 +30,11 @@ import { dailyBoard } from '../daily/DailyBoard';
 /** Daily Challenge: the server decides stage + weather (no AI) for today's date. */
 function applyDaily(cfg: Partial<RallyConfig>): Partial<RallyConfig> | string {
   if (!cfg.daily) return cfg;
+  if (isLimitedKey(cfg.daily)) {
+    if (cfg.daily !== limitedKey()) return 'That limited event has ended – a new one is up.';
+    const le = limitedEvent(cfg.daily);
+    return { ...cfg, stageId: le.stageId, weather: le.weather, aiCount: 0, soloEvent: true };
+  }
   if (cfg.daily !== dailyKey()) return 'That Daily Challenge has ended – a new one is up.';
   const dc = dailyChallenge(cfg.daily);
   return { ...cfg, stageId: dc.stageId, weather: dc.weather, aiCount: 0, soloEvent: true };

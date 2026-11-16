@@ -8,7 +8,7 @@ import type { ClientToServerEvents, ServerToClientEvents } from '@cdr/shared';
 import { config } from './config';
 import { registerHandlers } from './networking/handlers';
 import { dailyBoard } from './daily/DailyBoard';
-import { dailyChallenge, dailyKey } from '@cdr/shared';
+import { dailyChallenge, dailyKey, limitedEvent, limitedEndsAt, limitedKey } from '@cdr/shared';
 
 const app = express();
 const httpServer = createServer(app);
@@ -26,6 +26,11 @@ const rooms = registerHandlers(io);
 app.get('/api/daily', (_req, res) => {
   const date = dailyKey();
   res.json({ challenge: dailyChallenge(date), board: dailyBoard.top(date) });
+});
+
+app.get('/api/limited', (_req, res) => {
+  const key = limitedKey();
+  res.json({ event: limitedEvent(key), endsAt: limitedEndsAt(key), board: dailyBoard.top(key) });
 });
 
 app.get('/api/health', (_req, res) => {

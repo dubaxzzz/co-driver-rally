@@ -131,6 +131,8 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 - Progress is saved in this browser (Settings → Reset career to start over).
 - **The start waits for you:** after the host starts a stage, nothing happens until every
   driver has started their car (ignition, then START). Then there's a 5-second countdown.
+- **Every week resets everyone** (Monday 00:00 UTC): money, cars, upgrades, paint/liveries,
+  the championship and event results all start fresh – your name and settings are kept.
 - **Every update resets everyone.** Each deploy gets a new build id; the first time a
   player opens the game after an update, their money, cars and championship start fresh (name and settings are kept) and a message tells them why.
 
@@ -170,6 +172,17 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 - No restarts in a round; the pause menu has *Retire* (0 points).
 - Season-end bonus: $25,000 for the title, $10,000 for P2, $5,000 for P3.
 - A navigator can still join any round with the room code shown before the start.
+
+## Limited events (a new one every 2 days)
+
+Every two days (UTC) there's a new **limited event**, the same for everyone, with its own
+leaderboard on the server. Each one has a theme, a stage, the weather and a stock loan car –
+for example **Midnight Mountain** (the full 5 km climb at night in the storm, in the fastest car),
+**Snow Sprint**, **Supercar Showdown**, **Monsoon Tarmac**, **No Second Chances** (no resets –
+only spectator pushes), **Mud Masters** and **Dusk Dash**. They come round in turn, so you never
+get the same kind twice in a row. Prizes are big: first finish $5,000, bronze $9,000, silver
+$18,000, gold $30,000 (a better medal later pays the difference). Find it on the main menu and
+under Play; the card shows how long is left.
 
 ## Daily challenge
 
@@ -361,6 +374,10 @@ grabs the gear stick, knocks it and comes back (it stays on the stick for quick 
 shifts), and it goes to the hydraulic handbrake while you pull it.
 
 **The ground never covers the road:** next to the road the ground is held just below the road surface, and the distant landscape is kept under it too.
+
+**Fewer draw calls:** all the static roadside bits (signs, posts, barriers, bridge parts,
+awnings…) are merged into one mesh per material per 300 m, the ground is drawn in bigger
+pieces, and far-off fallen trees and animals aren't drawn – about 45% fewer draw calls.
 
 **Long stages stay smooth:** only the trees, barriers and pieces of road and ground near a car
 take part in the physics (the rest are switched off), and long stages draw a little less far.

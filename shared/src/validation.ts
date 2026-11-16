@@ -28,7 +28,7 @@ export function validateConfig(p: unknown): Partial<RallyConfig> | null {
     out.aiCount = p.aiCount;
   }
   if (p.daily !== undefined) {
-    if (typeof p.daily !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(p.daily)) return null;
+    if (typeof p.daily !== 'string' || !/^(\d{4}-\d{2}-\d{2}|L\d{1,8})$/.test(p.daily)) return null; // a daily date or a limited event key
     out.daily = p.daily;
   }
   if (p.soloEvent !== undefined) {

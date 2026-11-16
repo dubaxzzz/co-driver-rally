@@ -4,7 +4,7 @@ import { net } from './multiplayer/NetClient';
 import { h, loadingOverlay, toast } from './ui/dom';
 import { joinScreen, lobbyScreen, menuScreen, playScreen, settingsScreen, type Screen } from './ui/screens';
 import './audio/AudioEngine';
-import { championshipScreen, dailyScreen } from './ui/events';
+import { championshipScreen, dailyScreen, limitedScreen } from './ui/events';
 import { eventCtx } from './events/context';
 
 /**
@@ -41,6 +41,9 @@ async function render() {
       break;
     case 'daily':
       current = dailyScreen(nav);
+      break;
+    case 'limited':
+      current = limitedScreen(nav);
       break;
     case 'create':
     case 'lobby':
@@ -122,6 +125,7 @@ async function boot() {
     if (racing) go('drive');
     else if (kind === 'championship') { await net.leave().catch(() => undefined); go('championship'); }
     else if (kind === 'daily') { await net.leave().catch(() => undefined); go('daily'); }
+    else if (kind === 'limited') { await net.leave().catch(() => undefined); go('limited'); }
     else go(lastLobby);
   }
 }
@@ -129,5 +133,8 @@ async function boot() {
 void boot();
 
 if (progressWasReset) {
-  setTimeout(() => toast('The game has been updated – everyone starts fresh! Your money, cars and championship have been reset.', 'ok', 8000), 800);
+  const msg = progressWasReset === 'week'
+    ? 'A new week has started – everyone starts fresh! Money, cars, liveries and the championship have been reset.'
+    : 'The game has been updated – everyone starts fresh! Your money, cars, liveries and championship have been reset.';
+  setTimeout(() => toast(msg, 'ok', 8000), 800);
 }

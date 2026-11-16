@@ -12,7 +12,7 @@ import { net, type NetError } from '../multiplayer/NetClient';
 import { MapView } from '../navigator/MapView';
 import { formatTime, settings, type Settings } from '../settings';
 import { career, money } from '../career';
-import { bestKey, TEAMS, dailyChallenge, dailyKey, vehicleById, MEDAL_PAY, STARTING_MONEY } from '@cdr/shared';
+import { bestKey, TEAMS, dailyChallenge, dailyKey, vehicleById, MEDAL_PAY, STARTING_MONEY, limitedEvent, limitedKey, limitedEndsAt } from '@cdr/shared';
 import { champ } from '../championship/state';
 import { h, screenHeader, toast } from './dom';
 
@@ -54,6 +54,7 @@ export function menuScreen(nav: Nav): Screen {
   const dStage = getStage(ch.stageId);
   const myDaily = save.daily.date === ch.date ? save.daily : null;
   const cs = champ.get();
+  const le = limitedEvent(limitedKey());
 
   const navBtn = (label: string, sub: string, route: string, primary = false, i = 0, id = '') => {
     const b = h('button', { class: `mm-btn ${primary ? 'primary' : ''}`, 'data-testid': id, style: `animation-delay:${120 + i * 70}ms` },
@@ -90,7 +91,7 @@ export function menuScreen(nav: Nav): Screen {
         h('p', { class: 'mm-tag' }, 'You can barely see the road. Your navigator can. Drive blind, trust their voice.'),
       ),
       h('nav', { class: 'mm-nav' },
-        navBtn('Play', 'Championship · daily · lobbies', 'play', true, 0, 'menu-play'),
+        navBtn('Play', 'Championship · daily · limited · lobbies', 'play', true, 0, 'menu-play'),
         navBtn('Garage', 'Cars · upgrades · paint', 'garage', false, 1, 'menu-garage'),
         navBtn('Settings', 'Audio · graphics · controls', 'settings', false, 2, 'menu-settings'),
       ),
@@ -98,6 +99,7 @@ export function menuScreen(nav: Nav): Screen {
     h('aside', { class: 'mm-cards' },
       card('YOUR CAR', car.name, [stat('Power', car.stats.power), stat('Handling', car.stats.handling), stat('Braking', car.stats.braking)], 'garage', 0, 'menu-car'),
       card(`DAILY · ${ch.date}`, dStage?.def.name ?? 'Daily challenge', [h('div', { class: 'mm-card-m' }, `${WEATHER[ch.weather].name} · ${vehicleById(ch.carId).name}`), h('div', { class: 'mm-card-m strong' }, medal)], 'daily', 1, 'menu-daily'),
+      card(`LIMITED · ${limitedLeft().replace(" left", "")}`, le.name, [h('div', { class: 'mm-card-m' }, `${getStage(le.stageId)?.def.name ?? ''} · ${WEATHER[le.weather].name}`), h('div', { class: 'mm-card-m strong' }, `Gold pays ${money(le.pay.gold)}`)], 'limited', 2, 'menu-limited'),
       card('CHAMPIONSHIP', cs ? `Season ${cs.season}` : 'Start your career', [h('div', { class: 'mm-card-m' }, cs ? (cs.round >= cs.schedule.length ? 'Season complete' : `Round ${cs.round + 1}/${cs.schedule.length} · ${TEAMS[cs.team].name}`) : 'Six rounds · teams · contracts'), cs ? h('div', { class: 'mm-card-m strong' }, `P${champ.standingsPosition()} · ${cs.points.player ?? 0} pts`) : null], 'championship', 2, 'menu-champ'),
     ),
   );
@@ -365,6 +367,12 @@ function champSub() {
   if (s.round >= s.schedule.length) return `Season ${s.season} finished – start the next one.`;
   return `Season ${s.season} · round ${s.round + 1} of ${s.schedule.length} · ${TEAMS[s.team].name} · P${champ.standingsPosition()} with ${s.points.player ?? 0} pts`;
 }
+/** "1d 7h left" for the current limited event. */
+export function limitedLeft() {
+  const ms = Math.max(0, limitedEndsAt(limitedKey()) - Date.now());
+  const hrs = Math.floor(ms / 3600000);
+  return hrs >= 24 ? `${Math.floor(hrs / 24)}d ${hrs % 24}h left` : `${hrs}h ${Math.floor((ms % 3600000) / 60000)}m left`;
+}
 function dailySub() {
   const ch = dailyChallenge(dailyKey());
   const me = career.get().daily;
@@ -384,9 +392,10 @@ export function playScreen(nav: Nav): Screen {
       h('div', { class: 'play-row-title' }, 'Solo'),
       h(
         'div',
-        { class: 'play-grid' },
+        { class: 'play-grid four' },
         card('SOLO', 'Championship', champSub(), 'championship', true, 'play-championship'),
         card('SOLO', 'Daily challenge', dailySub(), 'daily', false, 'play-daily'),
+        card(`LIMITED · ${limitedLeft()}`, limitedEvent(limitedKey()).name, `${limitedEvent(limitedKey()).blurb} A new event every 2 days.`, 'limited', false, 'play-limited'),
         card('SOLO', 'Quick stage', 'Any stage, any weather, just you against the clock. Prize money for every finish.', 'solo', false, 'play-solo'),
       ),
       h('div', { class: 'play-row-title' }, 'Multiplayer'),

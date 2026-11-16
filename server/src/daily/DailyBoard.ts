@@ -1,4 +1,4 @@
-import { dailyKey } from '@cdr/shared';
+import { dailyKey, isLimitedKey, limitedKey } from '@cdr/shared';
 
 export interface DailyEntry {
   name: string;
@@ -7,14 +7,14 @@ export interface DailyEntry {
 }
 
 /**
- * Daily Challenge leaderboard. Times come from the server's own race timing,
+ * Daily Challenge and limited event leaderboards. Times come from the server's own race timing,
  * never from the client. Kept in memory (a server restart clears it).
  */
 class DailyBoard {
   private boards = new Map<string, DailyEntry[]>();
 
   add(date: string, name: string, timeMs: number) {
-    if (date !== dailyKey()) return; // only today's challenge counts
+    if (date !== dailyKey() && date !== limitedKey()) return; // only today's challenge / the current event counts
     const list = this.boards.get(date) ?? [];
     const existing = list.find((e) => e.name === name);
     if (existing) {
@@ -28,7 +28,7 @@ class DailyBoard {
     list.sort((a, b) => a.timeMs - b.timeMs);
     this.boards.set(date, list.slice(0, 50));
     // forget old days
-    for (const key of this.boards.keys()) if (key < date && this.boards.size > 3) this.boards.delete(key);
+    for (const key of this.boards.keys()) if (isLimitedKey(key) === isLimitedKey(date) && key !== date && this.boards.size > 3) this.boards.delete(key);
   }
 
   top(date: string, n = 20) {

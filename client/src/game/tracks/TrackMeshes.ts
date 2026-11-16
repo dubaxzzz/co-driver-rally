@@ -126,7 +126,7 @@ const CELL = 5;
 const VISIBLE_RADIUS = 300;
 const COLLIDE_RADIUS = 120;
 /** Terrain tile size in cells (tiles only exist near the road). */
-const TILE = 32;
+const TILE = 48;
 
 /** Builds the road ribbon, terrain (with river channels) and flowing water. */
 export function buildTrack(stage: BuiltStage): TrackBuild {
@@ -187,7 +187,8 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
   roadGeo.computeVertexNormals();
   const roadMats = surfaceList.map((sf) => {
     const wet = sf === 'mud' ? 0.45 : sf === 'snow' ? 0.6 : sf === 'tarmac' ? 0.75 : 1;
-    return new THREE.MeshStandardMaterial({ map: surfaceTexture(sf, sc.verge), roughness: wet, metalness: 0 });
+    // pulled towards the camera in the depth test, so the ground right beside it can never show through
+    return new THREE.MeshStandardMaterial({ map: surfaceTexture(sf, sc.verge), roughness: wet, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
   });
   // drawn in ~400 m chunks (sharing one vertex buffer) so the far road is culled
   const road = new THREE.Group();
@@ -450,7 +451,10 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
           }
         }
         tl.heights[ci] = y;
-        tl.ry[ci] = roadY;
+        // the lowest the road gets close by (dips and the bottom of jumps sag between samples)
+        let ryMin = roadY;
+        for (let j = Math.max(0, best - 8); j <= Math.min(tn - 1, best + 8); j++) ryMin = Math.min(ryMin, ts[j].y);
+        tl.ry[ci] = ryMin;
         tl.dists[ci] = pit && pit.edge > 0.5 ? Math.min(dist, hw) : dist;
         lowest = Math.min(lowest, y);
       }
@@ -492,7 +496,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
     for (const tl of tiles) {
       if (!tl) continue;
       for (let ci = 0; ci < T * T; ci++) {
-        if (tl.dists[ci] < reachRoad && tl.best[ci] >= 0) tl.heights[ci] = Math.min(tl.heights[ci], tl.ry[ci] - 0.22);
+        if (tl.dists[ci] < reachRoad && tl.best[ci] >= 0) tl.heights[ci] = Math.min(tl.heights[ci], tl.ry[ci] - 0.4);
       }
     }
   }

@@ -992,7 +992,7 @@ input[type='range'] { accent-color: var(--accent); width: 180px; }
 .mm-btn.primary:hover { background: linear-gradient(100deg, #ff5a30 0%, #ffa020 100%); }
 
 /* info cards: one row along the bottom right – they never sit on the menu or the title */
-.mm-cards { grid-column: 2; grid-row: 3; justify-self: end; display: grid; grid-template-columns: repeat(3, minmax(0, 230px)); gap: 12px; padding: 0 var(--pad) clamp(18px, 3.5vh, 36px) 0; width: 100%; justify-content: end; }
+.mm-cards { grid-column: 2; grid-row: 3; justify-self: end; display: grid; grid-template-columns: repeat(4, minmax(0, 210px)); gap: 12px; padding: 0 var(--pad) clamp(18px, 3.5vh, 36px) 0; width: 100%; justify-content: end; }
 .mm-card { text-align: left; background: rgba(12,15,19,.82); border: 1px solid rgba(255,255,255,.08); border-top: 3px solid var(--accent); color: #fff; padding: 12px 14px; cursor: pointer; backdrop-filter: blur(10px); transition: transform .18s, border-color .18s, background .18s; animation: mmUp .6s both; min-width: 0; border-radius: 0 0 var(--radius) var(--radius); }
 .mm-card:hover { transform: translateY(-4px); background: rgba(20,24,30,.94); border-color: rgba(255,255,255,.18); border-top-color: var(--accent2); }
 .mm-card-k { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .2em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1011,7 +1011,7 @@ input[type='range'] { accent-color: var(--accent); width: 180px; }
 @media (max-width: 1150px) {
   .screen.mm { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; overflow-y: auto; }
   .mm-main { grid-column: 1; grid-row: 2; padding-top: 4vh; }
-  .mm-cards { grid-column: 1; grid-row: 3; justify-self: stretch; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 24px var(--pad) 32px; }
+  .mm-cards { grid-column: 1; grid-row: 3; justify-self: stretch; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 24px var(--pad) 32px; }
   .mm-vignette { background: linear-gradient(90deg, rgba(5,6,8,.9), rgba(5,6,8,.35) 70%), linear-gradient(0deg, rgba(5,6,8,.95), rgba(5,6,8,0) 50%); }
 }
 @media (max-width: 640px) {

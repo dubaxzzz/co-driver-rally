@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries as mergeGeos } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { sampleAt, type BuiltStage, type CrowdZone, type TreeStyle, type Obstacle } from '@cdr/shared';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 import { mulberry32, type TerrainData } from '../tracks/TrackMeshes';
@@ -82,6 +83,69 @@ export class Scenery {
     this.buildCrowds(rand);
     this.buildServicePark();
     this.buildSplitSigns();
+    this.mergeStatics();
+  }
+
+  /** Merged static scenery, one mesh per material per 300 m cell (culled by distance). */
+  private staticCells: THREE.Mesh[] = [];
+  private wireCells: THREE.LineSegments[] = [];
+
+  /**
+   * Hundreds of separate little meshes (signs, posts, barriers, bridge parts,
+   * awnings…) each cost a draw call. Merge everything static into one mesh per
+   * material per 300 m cell – a few dozen draw calls instead of hundreds.
+   */
+  private mergeStatics() {
+    this.group.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(this.group.matrixWorld).invert();
+    const CELL = 300;
+    const buckets = new Map<string, { mat: THREE.Material; geos: THREE.BufferGeometry[]; shadow: boolean }>();
+    const remove: THREE.Mesh[] = [];
+    const isInObstacles = (o: THREE.Object3D) => {
+      for (let p: THREE.Object3D | null = o; p; p = p.parent) if (p === this.obstacleGroup) return true;
+      return false;
+    };
+    this.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || (m as THREE.InstancedMesh).isInstancedMesh || o.userData.keep || Array.isArray(m.material) || !m.visible || isInObstacles(o)) return;
+      const src = m.geometry;
+      if (!src.getAttribute('position')) return;
+      let g = src.index ? src.toNonIndexed() : src.clone();
+      g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
+      if (!g.getAttribute('normal')) g.computeVertexNormals();
+      const out = new THREE.BufferGeometry();
+      out.setAttribute('position', g.getAttribute('position'));
+      out.setAttribute('normal', g.getAttribute('normal'));
+      const uv = g.getAttribute('uv');
+      out.setAttribute('uv', uv ?? new THREE.BufferAttribute(new Float32Array(g.getAttribute('position').count * 2), 2));
+      const col = g.getAttribute('color');
+      const mat = m.material as THREE.Material & { vertexColors?: boolean };
+      if (mat.vertexColors) {
+        if (!col) return; // can't merge safely
+        out.setAttribute('color', col);
+      }
+      g = out;
+      g.computeBoundingSphere();
+      const c = g.boundingSphere!.center;
+      const key = `${Math.floor(c.x / CELL)},${Math.floor(c.z / CELL)}|${mat.uuid}`;
+      let b = buckets.get(key);
+      if (!b) buckets.set(key, (b = { mat, geos: [], shadow: false }));
+      b.geos.push(g);
+      b.shadow ||= m.castShadow;
+      remove.push(m);
+    });
+    for (const m of remove) m.parent?.remove(m);
+    for (const b of buckets.values()) {
+      const merged = mergeGeos(b.geos, false);
+      b.geos.forEach((g) => g.dispose());
+      if (!merged) continue;
+      merged.computeBoundingSphere();
+      const mesh = new THREE.Mesh(this.track(merged), b.mat);
+      mesh.castShadow = b.shadow;
+      mesh.receiveShadow = true;
+      this.group.add(mesh);
+      this.staticCells.push(mesh);
+    }
   }
 
   private lengthK = 1;
@@ -217,6 +281,7 @@ export class Scenery {
         if (merged) {
           const tape = new THREE.Mesh(this.track(merged), tapeMat);
           this.group.add(tape);
+          tape.userData.keep = true;
           this.crowds[this.crowds.length - 1].tape = tape;
         }
       }
@@ -481,10 +546,24 @@ export class Scenery {
       this.addChunked(poles);
       this.addChunked(arms);
       if (wirePts.length) {
-        const wg = this.track(new THREE.BufferGeometry());
-        wg.setAttribute('position', new THREE.Float32BufferAttribute(wirePts, 3));
-        const wires = new THREE.LineSegments(wg, this.track(new THREE.LineBasicMaterial({ color: 0x1a1a1a })));
-        this.group.add(wires);
+        // split into 300 m pieces so far-off wires are hidden with their poles
+        // (otherwise wires on the far side of a mountain float in the sky)
+        const wireMat = this.track(new THREE.LineBasicMaterial({ color: 0x1a1a1a }));
+        const cells = new Map<string, number[]>();
+        for (let i = 0; i < wirePts.length; i += 6) {
+          const key = `${Math.floor(wirePts[i] / 300)},${Math.floor(wirePts[i + 2] / 300)}`;
+          let l = cells.get(key);
+          if (!l) cells.set(key, (l = []));
+          for (let k = 0; k < 6; k++) l.push(wirePts[i + k]);
+        }
+        for (const pts of cells.values()) {
+          const g = this.track(new THREE.BufferGeometry());
+          g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+          g.computeBoundingSphere();
+          const wires = new THREE.LineSegments(g, wireMat);
+          this.group.add(wires);
+          this.wireCells.push(wires);
+        }
       }
     }
   }
@@ -498,7 +577,7 @@ export class Scenery {
    * (one mesh for the whole stage was drawn in full every frame).
    */
   private addChunked(src: THREE.InstancedMesh) {
-    const CELL = 200;
+    const CELL = 320;
     const cells = new Map<string, number[]>();
     const m = new THREE.Matrix4();
     for (let i = 0; i < src.count; i++) {
@@ -729,6 +808,16 @@ export class Scenery {
       const b = c.boundingSphere;
       if (b) c.visible = b.center.distanceTo(camera) - b.radius < maxDist;
     }
+    for (const m of this.staticCells) {
+      const b = m.geometry.boundingSphere;
+      if (b) m.visible = b.center.distanceTo(camera) - b.radius < maxDist;
+    }
+    for (const w of this.wireCells) {
+      const b = w.geometry.boundingSphere;
+      if (b) w.visible = b.center.distanceTo(camera) - b.radius < maxDist;
+    }
+    // fallen trees, rocks and animals far away aren't drawn either
+    for (const o of this.obstacleGroup.children) o.visible = o.position.distanceTo(camera) < maxDist * 0.8;
   }
 
   private track<T extends { dispose(): void }>(o: T) {

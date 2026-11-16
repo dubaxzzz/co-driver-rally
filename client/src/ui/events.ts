@@ -8,6 +8,10 @@ import {
   dailyKey,
   getStage,
   repairCost,
+  limitedEvent,
+  limitedKey,
+  limitedEndsAt,
+  type LimitedEvent,
   ENGINE_REBUILD,
   GEARBOX_REBUILD,
   TYRE_COMPOUNDS,
@@ -335,6 +339,68 @@ export function dailyScreen(nav: Nav): Screen {
       show(data.challenge, data.board);
     } catch {
       show(dailyChallenge(date), null);
+    }
+  })();
+  return { el, dispose: () => (disposed = true) };
+}
+
+/** The limited event: a new one every 2 days, the same for everyone, with its own leaderboard. */
+export function limitedScreen(nav: Nav): Screen {
+  const body = h('div', { class: 'champ-wrap' }, h('div', { class: 'panel' }, 'Loading the event…'));
+  const el = h('div', { class: 'screen' }, header(nav, 'Limited event'), body);
+  let disposed = false;
+
+  const show = (ev: LimitedEvent, endsAt: number, board: BoardRow[] | null) => {
+    if (disposed) return;
+    const stage = getStage(ev.stageId)!;
+    const car = vehicleById(ev.carId);
+    const me = career.get().limited;
+    const mine = me && me.date === ev.key ? me : null;
+    const target = (m: 'gold' | 'silver' | 'bronze', icon: string) =>
+      h('div', { class: `medal-row ${mine && mine.bestMs !== null && mine.bestMs <= ev.targets[m] ? 'got' : ''}` }, h('span', {}, `${icon} ${m[0].toUpperCase()}${m.slice(1)}`), h('span', {}, formatTime(ev.targets[m])), h('span', {}, `+${money(ev.pay[m])}`));
+    const start = h('button', { class: 'btn primary big', 'data-testid': 'limited-go' }, mine?.finished ? 'Try again' : 'Enter the event');
+    start.onclick = () => {
+      eventCtx.set({ kind: 'limited', key: ev.key, carId: ev.carId });
+      void launch(nav, { stageId: ev.stageId, weather: ev.weather, aiCount: 0, aiSkill: 'medium', daily: ev.key }, `${ev.name} – ${stage.def.name}`);
+    };
+    const left = Math.max(0, endsAt - Date.now());
+    const hrs = Math.floor(left / 3600000);
+    const boardEl = h('div', { class: 'leaderboard', 'data-testid': 'limited-board' }, h('div', { class: 'panel-title' }, 'Event leaderboard'));
+    if (board === null) boardEl.append(h('div', { class: 'setup-desc' }, 'The leaderboard is only available on the online server.'));
+    else if (!board.length) boardEl.append(h('div', { class: 'setup-desc' }, 'No times yet – be the first!'));
+    const myName = settings.get().playerName.trim() || 'Driver';
+    board?.forEach((r, i) =>
+      boardEl.append(h('div', { class: `lb-row ${r.name === myName ? 'you' : ''}` }, h('span', { class: 'pos' }, String(i + 1)), h('span', { class: 'who' }, r.name), h('span', { class: 't' }, formatTime(r.timeMs)))),
+    );
+    body.replaceChildren(
+      h('div', { class: 'champ-cols' },
+        h('div', { class: 'champ-col' },
+          h('div', { class: 'panel daily-card' },
+            h('div', { class: 'k' }, `LIMITED EVENT · ENDS IN ${hrs >= 24 ? `${Math.floor(hrs / 24)}d ${hrs % 24}h` : `${hrs}h ${Math.floor((left % 3600000) / 60000)}m`}`),
+            h('div', { class: 'stage-name', style: 'font-size:28px' }, ev.name),
+            h('div', { class: 'stage-meta' }, `${stage.def.name} · ${stage.def.location} · ${((stage.finishDistance - stage.startDistance) / 1000).toFixed(1)} km · ${WEATHER[ev.weather].name}`),
+            h('div', { class: 'setup-desc' }, ev.blurb),
+            h('div', { class: 'setup-desc' }, `Everyone drives the same loan car: a stock ${car.name}.${ev.rule === 'noResets' ? ' NO RESETS – only spectator pushes (H).' : ''} A new event every 2 days.`),
+            target('gold', '🥇'), target('silver', '🥈'), target('bronze', '🥉'),
+            h('div', { class: 'setup-desc' }, `First finish: +${money(ev.finishPay)}. A better medal later pays the difference.`),
+            h('div', { class: 'daily-mine', 'data-testid': 'limited-mine' }, mine?.bestMs != null ? `Your best: ${formatTime(mine.bestMs)}${mine.medal !== 'none' ? ` · ${mine.medal} medal` : ''}` : 'You have not driven this event yet.'),
+            start,
+          ),
+        ),
+        h('div', { class: 'champ-col' }, h('div', { class: 'panel' }, boardEl)),
+      ),
+    );
+  };
+
+  (async () => {
+    const key = limitedKey();
+    try {
+      const base = import.meta.env.VITE_SERVER_URL || '';
+      const res = await fetch(`${base}/api/limited`);
+      const data = (await res.json()) as { event: LimitedEvent; endsAt: number; board: BoardRow[] };
+      show(data.event, data.endsAt, data.board);
+    } catch {
+      show(limitedEvent(key), limitedEndsAt(key), null);
     }
   })();
   return { el, dispose: () => (disposed = true) };

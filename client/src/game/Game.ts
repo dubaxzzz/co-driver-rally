@@ -39,6 +39,7 @@ import { applySharedSwitch, decodeSwitches, defaultSwitches,
   stageConditions,
   zoneAmount,
   showerAmount,
+  limitedEvent,
   type StageConditions,
   encodeSystems,
   stepSystems,
@@ -78,7 +79,7 @@ import { DAMAGE_KEYS, Vehicle } from './vehicle/Vehicle';
 import type { AIDriver as AIDriverT } from './ai/AIDriver';
 import { buildStageWorld, type StageWorld } from './world/StageWorld';
 
-export type GameExit = 'menu' | 'lobby' | 'service' | 'daily';
+export type GameExit = 'menu' | 'lobby' | 'service' | 'daily' | 'limited';
 
 /**
  * The driver's game: owns the renderer, physics world, vehicle, stage and
@@ -187,7 +188,7 @@ export class Game {
         sel.vehicle = applyUpgrades(vehicleById(ctx.carId), ctx.upgrades);
         const team = TEAMS[champ.get()?.team ?? 'privateer'];
         if (team.carId) sel.paint = { id: team.id, name: team.name, body: team.colour, accent: team.accent };
-      } else if (ctx.kind === 'daily') {
+      } else if (ctx.kind === 'daily' || ctx.kind === 'limited') {
         sel.vehicle = vehicleById(ctx.carId); // loan car, stock – same for everyone
       }
       const model = createCarModel(sel.paint, sel.wheel, sel.vehicle.body);
@@ -263,7 +264,14 @@ export class Game {
 
   // ---------------------------------------------------------------- setup
   private bindInput() {
-    this.input.on('reset', () => this.resetVehicle());
+    this.input.on('reset', () => {
+      // limited event rule: no resets – only a spectator push
+      if (this.ctx.kind === 'limited' && limitedEvent(this.ctx.key).rule === 'noResets') {
+        this.hud.warn('NO RESETS IN THIS EVENT – PRESS H FOR A SPECTATOR PUSH', 2);
+        return;
+      }
+      this.resetVehicle();
+    });
     this.input.on('push', () => this.pushCar());
     this.input.on('fix', () => this.startFix(-1, false));
     this.input.on('boost', () => this.fireBoost());
@@ -1203,6 +1211,7 @@ export class Game {
     this.hud.center('FINISH');
     if (this.ctx.kind === 'championship') return this.finishChampionship(r);
     if (this.ctx.kind === 'daily') return this.finishDaily(r, this.ctx.date);
+    if (this.ctx.kind === 'limited') return this.finishDaily(r, this.ctx.key, true);
 
     // ---- prize money + personal best ----
     const state = this.raceState!;
@@ -1357,22 +1366,27 @@ export class Game {
     this.finishChampionship(null);
   }
 
-  private finishDaily(r: RaceResult, date: string) {
-    const ch = dailyChallenge(date);
+  /** Daily challenge or limited event finish: medal, prize money (once per event), leaderboard. */
+  private finishDaily(r: RaceResult, date: string, limited = false) {
+    const le = limited ? limitedEvent(date) : null;
+    const ch = le ?? dailyChallenge(date);
+    const medalPay = le ? le.pay : MEDAL_PAY;
     const medal = medalFor(r.timeMs, ch.targets);
-    const prev = career.get().daily;
+    const prev = (limited ? career.get().limited : career.get().daily) ?? { date: '', bestMs: null, medal: 'none' as const, finished: false };
     const today = prev.date === date ? prev : { date, bestMs: null, medal: 'none' as const, finished: false };
-    let pay = today.finished ? 0 : DAILY_FINISH_PAY;
+    let pay = today.finished ? 0 : le ? le.finishPay : DAILY_FINISH_PAY;
     const lines: Array<[string, number]> = [];
-    if (pay) lines.push(['First finish today', pay]);
+    if (pay) lines.push([le ? `First finish – ${le.name}` : 'First finish today', pay]);
     if (MEDAL_RANK[medal] > MEDAL_RANK[today.medal]) {
-      const diff = MEDAL_PAY[medal] - MEDAL_PAY[today.medal];
+      const diff = medalPay[medal] - medalPay[today.medal];
       lines.push([`${medal[0].toUpperCase()}${medal.slice(1)} medal${today.medal !== 'none' ? ' (upgrade)' : ''}`, diff]);
       pay += diff;
     }
     const best = today.bestMs === null || r.timeMs < today.bestMs;
-    career.setDaily({ date, bestMs: best ? r.timeMs : today.bestMs, medal: MEDAL_RANK[medal] > MEDAL_RANK[today.medal] ? medal : today.medal, finished: true });
-    if (pay) career.credit(`daily:${date}:${r.finishedAt}`, pay, false);
+    const rec = { date, bestMs: best ? r.timeMs : today.bestMs, medal: MEDAL_RANK[medal] > MEDAL_RANK[today.medal] ? medal : today.medal, finished: true };
+    if (limited) career.setLimited(rec);
+    else career.setDaily(rec);
+    if (pay) career.credit(`${limited ? 'limited' : 'daily'}:${date}:${r.finishedAt}`, pay, false);
     this.prize = { runId: this.raceState?.runId ?? 0, total: pay };
     const t = ch.targets;
     const tgt = (m: 'gold' | 'silver' | 'bronze', ms: number) =>
@@ -1381,7 +1395,7 @@ export class Game {
       'div',
       { class: 'rewards', 'data-testid': 'rewards' },
       h('div', { class: 'new-record' }, medal === 'none' ? 'NO MEDAL – TRY AGAIN' : `${medal.toUpperCase()} MEDAL!`),
-      best ? h('div', { class: 'sub' }, 'Your best time today.') : null,
+      best ? h('div', { class: 'sub' }, limited ? 'Your best time in this event.' : 'Your best time today.') : null,
       tgt('gold', t.gold), tgt('silver', t.silver), tgt('bronze', t.bronze),
       h('div', { class: 'panel-title', style: 'margin:14px 0 6px' }, 'Prize money'),
       ...(lines.length ? lines : [['Nothing new this time', 0] as [string, number]]).map(([l, a]) => h('div', { class: 'prize-line' }, h('span', {}, l), h('span', {}, `+${money(a)}`))),
@@ -1392,7 +1406,7 @@ export class Game {
       this.showOverlay(
         resultsOverlay(r, this.stage, [
           { label: 'Try again', primary: true, onClick: () => this.restart() },
-          { label: 'Daily leaderboard', onClick: () => void this.leaveTo('daily') },
+          { label: limited ? 'Event leaderboard' : 'Daily leaderboard', onClick: () => void this.leaveTo(limited ? 'limited' : 'daily') },
           { label: 'Main menu', onClick: () => this.leave() },
         ], undefined, extra),
       );
@@ -1450,7 +1464,7 @@ export class Game {
           this.ctx.kind === 'quick' && net.isHost ? h('button', { class: 'btn', onclick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) }, 'Back to lobby') : null,
           champRound
             ? h('button', { class: 'btn danger', onclick: () => this.retire() }, 'Retire from round (0 pts)')
-            : h('button', { class: 'btn danger', onclick: () => void (this.ctx.kind === 'daily' ? this.leaveTo('daily') : this.leave()) }, 'Quit rally'),
+            : h('button', { class: 'btn danger', onclick: () => void (this.ctx.kind === 'daily' || this.ctx.kind === 'limited' ? this.leaveTo(this.ctx.kind) : this.leave()) }, 'Quit rally'),
         ),
       ),
     );
@@ -1626,7 +1640,7 @@ export class Game {
           h('p', { class: 'setup-desc' }, 'You drove into the river. The current carried the car off and water flooded the engine – it won\'t run again. Cross rivers on the bridge!'),
           h('div', { class: 'actions' },
             !multi || net.isHost ? h('button', { class: 'btn primary', onclick: () => this.restart() }, 'Restart stage') : null,
-            h('button', { class: 'btn', onclick: () => (this.ctx.kind === 'daily' ? void this.leaveTo('daily') : this.leave()) }, this.ctx.kind === 'daily' ? 'Daily challenge' : 'Main menu'),
+            h('button', { class: 'btn', onclick: () => (this.ctx.kind === 'daily' || this.ctx.kind === 'limited' ? void this.leaveTo(this.ctx.kind) : this.leave()) }, this.ctx.kind === 'daily' ? 'Daily challenge' : this.ctx.kind === 'limited' ? 'Limited event' : 'Main menu'),
           ),
         ),
       ),

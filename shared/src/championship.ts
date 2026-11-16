@@ -199,3 +199,68 @@ export function medalFor(ms: number, t: DailyChallenge['targets']): Medal {
 }
 
 export const MEDAL_RANK: Record<Medal, number> = { none: 0, bronze: 1, silver: 2, gold: 3 };
+
+// ------------------------------------------------------------------ limited events (a new one every 2 days)
+const EVENT_MS = 2 * 86400000;
+/** The current limited event's key, the same for every player ("L" + 2-day period number, UTC). */
+export const limitedKey = (now = Date.now()) => `L${Math.floor(now / EVENT_MS)}`;
+export const isLimitedKey = (k: string) => /^L\d+$/.test(k);
+/** When the event with this key ends (ms since epoch). */
+export const limitedEndsAt = (key: string) => (Number(key.slice(1)) + 1) * EVENT_MS;
+
+export type LimitedRule = 'none' | 'noResets';
+export interface LimitedEvent extends DailyChallenge {
+  key: string;
+  name: string;
+  blurb: string;
+  rule: LimitedRule;
+  /** Prize per medal (paid once per event; a better medal later pays the difference). */
+  pay: Record<Medal, number>;
+  finishPay: number;
+}
+
+interface Template {
+  name: string;
+  blurb: string;
+  stages: (s: (typeof STAGE_DEFS)[number]) => boolean;
+  weather: WeatherId[];
+  car: 'cheap' | 'mid' | 'top' | 'any';
+  rule?: LimitedRule;
+}
+const TEMPLATES: Template[] = [
+  { name: 'Midnight Mountain', blurb: 'The full Col de la Couronne climb in the dark and the rain, in a top-class car. The longest, hardest event there is.', stages: (s) => s.id === 'col-couronne', weather: ['storm'], car: 'top' },
+  { name: 'Snow Sprint', blurb: 'Ice, snow and snowbanks in a little front-wheel-drive hatchback. Momentum is everything.', stages: (s) => s.surface === 'snow', weather: ['snow'], car: 'cheap' },
+  { name: 'Supercar Showdown', blurb: 'The fastest car in the game on loose gravel. Huge power, very little grip – hang on.', stages: (s) => s.surface === 'gravel' && s.id !== 'col-couronne', weather: ['clear', 'overcast'], car: 'top' },
+  { name: 'Monsoon Tarmac', blurb: 'Asphalt stages under a tropical downpour. Aquaplaning optional.', stages: (s) => s.surface === 'tarmac', weather: ['rain', 'storm'], car: 'mid' },
+  { name: 'No Second Chances', blurb: 'No resets allowed (R does nothing) – only a spectator push can save you. Drive within yourself.', stages: (s) => s.id !== 'col-couronne', weather: ['overcast', 'dusk', 'clear'], car: 'mid', rule: 'noResets' },
+  { name: 'Mud Masters', blurb: 'The muddiest stages in the wet. Keep it pointing the right way.', stages: (s) => /mud|wales|moor|forest/i.test(s.id) && s.id !== 'col-couronne', weather: ['rain'], car: 'cheap' },
+  { name: 'Dusk Dash', blurb: 'Fast stages into the sunset with the sun in your eyes.', stages: (s) => s.surface !== 'snow' && s.id !== 'col-couronne', weather: ['dusk'], car: 'mid' },
+];
+
+/** The limited event for a key: chosen and set up the same way for everyone. */
+export function limitedEvent(key: string): LimitedEvent {
+  const period = Number(key.slice(1)) || 0;
+  const rnd = mulberry(hashString(`cdr-limited-${key}`));
+  // every kind of event comes round once before any repeats (3 and 7 share no factor)
+  const t = TEMPLATES[(period * 3) % TEMPLATES.length];
+  const pool = STAGE_DEFS.filter(t.stages);
+  const stage = pool[Math.floor(rnd() * pool.length)] ?? STAGE_DEFS[0];
+  const weather = t.weather[Math.floor(rnd() * t.weather.length)];
+  const byPrice = [...VEHICLES].sort((a, b) => a.price - b.price);
+  const car = t.car === 'top' ? byPrice[byPrice.length - 1] : t.car === 'cheap' ? byPrice[1] : byPrice[Math.floor(byPrice.length / 2)];
+  const ref = stage.referenceTimeMs * WEATHER_TIME[weather] * (CAR_TIME[car.id] ?? 1);
+  const round = (ms: number) => Math.round(ms / 100) * 100;
+  return {
+    key,
+    date: key,
+    name: t.name,
+    blurb: t.blurb,
+    rule: t.rule ?? 'none',
+    stageId: stage.id,
+    weather,
+    carId: car.id,
+    targets: { gold: round(ref * 1.08), silver: round(ref * 1.2), bronze: round(ref * 1.35) },
+    pay: { none: 0, bronze: 9000, silver: 18000, gold: 30000 },
+    finishPay: 5000,
+  };
+}
