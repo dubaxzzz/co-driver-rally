@@ -228,19 +228,13 @@ fades from day through sunset to night as you climb, so lights and the light pod
   onto the road right where you are for +10 s – cheaper than a reset (+15 s), which puts you
   back a little way.
 
-## Forks, weather radar and roads that break up
+## Weather radar and roads that break up
 
-- **Forks (split routes):** most stages have a fork – the road splits and joins up again
-  further on. A **SHORT CUT** across the inside of a big loop is shorter but narrow, rough
-  and muddy (or loose gravel on tarmac stages, deep snow on snow stages); a **FAST ROUTE**
-  is wide and smooth but a little longer than the twisty road it bypasses. A sign stands
-  before each fork, but only the co-driver's map shows where both ways go and how long they
-  are, and the tablet calls it: "FORK IN 300 m: SHORT CUT LEFT (MUD, 443 m vs 650 m)".
-  There are no pace notes on the short cuts. The 30 km mountain stage has three.
+- **One road:** every stage is a single road from start to finish – no forks, short cuts or
+  bypasses – so the pace notes always apply and the map shows just the one route.
 - **Weather radar:** showers now drift across the map with the wind. The co-driver's map shows
   each one (green/blue), where it will be in a minute (dashed) and which way it's moving. The
-  tablet warns "RAIN AHEAD IN 200 m", and at a fork it tells you if one way is about to get
-  wet ("RAIN ON IT, STAY ON THE ROAD").
+  tablet warns "RAIN AHEAD IN 200 m",.
 - **The road breaks up:** every car that drives a gravel, mud or snow stage changes it. The
   first car on the road gets loose gravel (a little less grip); after a few cars the line is
   swept clean (more grip); after many more – or in the rain – deep ruts form that kick the car
