@@ -426,8 +426,6 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
           }
         }
         let y = baseY - 0.18 + blend * hillsAt(x, z);
-        // shallow drainage ditch beside the road
-        if (dist > hw + 1.5 && dist < hw + 6) y -= Math.sin(((dist - hw - 1.5) / 4.5) * Math.PI) * 0.45;
         // the pit apron at the service zone: flat ground level with the road
         const pit = pitLocal(x, z);
         if (pit) {
@@ -453,7 +451,7 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
         tl.heights[ci] = y;
         // the lowest the road gets close by (dips and the bottom of jumps sag between samples)
         let ryMin = roadY;
-        for (let j = Math.max(0, best - 8); j <= Math.min(tn - 1, best + 8); j++) ryMin = Math.min(ryMin, ts[j].y);
+        for (let j = Math.max(0, best - 2); j <= Math.min(tn - 1, best + 2); j++) ryMin = Math.min(ryMin, ts[j].y);
         tl.ry[ci] = ryMin;
         tl.dists[ci] = pit && pit.edge > 0.5 ? Math.min(dist, hw) : dist;
         lowest = Math.min(lowest, y);
@@ -490,13 +488,13 @@ export function buildTrack(stage: BuiltStage): TrackBuild {
     }
   }
   // The ground must never come up over the road: next to the road (anywhere a
-  // terrain triangle could reach across it) it stays just below the road surface.
+  // terrain triangle could reach across it) it stays just below the road surface (only a few cm, so cars can drive back onto the road).
   {
     const reachRoad = hw + 1.4 + CELL * 1.5;
     for (const tl of tiles) {
       if (!tl) continue;
       for (let ci = 0; ci < T * T; ci++) {
-        if (tl.dists[ci] < reachRoad && tl.best[ci] >= 0) tl.heights[ci] = Math.min(tl.heights[ci], tl.ry[ci] - 0.4);
+        if (tl.dists[ci] < reachRoad && tl.best[ci] >= 0) tl.heights[ci] = Math.min(tl.heights[ci], tl.ry[ci] - 0.15);
       }
     }
   }
