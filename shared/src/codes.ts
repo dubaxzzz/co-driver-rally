@@ -45,6 +45,7 @@ export const CODES: CodeDef[] = [
   { code: 'LOANZENITH', description: 'Borrow the Zenith Hybrid for 12 hours', validUntil: '2026-12-30', reward: { kind: 'loan', carId: 'zenith-hybrid', hours: 12 } },
   { code: 'LOANCORVO', description: 'Borrow the Corvo RS for 48 hours', validUntil: '2027-02-01', reward: { kind: 'loan', carId: 'corvo-rs', hours: 48 } },
   { code: 'LOANMESA', description: 'Borrow the Mesa T1 for 24 hours', validUntil: '2027-02-10', reward: { kind: 'loan', carId: 'mesa-t1', hours: 24 } },
+  { code: 'LOANTEMPEST', description: 'Borrow the Tempest Prototype – the best car in the game – for 12 hours', validUntil: '2027-03-31', reward: { kind: 'loan', carId: 'tempest-proto', hours: 12 } },
   { code: 'LOANPIPIT', description: 'Borrow the Pipit 1300 for 72 hours', validUntil: '2027-03-01', reward: { kind: 'loan', carId: 'pipit-1300', hours: 72 } },
   // ---- special paints (they run out)
   { code: 'GOLDRUSH', description: 'Gold Rush paint for 24 hours', validUntil: '2026-12-15', reward: { kind: 'paint', paintId: 'gold-rush', hours: 24 } },

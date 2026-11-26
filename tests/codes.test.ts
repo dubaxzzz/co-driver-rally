@@ -24,6 +24,8 @@ for (const c of CODES) {
   if (r.kind === 'cash' && !(r.amount > 0 && r.amount <= 10000)) bad.push(`${c.code}: cash amount`);
 }
 check(bad.length === 0, bad.length ? `problems: ${bad.join('; ')}` : 'every car, paint, boost and cash amount is valid');
+const best = [...VEHICLES].sort((a, b) => b.price - a.price)[0];
+check(CODES.some((c) => c.reward.kind === 'loan' && c.reward.carId === best.id && c.reward.hours === 12), `a 12-hour loan code for the best car (${best.name})`);
 check(PAINTS.filter((p) => p.codeOnly).every((p) => CODES.some((c) => c.reward.kind === 'paint' && c.reward.paintId === p.id)), 'every code-only paint can be won with a code');
 check(codeByText('  neon lime ')?.code === 'NEONLIME', 'codes ignore capitals and spaces');
 check(codeByText('nope') === null, 'a wrong code finds nothing');

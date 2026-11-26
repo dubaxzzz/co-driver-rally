@@ -168,7 +168,7 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 
 - **Paint and wheels cost money** (Garage → Paint). The first paint and the first wheels are free. Paints are $2,500–$4,000; wheels $3,000–$8,000 (Soft Compound has +6% grip). Tap an item to buy and use it.
 - **Settings → Codes**: type a code to get a *limited* reward. Every code stops working on an end date, works once per player (even after the weekly reset), and most rewards run out after a few hours: a prize-money boost, a borrowed car, a special paint (a cash code is kept). *Active now* shows the time left. The codes and their dates are in `shared/src/codes.ts`.
-- Paint, wheels and code rewards are part of your career, so they reset with it (every week and on every update). Codes and money are saved in the browser, so they are a game feature, not a secured system.
+- Bought paint and wheels (and money) are part of your career, so they reset with it every week and on every update. **What a code gave you is saved apart from the career**: a boost, a loan car or a special paint keeps running for its own time through an update or the weekly reset (the loan car even reappears in your garage), and a used code stays used. Cash from a code is money, so it resets like the rest. Codes are saved in the browser, so they are a game feature, not a secured system.
 
 ## Elimination (multiplayer, drivers only)
 

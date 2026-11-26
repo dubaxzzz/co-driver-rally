@@ -52,26 +52,49 @@ export interface CareerSave {
 }
 
 const KEY = 'cdr.career';
+/**
+ * What codes gave you (boosts, loan cars, special paints, used codes) is saved apart from the
+ * career. The career is wiped on every game update and every week, but a code's reward keeps
+ * running for its own time – and a used code stays used.
+ */
+const PERKS_KEY = 'cdr.perks';
+const noPerks = (): Perks => ({ redeemed: [], boostUntil: 0, boostMult: 1, loans: {}, paints: {} });
+function storedPerks(): Perks | null {
+  try {
+    const p = JSON.parse(localStorage.getItem(PERKS_KEY) ?? 'null');
+    return p ? { ...noPerks(), ...p } : null;
+  } catch {
+    return null;
+  }
+}
+/** A borrowed car is in the garage for as long as its loan lasts (also after a wipe). */
+function withLoans(s: CareerSave): CareerSave {
+  const now = Date.now();
+  const owned = { ...s.owned };
+  for (const [id, until] of Object.entries(s.perks.loans)) if (until > now && !owned[id]) owned[id] = noUpgrades();
+  return { ...s, owned };
+}
 
 function fresh(): CareerSave {
-  return {
+  return withLoans({
     money: STARTING_MONEY,
     cosmetics: { paints: [PAINTS[0].id], wheels: [WHEELS[0].id] },
-    perks: { redeemed: [], boostUntil: 0, boostMult: 1, loans: {}, paints: {} },
+    perks: storedPerks() ?? noPerks(),
     owned: { [STARTER_CAR_ID]: noUpgrades() },
     active: STARTER_CAR_ID,
     bests: {},
     paid: [],
     stats: { stages: 0, wins: 0, earned: 0 },
     daily: { date: '', bestMs: null, medal: 'none', finished: false },
-  };
+  });
 }
 
 function load(): CareerSave {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return fresh();
-    const s = { ...fresh(), ...JSON.parse(raw) } as CareerSave;
+    let s = { ...fresh(), ...JSON.parse(raw) } as CareerSave;
+    s = withLoans({ ...s, perks: storedPerks() ?? s.perks ?? noPerks() });
     if (!s.owned[s.active]) s.active = Object.keys(s.owned)[0] ?? STARTER_CAR_ID;
     return sweep(s);
   } catch {
@@ -111,6 +134,7 @@ const listeners = new Set<Listener>();
 function commit() {
   try {
     localStorage.setItem(KEY, JSON.stringify(save));
+    localStorage.setItem(PERKS_KEY, JSON.stringify(save.perks));
   } catch {
     /* storage unavailable – keep in memory */
   }
