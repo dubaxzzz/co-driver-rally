@@ -13,6 +13,9 @@ import {
   gridSpot,
   aiGridOffset,
   type DriverRace,
+  type PaintOption,
+  type VehicleDef,
+  type WheelOption,
   type RelayedTelemetry,
   type WeatherDef,
   type BuiltStage,
@@ -34,6 +37,8 @@ import { champ } from '../championship/state';
 import { classificationTable, formatMs } from '../ui/classification';
 import { RoadWear } from './tracks/TrackMeshes';
 import { RemoteCar, fallbackPaint } from './RemoteCars';
+import { Ghost } from './Ghost';
+import { ghostStore, ghostTimeAt, packSamples, type GhostRun } from '../timeattack/ghosts';
 import { applySharedSwitch, decodeSwitches, defaultSwitches,
   defaultSystems,
   stageConditions,
@@ -194,6 +199,7 @@ export class Game {
       const model = createCarModel(sel.paint, sel.wheel, sel.vehicle.body);
       this.scene.add(model.root);
       this.vehicle = new Vehicle(this.physics, sel.vehicle, sel.wheel, model);
+      this.setupTimeAttack(sel.paint, sel.wheel, sel.vehicle.body);
       for (const hnd of this.world.roadColliderHandles) this.vehicle.roadColliders.add(hnd);
       // First person only: hide the outside of the car, show the cockpit and switch on real headlights.
       model.setExteriorVisible(false);
@@ -1198,6 +1204,8 @@ export class Game {
     if (state.phase === 'countdown' && newRun) {
       this.closeOverlay();
       this.stopElimTicker();
+      this.ghostRec = [];
+      this.ghostLastT = -1;
       this.resultShown = false;
       this.spawn();
       this.lastCountdownShown = -1;
@@ -1209,6 +1217,93 @@ export class Game {
     }
     if (mine?.result && !this.resultShown) this.onFinished(mine.result);
     if (state.elim && (state.phase === 'finished' || mine?.retired)) this.showElimOverlay();
+  }
+
+  // ---------------------------------------------------------------- time attack
+  private ghost: Ghost | null = null;
+  private ghostBest: GhostRun | null = null;
+  private ghostRec: number[] = [];
+  private ghostLastT = -1;
+  private ghostEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+  private deltaEl: HTMLElement | null = null;
+  private deltaText = '';
+  private onTaKey = (e: KeyboardEvent) => {
+    if (e.code === 'Backspace' && this.ctx.kind === 'timeattack' && net.isHost && this.raceState && this.raceState.phase !== 'lobby') {
+      e.preventDefault();
+      this.restart();
+    }
+  };
+
+  /** Time attack: load your best run as a ghost and add the live time difference to the screen. */
+  private setupTimeAttack(paint: PaintOption, wheel: WheelOption, body: VehicleDef['body']) {
+    if (this.ctx.kind !== 'timeattack') return;
+    const rs = net.room?.race;
+    if (!rs) return;
+    this.ghostBest = ghostStore.get(bestKey(rs.stageId, rs.weather));
+    if (this.ghostBest) this.ghost = new Ghost(this.scene, this.ghostBest.samples, paint, wheel, body);
+    this.deltaEl = h('div', { 'data-testid': 'ta-delta', style: 'position:absolute;top:78px;left:50%;transform:translateX(-50%);font:700 24px system-ui,sans-serif;color:#fff;text-shadow:0 0 6px #000,0 0 2px #000;pointer-events:none;z-index:5;text-align:center' });
+    this.container.append(this.deltaEl);
+    window.addEventListener('keydown', this.onTaKey);
+  }
+
+  /** Every frame: record this run for the ghost, move the ghost, show how far ahead or behind your best you are. */
+  private tickTimeAttack(raceMs: number, phase: string | undefined) {
+    if (this.ctx.kind !== 'timeattack') return;
+    const root = this.vehicle.model.root;
+    if (phase === 'racing' && !this.resultShown && raceMs - this.ghostLastT >= 100) {
+      this.ghostLastT = raceMs;
+      this.ghostEuler.setFromQuaternion(root.quaternion, 'YXZ');
+      this.ghostRec.push(raceMs, root.position.x, root.position.y, root.position.z, this.ghostEuler.y, this.race.distance);
+    }
+    this.ghost?.update(phase === 'racing' || phase === 'finished' ? raceMs : 0);
+    if (!this.deltaEl) return;
+    const best = this.ghostBest;
+    let text = 'No best time yet – set one!';
+    let color = '#fff';
+    if (best) {
+      text = `Best ${formatMs(best.timeMs)}`;
+      if (phase === 'racing' && !this.resultShown) {
+        const gt = ghostTimeAt(best.samples, this.race.distance);
+        if (gt !== null) {
+          const d = raceMs - gt;
+          text = `${d > 0 ? '+' : '−'}${(Math.abs(d) / 1000).toFixed(2)}  ·  best ${formatMs(best.timeMs)}`;
+          color = d > 0 ? '#ff6b6b' : '#7dff9b';
+        }
+      }
+    }
+    if (text !== this.deltaText) {
+      this.deltaText = text;
+      this.deltaEl.textContent = text;
+      this.deltaEl.style.color = color;
+    }
+  }
+
+  /** Time attack finish: save the time, update the ghost if it is your best, no prize money. */
+  private finishTimeAttack(r: RaceResult) {
+    const st = this.raceState!;
+    const key = bestKey(st.stageId, st.weather);
+    const prev = ghostStore.get(key);
+    const isBest = !prev || r.timeMs < prev.timeMs;
+    career.recordBest(key, r.timeMs);
+    if (isBest) ghostStore.set(key, r.timeMs, packSamples(this.ghostRec));
+    const diff = prev ? r.timeMs - prev.timeMs : null;
+    const extra = h(
+      'div',
+      { class: 'rewards', 'data-testid': 'rewards' },
+      isBest ? h('div', { class: 'new-record' }, prev ? 'NEW BEST – YOUR GHOST IS UPDATED!' : 'FIRST TIME SET – THIS RUN IS YOUR GHOST NOW') : null,
+      h('div', { class: 'prize-line' }, h('span', {}, 'Previous best'), h('span', {}, prev ? formatMs(prev.timeMs) : '–')),
+      diff !== null ? h('div', { class: `prize-line ${diff > 0 ? 'neg' : ''}` }, h('span', {}, diff <= 0 ? 'Faster by' : 'Slower by'), h('span', {}, `${(Math.abs(diff) / 1000).toFixed(2)} s`)) : null,
+    );
+    setTimeout(() => {
+      if (this.disposed || this.myRace()?.result?.finishedAt !== r.finishedAt) return;
+      this.showOverlay(
+        resultsOverlay(r, this.stage, [
+          { label: 'Try again', primary: true, onClick: () => this.restart() },
+          { label: 'Change stage', onClick: () => void this.leaveTo('lobby') },
+          { label: 'Main menu', onClick: () => this.leave() },
+        ], undefined, extra),
+      );
+    }, 1200);
   }
 
   // ---------------------------------------------------------------- elimination
@@ -1261,6 +1356,7 @@ export class Game {
     this.vehicle.frozen = true;
     this.hud.center('FINISH');
     if (this.raceState?.elim) return this.showElimOverlay();
+    if (this.ctx.kind === 'timeattack') return this.finishTimeAttack(r);
     if (this.ctx.kind === 'championship') return this.finishChampionship(r);
     if (this.ctx.kind === 'daily') return this.finishDaily(r, this.ctx.date);
     if (this.ctx.kind === 'limited') return this.finishDaily(r, this.ctx.key, true);
@@ -1825,6 +1921,7 @@ export class Game {
 
     const aiRacing = phase === 'racing' || phase === 'finished';
     const raceMs = this.raceTimeMs();
+    this.tickTimeAttack(raceMs, phase);
     let netT = net.serverNow();
     this.physics.step(dt, (fixed) => {
       netT += fixed * 1000;
@@ -2023,6 +2120,9 @@ export class Game {
   dispose() {
     this.disposed = true;
     this.stopElimTicker();
+    window.removeEventListener('keydown', this.onTaKey);
+    this.ghost?.dispose();
+    this.deltaEl?.remove();
     cancelAnimationFrame(this.raf);
     this.unsubs.forEach((u) => u());
     window.removeEventListener('resize', this.onResize);

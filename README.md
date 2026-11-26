@@ -155,6 +155,20 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
   and everyone is paid for their own finish.
 - Restart and back-to-lobby are the host's call.
 
+## Time attack (solo)
+
+**Play → Time attack**: pick a stage and the weather, then chase your best time. No rivals, no prize money, unlimited tries.
+
+- **Backspace restarts at once** (or Esc → Restart stage). Every restart is free.
+- Your **best run on each stage and weather is saved as a ghost** – a see-through copy of your car that drives your best line next to you. A new best replaces it (the last 8 ghosts are kept in this browser).
+- A live **+/− seconds** next to the timer shows how far ahead or behind your best you are at that point of the stage.
+
+## Paint, wheels and codes
+
+- **Paint and wheels cost money** (Garage → Paint). The first paint and the first wheels are free. Paints are $2,500–$4,000; wheels $3,000–$8,000 (Soft Compound has +6% grip). Tap an item to buy and use it.
+- **Settings → Codes**: type a code to get a *limited* reward. Every code stops working on an end date, works once per player (even after the weekly reset), and most rewards run out after a few hours: a prize-money boost, a borrowed car, a special paint (a cash code is kept). *Active now* shows the time left. The codes and their dates are in `shared/src/codes.ts`.
+- Paint, wheels and code rewards are part of your career, so they reset with it (every week and on every update). Codes and money are saved in the browser, so they are a game feature, not a secured system.
+
 ## Elimination (multiplayer, drivers only)
 
 **Play → Elimination** makes a lobby for 2–4 **drivers** (no navigators). Everybody races the same stage at once:

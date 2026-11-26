@@ -186,12 +186,23 @@ export function garageScreen(back: () => void): { el: HTMLElement; dispose: () =
       }
       body.append(h('div', { class: 'panel-title', style: 'margin-top:18px' }, 'Stats with upgrades'), statBlock(active, applyUpgrades(active, lv)));
     } else {
+      // a paint or wheels you do not own (any more) goes back to the free ones
+      const first = garageStore.resolve();
+      if (!career.ownsPaint(first.paint.id)) garageStore.update({ paintId: PAINTS[0].id });
+      if (!career.ownsWheel(first.wheel.id)) garageStore.update({ wheelId: WHEELS[0].id });
       const sel = garageStore.resolve();
       const swatches = h('div', { class: 'swatches' });
-      PAINTS.forEach((p) => {
-        const s = h('button', { class: `swatch ${p.id === sel.paint.id ? 'sel' : ''}`, title: p.name });
+      PAINTS.filter((p) => !p.codeOnly || career.ownsPaint(p.id)).forEach((p) => {
+        const owned = career.ownsPaint(p.id);
+        const s = h('button', { class: `swatch ${p.id === sel.paint.id ? 'sel' : ''}`, title: owned ? p.name : `${p.name} – ${money(p.price ?? 0)}` }, owned ? '' : money(p.price ?? 0));
         s.style.background = `linear-gradient(135deg, #${p.body.toString(16).padStart(6, '0')} 60%, #${p.accent.toString(16).padStart(6, '0')} 60%)`;
+        if (!owned) s.style.cssText += ';font-size:10px;font-weight:700;color:#fff;text-shadow:0 0 3px #000;display:flex;align-items:flex-end;justify-content:center';
         s.onclick = () => {
+          if (!owned) {
+            const r = career.buyPaint(p.id);
+            if (!r.ok) return toast(r.reason, 'bad');
+            toast(`${p.name} bought`, 'ok');
+          }
           garageStore.update({ paintId: p.id });
           render();
         };
@@ -199,14 +210,26 @@ export function garageScreen(back: () => void): { el: HTMLElement; dispose: () =
       });
       const wheelList = h('div', { class: 'option-list' });
       WHEELS.forEach((w) => {
-        const b = h('button', { class: `option ${w.id === sel.wheel.id ? 'sel' : ''}` }, w.name + (w.gripMultiplier !== 1 ? ` (grip ${w.gripMultiplier > 1 ? '+' : ''}${Math.round((w.gripMultiplier - 1) * 100)}%)` : ''));
+        const owned = career.ownsWheel(w.id);
+        const b = h('button', { class: `option ${w.id === sel.wheel.id ? 'sel' : ''}` }, w.name + (w.gripMultiplier !== 1 ? ` (grip ${w.gripMultiplier > 1 ? '+' : ''}${Math.round((w.gripMultiplier - 1) * 100)}%)` : '') + (owned ? '' : ` · ${money(w.price)}`));
         b.onclick = () => {
+          if (!owned) {
+            const r = career.buyWheel(w.id);
+            if (!r.ok) return toast(r.reason, 'bad');
+            toast(`${w.name} bought`, 'ok');
+          }
           garageStore.update({ wheelId: w.id });
           render();
         };
         wheelList.append(b);
       });
-      body.append(h('div', { class: 'panel-title' }, 'Paint (free)'), swatches, h('div', { class: 'panel-title', style: 'margin-top:22px' }, 'Wheels (free)'), wheelList);
+      body.append(
+        h('div', { class: 'panel-title' }, `Paint · bank ${money(career.get().money)}`),
+        swatches,
+        h('div', { class: 'setup-desc' }, 'Tap a paint to buy and use it. Paints from codes run out after a while.'),
+        h('div', { class: 'panel-title', style: 'margin-top:22px' }, 'Wheels'),
+        wheelList,
+      );
     }
   };
   render();

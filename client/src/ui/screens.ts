@@ -123,8 +123,9 @@ export function menuScreen(nav: Nav): Screen {
 
 // ------------------------------------------------------------------ create / lobby
 /** Lobby: 'crew' = room code + navigator; 'solo' = just pick the stage and go. */
-export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' | 'elimination' = 'crew'): Screen {
-  const solo = mode === 'solo';
+export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' | 'elimination' | 'timeattack' = 'crew'): Screen {
+  const timeAttack = mode === 'timeattack';
+  const solo = mode === 'solo' || timeAttack;
   const status = serverStatusLine();
   const codeEl = h('div', { class: 'room-code', 'data-testid': 'room-code' }, '····');
   const hint = h('div', { class: 'join-hint' }, 'Creating rally…');
@@ -333,7 +334,7 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' | 'elimination' = 'c
   const el = h(
     'div',
     { class: 'screen' },
-    screenHeader('Back', () => leaveBtn.click(), solo ? 'Quick stage' : 'Rally lobby', status.el),
+    screenHeader('Back', () => leaveBtn.click(), timeAttack ? 'Time attack' : solo ? 'Quick stage' : 'Rally lobby', status.el),
     h(
       'div',
       { class: 'lobby-layout' },
@@ -343,9 +344,9 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' | 'elimination' = 'c
         { class: 'lobby-side' },
         solo
           ? h('div', { class: 'panel lobby-card' },
-              h('div', { class: 'panel-title' }, 'Quick stage'),
+              h('div', { class: 'panel-title' }, timeAttack ? 'Time attack' : 'Quick stage'),
               h('div', { class: 'lobby-car' }, career.activeDef().name),
-              h('p', { class: 'setup-desc' }, 'Pick a stage and the weather, then go. Every finish earns prize money.'),
+              h('p', { class: 'setup-desc' }, timeAttack ? 'Pick a stage and the weather, then go. Unlimited tries: Backspace restarts at once. Your best run drives alongside you as a ghost. No prize money.' : 'Pick a stage and the weather, then go. Every finish earns prize money.'),
               startBtn,
             )
           : h('div', { class: 'panel lobby-card' },
@@ -412,7 +413,7 @@ export function playScreen(nav: Nav): Screen {
         card('SOLO', 'Championship', champSub(), 'championship', true, 'play-championship'),
         card('SOLO', 'Daily challenge', dailySub(), 'daily', false, 'play-daily'),
         card(`LIMITED · ${limitedLeft()}`, limitedEvent(limitedKey()).name, `${limitedEvent(limitedKey()).blurb} A new event every 2 days.`, 'limited', false, 'play-limited'),
-        card('SOLO', 'Elimination', 'You and three rivals race a stage. The slowest driver is out after every round – last one standing wins.', 'elimination', false, 'play-elimination'),
+        card('SOLO', 'Time attack', 'One stage, unlimited tries. Race your own ghost and chase your best time – no prize money, just the clock.', 'timeattack', false, 'play-timeattack'),
         card('SOLO', 'Quick stage', 'Any stage, any weather, just you against the clock. Prize money for every finish.', 'solo', false, 'play-solo'),
       ),
       h('div', { class: 'play-row-title' }, 'Multiplayer'),
@@ -497,6 +498,12 @@ export function joinScreen(nav: Nav, prefill = ''): Screen {
 }
 
 // ------------------------------------------------------------------ settings
+/** "47h 12m" until a time. */
+const hoursLeft = (until: number) => {
+  const mins = Math.max(0, Math.round((until - Date.now()) / 60000));
+  return mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+};
+
 export function settingsScreen(nav: Nav): Screen {
   const s = settings.get();
   const seg = <K extends keyof Settings>(key: K, options: Array<[Settings[K], string]>) => {
@@ -541,6 +548,24 @@ export function settingsScreen(nav: Nav): Screen {
   vol.value = String(s.volume);
   vol.addEventListener('input', () => settings.update({ volume: Number(vol.value) }));
 
+  // ---- codes: limited rewards that stop working on a date and run out after a while
+  const codeInput = h('input', { class: 'input', maxlength: 24, placeholder: 'Enter a code', style: 'width:200px;font-size:16px;text-transform:uppercase', 'data-testid': 'code-input' }) as HTMLInputElement;
+  const perkList = h('div', { class: 'desc', 'data-testid': 'active-perks' });
+  const showPerks = () => {
+    const perks = career.activePerks();
+    perkList.replaceChildren(...(perks.length ? perks.map((p) => h('div', {}, `${p.label} – ${hoursLeft(p.until)} left`)) : [h('div', {}, 'Nothing active right now.')]));
+  };
+  const redeemBtn = h('button', { class: 'btn primary', 'data-testid': 'redeem' }, 'Redeem') as HTMLButtonElement;
+  redeemBtn.onclick = () => {
+    const r = career.redeem(codeInput.value);
+    if (!r.ok) return toast(r.reason, 'bad');
+    codeInput.value = '';
+    toast(`Code redeemed: ${r.message}`, 'ok');
+    showPerks();
+  };
+  codeInput.addEventListener('keydown', (e) => e.key === 'Enter' && redeemBtn.click());
+  showPerks();
+
   const el = h(
     'div',
     { class: 'screen' },
@@ -560,6 +585,10 @@ export function settingsScreen(nav: Nav): Screen {
           row('Driver visibility', 'Night fog on the stage – Very low means you must trust your co-driver', seg('visibility', [['verylow', 'Very low'], ['low', 'Low'], ['normal', 'Normal']])),
           row('Quality', 'Low: no shadows, fewer trees – for older laptops', seg('quality', [['high', 'High'], ['low', 'Low']])),
           row('Speed units', 'Shown on the dashboards and HUD', seg('units', [['kmh', 'km/h'], ['mph', 'mph']])),
+        ),
+        section('Codes',
+          row('Redeem a code', 'Codes give limited rewards: they stop working on an end date, can be used once, and most rewards run out after a few hours.', h('div', { class: 'chip-row' }, codeInput, redeemBtn)),
+          row('Active now', '', perkList),
         ),
         section('Career', row('Reset career', `Bank ${money(career.get().money)} · ${Object.keys(career.get().owned).length} car(s). Starts again with ${money(STARTING_MONEY)} and the Kestrel R5.`, resetBtn)),
         section('Controls',

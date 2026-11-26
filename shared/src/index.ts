@@ -8,5 +8,6 @@ export * from './race/RaceController';
 export * from './weather';
 export * from './surfaces';
 export * from './career';
+export * from './codes';
 export * from './championship';
 export * from './switches';

@@ -23,7 +23,9 @@ export type EventContext =
     }
   | { kind: 'daily'; date: string; carId: string }
   /** The limited event (a new one every 2 days): `key` like "L10243". */
-  | { kind: 'limited'; key: string; carId: string };
+  | { kind: 'limited'; key: string; carId: string }
+  /** Time attack: one stage, unlimited tries, your best run as a ghost. */
+  | { kind: 'timeattack' };
 
 const KEY = 'cdr.event';
 let ctx: EventContext = (() => {

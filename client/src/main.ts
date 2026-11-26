@@ -15,7 +15,7 @@ const app = document.getElementById('app')!;
 let current: Screen | null = null;
 let routeToken = 0;
 /** Which lobby to go back to after a stage ('create' or 'solo'). */
-let lastLobby: 'lobby' | 'solo' = 'lobby';
+let lastLobby: 'lobby' | 'solo' | 'timeattack' = 'lobby';
 
 function go(route: string) {
   const target = `#/${route === 'menu' ? '' : route}`;
@@ -60,6 +60,12 @@ async function render() {
       eventCtx.clear();
       lastLobby = 'lobby';
       current = lobbyScreen(nav, 'crew');
+      break;
+    case 'timeattack':
+      if (net.room && !net.room.race.soloEvent) void net.leave();
+      eventCtx.set({ kind: 'timeattack' });
+      lastLobby = 'timeattack';
+      current = lobbyScreen(nav, 'timeattack');
       break;
     case 'solo':
       if (net.room && !net.room.race.soloEvent) void net.leave();

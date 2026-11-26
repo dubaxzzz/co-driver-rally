@@ -59,6 +59,10 @@ export interface PaintOption {
   name: string;
   body: number;
   accent: number;
+  /** Cost in the garage ($). Missing or 0 = free. */
+  price?: number;
+  /** Only unlocked by a code (for a limited time), never sold. */
+  codeOnly?: boolean;
 }
 
 export interface WheelOption {
@@ -69,6 +73,8 @@ export interface WheelOption {
   spokes: number;
   /** Small handling tweak so the choice matters. */
   gripMultiplier: number;
+  /** Cost in the garage ($). 0 = free. */
+  price: number;
 }
 
 export const STARTER_CAR_ID = 'kestrel-r5';
@@ -292,17 +298,19 @@ function MORE_CARS(): VehicleDef[] {
 export const vehicleById = (id: string) => VEHICLES.find((v) => v.id === id) ?? VEHICLES[0];
 
 export const PAINTS: PaintOption[] = [
-  { id: 'ember', name: 'Ember Red', body: 0xd8261c, accent: 0xf2f2f2 },
-  { id: 'arctic', name: 'Arctic White', body: 0xeeeeee, accent: 0xff6a00 },
-  { id: 'midnight', name: 'Midnight Blue', body: 0x13284d, accent: 0xffc400 },
-  { id: 'forest', name: 'Forest Green', body: 0x1f5a32, accent: 0xf2f2f2 },
-  { id: 'carbon', name: 'Carbon Black', body: 0x1a1a1c, accent: 0xff3b1f },
-  { id: 'solar', name: 'Solar Orange', body: 0xff7417, accent: 0x111111 },
+  { id: 'ember', name: 'Ember Red', body: 0xd8261c, accent: 0xf2f2f2, price: 0 },
+  { id: 'arctic', name: 'Arctic White', body: 0xeeeeee, accent: 0xff6a00, price: 2500 },
+  { id: 'midnight', name: 'Midnight Blue', body: 0x13284d, accent: 0xffc400, price: 2500 },
+  { id: 'forest', name: 'Forest Green', body: 0x1f5a32, accent: 0xf2f2f2, price: 2500 },
+  { id: 'carbon', name: 'Carbon Black', body: 0x1a1a1c, accent: 0xff3b1f, price: 4000 },
+  { id: 'solar', name: 'Solar Orange', body: 0xff7417, accent: 0x111111, price: 4000 },
+  // code reward: only while the code's time lasts
+  { id: 'gold-rush', name: 'Gold Rush', body: 0xd4a017, accent: 0x111111, price: 0, codeOnly: true },
 ];
 
 export const WHEELS: WheelOption[] = [
-  { id: 'gravel-white', name: 'Gravel Spec · White', rim: 0xf0f0f0, spokes: 5, gripMultiplier: 1.0 },
-  { id: 'gravel-gold', name: 'Gravel Spec · Gold', rim: 0xc9a227, spokes: 6, gripMultiplier: 1.0 },
-  { id: 'lightweight', name: 'Lightweight Forged', rim: 0x2b2b2e, spokes: 10, gripMultiplier: 0.97 },
-  { id: 'soft-compound', name: 'Soft Compound', rim: 0x8a8f96, spokes: 8, gripMultiplier: 1.06 },
+  { id: 'gravel-white', name: 'Gravel Spec · White', rim: 0xf0f0f0, spokes: 5, gripMultiplier: 1.0, price: 0 },
+  { id: 'gravel-gold', name: 'Gravel Spec · Gold', rim: 0xc9a227, spokes: 6, gripMultiplier: 1.0, price: 3000 },
+  { id: 'lightweight', name: 'Lightweight Forged', rim: 0x2b2b2e, spokes: 10, gripMultiplier: 0.97, price: 6000 },
+  { id: 'soft-compound', name: 'Soft Compound', rim: 0x8a8f96, spokes: 8, gripMultiplier: 1.06, price: 8000 },
 ];
