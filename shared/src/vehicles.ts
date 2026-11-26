@@ -306,6 +306,12 @@ export const PAINTS: PaintOption[] = [
   { id: 'solar', name: 'Solar Orange', body: 0xff7417, accent: 0x111111, price: 4000 },
   // code reward: only while the code's time lasts
   { id: 'gold-rush', name: 'Gold Rush', body: 0xd4a017, accent: 0x111111, price: 0, codeOnly: true },
+  { id: 'neon-lime', name: 'Neon Lime', body: 0x9be000, accent: 0x111111, price: 0, codeOnly: true },
+  { id: 'royal-purple', name: 'Royal Purple', body: 0x5b2a9a, accent: 0xf2c94c, price: 0, codeOnly: true },
+  { id: 'sunset-pink', name: 'Sunset Pink', body: 0xe8559a, accent: 0xfff1f6, price: 0, codeOnly: true },
+  { id: 'ice-blue', name: 'Ice Blue', body: 0x7cc8f0, accent: 0xffffff, price: 0, codeOnly: true },
+  { id: 'chrome', name: 'Chrome Silver', body: 0xc4c9d1, accent: 0x22252b, price: 0, codeOnly: true },
+  { id: 'rally-yellow', name: 'Rally Yellow', body: 0xffd60a, accent: 0x111111, price: 0, codeOnly: true },
 ];
 
 export const WHEELS: WheelOption[] = [
