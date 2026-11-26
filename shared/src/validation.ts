@@ -35,6 +35,10 @@ export function validateConfig(p: unknown): Partial<RallyConfig> | null {
     if (typeof p.soloEvent !== 'boolean') return null;
     out.soloEvent = p.soloEvent;
   }
+  if (p.elimination !== undefined) {
+    if (typeof p.elimination !== 'boolean') return null;
+    out.elimination = p.elimination;
+  }
   if (p.aiSkill !== undefined) {
     if (!AI_SKILLS.includes(p.aiSkill as AiSkill)) return null;
     out.aiSkill = p.aiSkill as AiSkill;

@@ -283,6 +283,7 @@ export class P2PNetClient extends NetBase {
 
   // =============================================================== HOST (driver)
   async createRoom(name: string, config: Partial<RallyConfig> = {}): Promise<JoinResult> {
+    if (config.elimination) throw new NetError('NOT_ALLOWED', 'Elimination needs the online rally server – it is not available in browser-to-browser mode.');
     if (this.session) await this.leave();
     this.setStatus('connecting');
     for (let attempt = 0; attempt < 8; attempt++) {

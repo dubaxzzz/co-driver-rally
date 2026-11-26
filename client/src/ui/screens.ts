@@ -123,7 +123,7 @@ export function menuScreen(nav: Nav): Screen {
 
 // ------------------------------------------------------------------ create / lobby
 /** Lobby: 'crew' = room code + navigator; 'solo' = just pick the stage and go. */
-export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
+export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' | 'elimination' = 'crew'): Screen {
   const solo = mode === 'solo';
   const status = serverStatusLine();
   const codeEl = h('div', { class: 'room-code', 'data-testid': 'room-code' }, '····');
@@ -135,6 +135,14 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
   const seatCtl = h('div', { class: 'seat-ctl' });
   const startNote = h('div', { class: 'setup-desc', 'data-testid': 'start-note' }, '');
   const setupPanel = h('div', { class: 'panel setup' });
+  // Elimination picks its own stages (a different one every round), so it has no stage chooser
+  const elimPanel = h('div', { class: 'panel setup', 'data-testid': 'elim-panel' },
+    h('div', { class: 'panel-title' }, 'Elimination'),
+    h('p', { class: 'setup-desc' }, 'Drivers only, up to 4 – no navigators. Everybody races the same stage at once. The last driver to finish is out, and so is anyone who has not finished inside the time bracket after the first driver home.'),
+    h('p', { class: 'setup-desc' }, 'The next round starts by itself on a different stage. The stages are mixed every time a lobby is made, and you only find out which one when the round begins. Knocked out? You keep watching from the cameras. The last driver left wins.'),
+  );
+  elimPanel.style.display = mode === 'elimination' ? '' : 'none';
+  setupPanel.style.display = mode === 'elimination' ? 'none' : '';
   const unsubs: Array<() => void> = [status.dispose];
   let current: RallyConfig = { ...settings.get().rally };
 
@@ -215,10 +223,13 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
     hint.innerHTML = '';
     const copy = h('button', { class: 'copy-link', title: url }, 'Copy invite link');
     copy.onclick = () => void navigator.clipboard?.writeText(url).then(() => toast('Invite link copied', 'ok'), () => toast(url));
-    hint.append(h('p', {}, 'Friends choose ', h('b', {}, 'Play → Join lobby'), ' and type this code. Up to 4 players – each driver can bring a navigator.'), copy);
+    hint.append(h('p', {}, 'Friends choose ', h('b', {}, 'Play → Join lobby'), room.race.elim ? ' and type this code. Up to 4 drivers – the slowest is out every round.' : ' and type this code. Up to 4 players – each driver can bring a navigator.'), copy);
     const me = net.me();
     const host = net.isHost;
     const inLobby = room.race.phase === 'lobby';
+    const elimRoom = !!room.race.elim;
+    elimPanel.style.display = elimRoom ? '' : 'none';
+    setupPanel.style.display = elimRoom ? 'none' : '';
 
     // ---- players
     players.innerHTML = '';
@@ -252,7 +263,7 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
         });
       const watchBtn = h('button', { class: `chip-btn ${me.role === 'spectator' ? 'sel' : ''}`, 'data-testid': 'seat-watch' }, '👀 Watch');
       watchBtn.onclick = () => void net.setRole('spectator').catch((e) => toast((e as NetError).message, 'bad'));
-      seatCtl.append(h('div', { class: 'panel-title', style: 'margin-top:14px' }, 'Your seat'), h('div', { class: 'chip-row' }, driveBtn, ...navBtns, ...(host ? [] : [watchBtn])));
+      seatCtl.append(h('div', { class: 'panel-title', style: 'margin-top:14px' }, 'Your seat'), h('div', { class: 'chip-row' }, driveBtn, ...(elimRoom ? [] : navBtns), ...(host ? [] : [watchBtn])));
     }
     readyBtn.style.display = host || !inLobby || me?.role === 'spectator' ? 'none' : '';
     readyBtn.textContent = me?.ready ? 'Ready ✓ (tap to undo)' : 'Tick ready';
@@ -261,19 +272,23 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
     // ---- start
     const waiting = room.members.filter((m) => m.connected && m.playerId !== room.hostId && !m.ready);
     startBtn.style.display = host ? '' : 'none';
-    startBtn.disabled = !inLobby || !drivers.some((d) => d.connected) || waiting.length > 0;
-    startBtn.textContent = drivers.length > 1 ? `Start rally (${drivers.length} cars)` : 'Start stage';
+    startBtn.disabled = !inLobby || !drivers.some((d) => d.connected) || waiting.length > 0 || (elimRoom && drivers.length < 2);
+    startBtn.textContent = elimRoom ? `Start elimination (${drivers.length} drivers)` : drivers.length > 1 ? `Start rally (${drivers.length} cars)` : 'Start stage';
     startNote.textContent = !inLobby
-      ? 'A stage is running – you will join the next one.'
+      ? elimRoom ? 'An elimination is running – you will join the next one.' : 'A stage is running – you will join the next one.'
       : host
-        ? !drivers.length
+        ? elimRoom && drivers.length < 2
+          ? 'An elimination needs at least 2 drivers.'
+          : elimRoom && !waiting.length
+            ? 'Everyone is ready.'
+        : !drivers.length
           ? 'Someone needs to drive.'
           : waiting.length
             ? `Waiting for ${waiting.map((w) => w.name).join(', ')} to tick ready.`
             : drivers.some((d) => !room.members.some((m) => m.navFor === d.playerId))
               ? 'Everyone is ready. Drivers without a navigator will drive blind!'
               : 'Everyone is ready.'
-        : `${room.members.find((m) => m.playerId === room.hostId)?.name ?? 'The host'} picks the stage and starts the rally.`;
+        : `${room.members.find((m) => m.playerId === room.hostId)?.name ?? 'The host'} ${elimRoom ? 'starts the elimination.' : 'picks the stage and starts the rally.'}`;
 
     // only the host changes the stage
     setupPanel.classList.toggle('readonly', !host);
@@ -308,7 +323,7 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
   (async () => {
     try {
       if (net.room) render(net.room);
-      else render((await net.createRoom(playerName('Driver'), solo ? { ...current, soloEvent: true } : current)).room);
+      else render((await net.createRoom(playerName('Driver'), solo ? { ...current, soloEvent: true } : mode === 'elimination' ? { ...current, elimination: true } : current)).room);
     } catch (e) {
       hint.textContent = (e as NetError).message;
       toast((e as NetError).message, 'bad');
@@ -348,6 +363,7 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' = 'crew'): Screen {
               startNote,
             ),
       ),
+      elimPanel,
       (setupPanel.append(
         h('div', { class: 'panel-title' }, 'Stage'),
         stageGrid,
@@ -392,17 +408,19 @@ export function playScreen(nav: Nav): Screen {
       h('div', { class: 'play-row-title' }, 'Solo'),
       h(
         'div',
-        { class: 'play-grid four' },
+        { class: 'play-grid five' },
         card('SOLO', 'Championship', champSub(), 'championship', true, 'play-championship'),
         card('SOLO', 'Daily challenge', dailySub(), 'daily', false, 'play-daily'),
         card(`LIMITED · ${limitedLeft()}`, limitedEvent(limitedKey()).name, `${limitedEvent(limitedKey()).blurb} A new event every 2 days.`, 'limited', false, 'play-limited'),
+        card('SOLO', 'Elimination', 'You and three rivals race a stage. The slowest driver is out after every round – last one standing wins.', 'elimination', false, 'play-elimination'),
         card('SOLO', 'Quick stage', 'Any stage, any weather, just you against the clock. Prize money for every finish.', 'solo', false, 'play-solo'),
       ),
       h('div', { class: 'play-row-title' }, 'Multiplayer'),
       h(
         'div',
-        { class: 'play-grid two' },
+        { class: 'play-grid' },
         card('MULTIPLAYER', 'Create lobby', 'Host a rally for up to 4 players – race each other with real collisions, each driver with their own navigator.', 'create', false, 'play-create'),
+        card('MULTIPLAYER', 'Elimination', 'Drivers only, a new stage every round. The last to finish – or anyone outside the time bracket – is out. Last driver standing wins.', 'elimination', false, 'play-elimination'),
         card('MULTIPLAYER', 'Join lobby', 'Enter a code to join as a driver or a navigator. Navigators earn a 40% share of their driver\'s prize.', 'join', false, 'play-join'),
       ),
     ),

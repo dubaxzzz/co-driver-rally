@@ -112,6 +112,8 @@ export class RoomManager {
     if (!room) return fail('ROOM_NOT_FOUND', `No rally found with code ${code}. Check the code on the host's screen.`);
     const already = this.bySocket.get(socketId);
     if (already?.code === code) return fail('NOT_ALLOWED', 'You are already in this rally.');
+    // elimination is for drivers only: anyone who can't take a driver seat (it has started, or it's full) just watches
+    if (room.race.state.elim && wantRole !== 'spectator' && !(room.race.state.phase === 'lobby' && this.drivers(room).length < MAX_DRIVERS)) wantRole = 'spectator';
     // watching: any time, doesn't take a player seat
     if (wantRole === 'spectator') {
       if (room.members.filter((m) => m.role === 'spectator').length >= MAX_SPECTATORS) return fail('ROOM_FULL', `This rally already has ${MAX_SPECTATORS} spectators.`);
@@ -147,6 +149,7 @@ export class RoomManager {
     const needsNav = drivers.some((d) => !room.members.some((m) => m.role === 'navigator' && m.navFor === d.playerId));
     let role: Role = wantRole === 'driver' && canDrive ? 'driver' : wantRole === 'navigator' ? 'navigator' : needsNav || !canDrive ? 'navigator' : 'driver';
     if (role === 'navigator' && drivers.length === 0 && canDrive) role = 'driver';
+    if (room.race.state.elim) role = 'driver'; // no navigators in an elimination
     const seat = createSeat(role, name, socketId);
     if (role === 'navigator') seat.navFor = this.pickDriverFor(room);
     room.members.push(seat);
@@ -161,6 +164,7 @@ export class RoomManager {
     if (!ctx) return fail('NOT_IN_ROOM', 'You are not in a rally.');
     const { room, seat } = ctx;
     if (room.race.state.phase !== 'lobby') return fail('WRONG_PHASE', 'Wait for the stage to end before changing seats.');
+    if (role === 'navigator' && room.race.state.elim) return fail('NOT_ALLOWED', 'Elimination is for drivers only – you can drive or watch.');
     if (role === 'spectator') {
       if (seat.playerId === room.hostId) return fail('NOT_ALLOWED', 'The host runs the rally – hand over or leave to spectate.');
       const wasDriver = seat.role === 'driver';
@@ -214,9 +218,34 @@ export class RoomManager {
     if (room.race.state.phase !== 'lobby') return fail('WRONG_PHASE', 'The stage has already started.');
     const drivers = this.drivers(room).filter((d) => d.connected);
     if (!drivers.length) return fail('NOT_ALLOWED', 'Someone needs to be a driver.');
+    if (room.race.state.elim && drivers.length < 2) return fail('NOT_ALLOWED', 'An elimination needs at least 2 drivers.');
     const waiting = room.members.filter((m) => m.connected && m.playerId !== room.hostId && !m.ready);
     if (waiting.length) return fail('NOT_ALLOWED', `Waiting for ${waiting.map((w) => w.name).join(', ')} to tick ready.`);
     return { ok: true, room, grid: drivers.map((d) => ({ playerId: d.playerId, name: d.name })) };
+  }
+
+  /** Elimination: drivers who are out watch the rest of the event from the cameras. */
+  eliminate(room: Room, playerIds: string[]) {
+    for (const id of playerIds) {
+      const seat = this.seat(room, id);
+      if (!seat || seat.role !== 'driver') continue;
+      seat.role = 'spectator';
+      seat.navFor = null;
+      seat.ready = true;
+      room.lastTelemetry.delete(id);
+    }
+    room.lastActivity = Date.now();
+  }
+
+  /** The elimination is over: the drivers who were knocked out take a driver seat again for the next lobby. */
+  restoreEliminated(room: Room, playerIds: string[]) {
+    for (const id of playerIds) {
+      const seat = this.seat(room, id);
+      if (!seat || seat.role !== 'spectator' || this.drivers(room).length >= MAX_DRIVERS) continue;
+      seat.role = 'driver';
+      seat.ready = seat.playerId === room.hostId;
+    }
+    room.lastActivity = Date.now();
   }
 
   /** Re-binds a seat to a new socket. Returns the previous socket id so it can be kicked. */

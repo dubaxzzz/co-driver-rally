@@ -79,6 +79,23 @@ export function registerHandlers(io: IO) {
       const st = rooms.get(code)?.race.state;
       if (st?.daily) dailyBoard.add(st.daily, r.name, r.timeMs);
     },
+    // elimination: knocked-out drivers watch from the cameras; everyone is back in a driver seat for the next lobby
+    onEliminated: (ids) => {
+      const room = rooms.get(code);
+      if (!room) return;
+      rooms.eliminate(room, ids);
+      broadcastRoom(room);
+    },
+    onEventOver: (outIds) => {
+      const room = rooms.get(code);
+      if (!room) return;
+      rooms.restoreEliminated(room, outIds);
+      broadcastRoom(room);
+    },
+    isPresent: (playerId) => {
+      const room = rooms.get(code);
+      return !!room && !!rooms.seat(room, playerId)?.connected;
+    },
   }));
 
   const broadcastRoom = (room: Room) => io.to(room.code).emit('room:update', rooms.snapshot(room));
@@ -193,6 +210,7 @@ export function registerHandlers(io: IO) {
       const phase = room.race.state.phase;
       room.lastTelemetry.clear();
       if (action === 'restart') {
+        if (room.race.state.elim) return ack(err('NOT_ALLOWED', 'No restarts in an elimination.'));
         if (phase === 'lobby') return ack(err('WRONG_PHASE', 'The stage has not started yet.'));
         const grid = room.race.state.drivers
           .filter((d) => rooms.seat(room, d.playerId)?.role === 'driver')
@@ -231,6 +249,7 @@ export function registerHandlers(io: IO) {
       const ctx = currentRoom();
       if (!ctx) return ack(err('NOT_IN_ROOM', 'You are not in a rally.'));
       if (ctx.room.hostId !== ctx.b.playerId) return ack(err('NOT_ALLOWED', 'Only the host can choose the stage.'));
+      if (ctx.room.race.state.elim) return ack(err('NOT_ALLOWED', 'The stages of an elimination are picked for you – a different one every round.'));
       if (ctx.room.race.state.phase !== 'lobby') return ack(err('WRONG_PHASE', 'Return to the lobby to change the stage.'));
       const raw = validateConfig(payload);
       if (!raw) return ack(err('BAD_PAYLOAD', 'Invalid stage, weather or AI settings.'));

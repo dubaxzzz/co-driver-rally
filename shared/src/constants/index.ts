@@ -18,6 +18,15 @@ export const INTERPOLATION_DELAY_MS = 120;
 export const COUNTDOWN_MS = 5000;
 /** How long the start waits for engines before counting down anyway. */
 export const ENGINE_WAIT_MS = 120000;
+
+/** Elimination: once the first driver finishes the others get this share of that time (at least the minimum) to finish. */
+export const ELIM_BRACKET_RATIO = 0.25;
+export const ELIM_BRACKET_MIN_MS = 20_000;
+/** Elimination: how long the round results show before the next stage starts, and before the lobby comes back after the winner. */
+export const ELIM_BREAK_MS = 15_000;
+export const ELIM_END_MS = 25_000;
+/** Elimination: stages for the rounds are picked from those no longer than this (reference time). */
+export const ELIM_MAX_STAGE_MS = 8 * 60_000;
 /** Up to four people per lobby: any mix of drivers and navigators. */
 export const MAX_MEMBERS = 4;
 export const MAX_DRIVERS = 4;

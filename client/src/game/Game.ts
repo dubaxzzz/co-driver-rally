@@ -79,7 +79,7 @@ import { DAMAGE_KEYS, Vehicle } from './vehicle/Vehicle';
 import type { AIDriver as AIDriverT } from './ai/AIDriver';
 import { buildStageWorld, type StageWorld } from './world/StageWorld';
 
-export type GameExit = 'menu' | 'lobby' | 'service' | 'daily' | 'limited';
+export type GameExit = 'menu' | 'lobby' | 'service' | 'daily' | 'limited' | 'drive' | 'navigator';
 
 /**
  * The driver's game: owns the renderer, physics world, vehicle, stage and
@@ -1189,9 +1189,15 @@ export class Game {
       this.onExit('lobby');
       return;
     }
+    // elimination: every round is another stage – start a fresh game on it (or watch, if you are out)
+    if (state.elim && state.stageId !== this.stage.def.id) {
+      this.onExit(net.me()?.role === 'driver' ? 'drive' : 'navigator');
+      return;
+    }
     const newRun = !prev || prev.runId !== state.runId;
     if (state.phase === 'countdown' && newRun) {
       this.closeOverlay();
+      this.stopElimTicker();
       this.resultShown = false;
       this.spawn();
       this.lastCountdownShown = -1;
@@ -1202,6 +1208,51 @@ export class Game {
       audio.countdown(0);
     }
     if (mine?.result && !this.resultShown) this.onFinished(mine.result);
+    if (state.elim && (state.phase === 'finished' || mine?.retired)) this.showElimOverlay();
+  }
+
+  // ---------------------------------------------------------------- elimination
+  private elimTicker: number | undefined;
+  private stopElimTicker() {
+    if (this.elimTicker !== undefined) window.clearInterval(this.elimTicker);
+    this.elimTicker = undefined;
+  }
+
+  /** Elimination: how the round went, who is out, and when the next stage starts. Refreshes every second. */
+  private showElimOverlay() {
+    const st = this.raceState;
+    const el = st?.elim;
+    if (!st || !el || this.disposed) return;
+    if (this.elimTicker === undefined) this.elimTicker = window.setInterval(() => this.showElimOverlay(), 1000);
+    const mine = this.myRace(st);
+    const done = st.phase === 'finished';
+    const me = el.out.find((o) => o.playerId === this.myId);
+    const won = el.winner?.playerId === this.myId;
+    const secs = (at: number | null) => Math.max(0, Math.ceil(((at ?? 0) - net.serverNow()) / 1000));
+    const reason = { last: 'last to finish', cutoff: 'not finished inside the time bracket', retired: 'retired' };
+    const rows = [...st.drivers].sort((a, b) => (a.result?.timeMs ?? Infinity) - (b.result?.timeMs ?? Infinity));
+    const outNow = new Map(el.out.filter((o) => o.round === el.round).map((o) => [o.playerId, o]));
+    const title = !done ? (mine?.retired ? 'RETIRED' : 'FINISHED') : won ? 'YOU WIN THE ELIMINATION!' : me ? 'ELIMINATED' : 'SAFE';
+    let status: string;
+    if (!done) status = mine?.retired ? 'Waiting for the round to end…' : el.cutoffAt ? `Time bracket: the others must finish in ${secs(el.cutoffAt)} s or they are out.` : 'Waiting for the others…';
+    else if (el.winner) status = `${el.winner.name} wins! Back to the lobby in ${secs(el.nextAt)} s.`;
+    else if (me) status = `You are out (${reason[me.reason]}). The next round starts in ${secs(el.nextAt)} s.`;
+    else status = `You are through. Next round starts in ${secs(el.nextAt)} s – a different stage.`;
+    const watch = done && me && !won ? h('button', { class: 'btn primary', onclick: () => { this.stopElimTicker(); this.onExit('navigator'); } }, 'Watch the rest') : null;
+    const leave = h('button', { class: 'btn danger', onclick: () => { this.stopElimTicker(); void this.leave(); } }, 'Leave');
+    this.showOverlay(
+      h('div', { class: 'overlay results', 'data-testid': 'elim-results' },
+        h('div', { class: 'card', style: 'max-height:92vh;overflow-y:auto' },
+          h('h2', {}, title),
+          h('div', { class: 'sub' }, `Round ${el.round + 1} · ${this.stage.def.name} · ${this.stage.def.location}`),
+          h('div', { class: 'rewards' },
+            ...rows.map((d, i) => h('div', { class: `prize-line ${outNow.has(d.playerId) ? 'neg' : ''}` }, h('span', {}, `${i + 1}. ${d.name}${d.playerId === this.myId ? ' (you)' : ''}${outNow.has(d.playerId) ? ` – out (${reason[outNow.get(d.playerId)!.reason]})` : ''}`), h('span', {}, d.result ? formatMs(d.result.timeMs) : d.retired ? 'DNF' : '…'))),
+          ),
+          h('div', { class: 'sub', style: 'margin-top:12px' }, status),
+          h('div', { class: 'actions' }, watch, leave),
+        ),
+      ),
+    );
   }
 
   private onFinished(r: RaceResult) {
@@ -1209,6 +1260,7 @@ export class Game {
     this.resultShown = true;
     this.vehicle.frozen = true;
     this.hud.center('FINISH');
+    if (this.raceState?.elim) return this.showElimOverlay();
     if (this.ctx.kind === 'championship') return this.finishChampionship(r);
     if (this.ctx.kind === 'daily') return this.finishDaily(r, this.ctx.date);
     if (this.ctx.kind === 'limited') return this.finishDaily(r, this.ctx.key, true);
@@ -1459,10 +1511,12 @@ export class Game {
           'div',
           { class: 'actions' },
           h('button', { class: 'btn primary', onclick: () => this.closeOverlay() }, 'Resume'),
-          champRound || !net.isHost ? null : h('button', { class: 'btn', onclick: () => this.restart() }, (this.raceState?.drivers.length ?? 1) > 1 ? 'Restart for everyone' : 'Restart stage'),
+          champRound || this.raceState?.elim || !net.isHost ? null : h('button', { class: 'btn', onclick: () => this.restart() }, (this.raceState?.drivers.length ?? 1) > 1 ? 'Restart for everyone' : 'Restart stage'),
           h('button', { class: 'btn', onclick: () => { this.closeOverlay(); this.resetVehicle(); } }, 'Reset car'),
           this.ctx.kind === 'quick' && net.isHost ? h('button', { class: 'btn', onclick: () => void net.toLobby().catch((e) => toast(e.message, 'bad')) }, 'Back to lobby') : null,
-          champRound
+          this.raceState?.elim
+            ? h('button', { class: 'btn danger', onclick: () => { this.closeOverlay(); void net.retire().catch(() => undefined); this.vehicle.frozen = true; this.showElimOverlay(); } }, 'Retire (you are out)')
+            : champRound
             ? h('button', { class: 'btn danger', onclick: () => this.retire() }, 'Retire from round (0 pts)')
             : h('button', { class: 'btn danger', onclick: () => void (this.ctx.kind === 'daily' || this.ctx.kind === 'limited' ? this.leaveTo(this.ctx.kind) : this.leave()) }, 'Quit rally'),
         ),
@@ -1968,6 +2022,7 @@ export class Game {
 
   dispose() {
     this.disposed = true;
+    this.stopElimTicker();
     cancelAnimationFrame(this.raf);
     this.unsubs.forEach((u) => u());
     window.removeEventListener('resize', this.onResize);

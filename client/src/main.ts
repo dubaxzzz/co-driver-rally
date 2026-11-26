@@ -45,6 +45,13 @@ async function render() {
     case 'limited':
       current = limitedScreen(nav);
       break;
+    case 'elimination':
+      if (net.room && !net.room.race.elim) await net.leave(); // an elimination gets a lobby of its own
+      if (token !== routeToken) return;
+      eventCtx.clear();
+      lastLobby = 'lobby';
+      current = lobbyScreen(nav, 'elimination');
+      break;
     case 'create':
     case 'lobby':
       if (route === 'lobby' && !net.room) return go('play');

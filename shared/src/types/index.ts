@@ -14,6 +14,8 @@ export interface RallyConfig {
   daily?: string;
   /** Single-driver event (championship round / daily): other people can only join as navigator. */
   soloEvent?: boolean;
+  /** Elimination (drivers only): the slowest is out after every stage, on a different stage each round. */
+  elimination?: boolean;
 }
 
 /** Spectators watch the rally (cameras, live splits) without taking one of the 4 seats. */
@@ -64,6 +66,32 @@ export interface DriverRace {
   retired: boolean;
 }
 
+/** Why a driver was knocked out of an elimination. */
+export type ElimReason = 'last' | 'cutoff' | 'retired';
+
+export interface ElimOut {
+  playerId: string;
+  name: string;
+  round: number;
+  reason: ElimReason;
+}
+
+/** Elimination progress (only on elimination rallies). */
+export interface ElimState {
+  /** 0-based number of the current round. */
+  round: number;
+  /** The stage of every round, in order – shuffled when the lobby is made. */
+  rounds: Array<{ stageId: string; weather: WeatherId }>;
+  /** Everyone knocked out so far, in order. */
+  out: ElimOut[];
+  /** Server time the cut-off falls (first finish + bracket); null until someone finishes. */
+  cutoffAt: number | null;
+  /** Server time the next round starts (while the results are showing). */
+  nextAt: number | null;
+  /** Set when one driver is left. */
+  winner: { playerId: string; name: string } | null;
+}
+
 export interface RaceState extends RallyConfig {
   phase: RacePhase;
   /** Increments on every (re)start so stale packets/events can be ignored. */
@@ -76,6 +104,8 @@ export interface RaceState extends RallyConfig {
   drivers: DriverRace[];
   /** The driver whose game simulates the AI cars for everybody. */
   aiHost: string | null;
+  /** Elimination progress (elimination rallies only). */
+  elim?: ElimState;
 }
 
 export interface RoomSnapshot {

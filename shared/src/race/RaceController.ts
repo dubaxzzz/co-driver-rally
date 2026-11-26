@@ -1,7 +1,7 @@
 import { decodeSwitches } from '../switches';
-import { ENGINE_WAIT_MS, COUNTDOWN_MS, GRID_ROW_GAP_M, GRID_SIDE_OFFSET_M, MAX_PLAUSIBLE_SPEED_MS, MAX_TELEPORT_SLACK_M } from '../constants';
-import { getStage, projectOnStage, type BuiltStage } from '../tracks';
-import type { CheckpointEvent, DriverRace, RaceResult, RaceState, RaceWarning, RallyConfig, TelemetryPacket } from '../types';
+import { ENGINE_WAIT_MS, COUNTDOWN_MS, GRID_ROW_GAP_M, GRID_SIDE_OFFSET_M, MAX_PLAUSIBLE_SPEED_MS, MAX_TELEPORT_SLACK_M, ELIM_BRACKET_MIN_MS, ELIM_BRACKET_RATIO, ELIM_BREAK_MS, ELIM_END_MS, ELIM_MAX_STAGE_MS } from '../constants';
+import { getStage, projectOnStage, STAGE_DEFS, type BuiltStage } from '../tracks';
+import type { CheckpointEvent, DriverRace, ElimOut, ElimState, RaceResult, RaceState, RaceWarning, RallyConfig, TelemetryPacket } from '../types';
 import { DEFAULT_STAGE_ID } from '../tracks';
 import { DEFAULT_WEATHER } from '../weather';
 
@@ -12,6 +12,27 @@ export interface RaceEvents {
   onCheckpoint: (evt: CheckpointEvent) => void;
   onWarning: (playerId: string, w: RaceWarning) => void;
   onFinished: (r: RaceResult) => void;
+  /** Elimination: these drivers are out (the server turns them into spectators). */
+  onEliminated?: (playerIds: string[]) => void;
+  /** Elimination: the event is over and the room goes back to the lobby; `outIds` were knocked out along the way. */
+  onEventOver?: (outIds: string[]) => void;
+  /** Elimination: is this driver still in the room? (leavers are left off the next grid) */
+  isPresent?: (playerId: string) => boolean;
+}
+
+const shuffle = <T>(list: T[]): T[] => {
+  const a = [...list];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+/** Elimination: three different stages in a random order (new every time a lobby is made). */
+export function pickElimRounds(): ElimState['rounds'] {
+  const pool = STAGE_DEFS.filter((s) => s.referenceTimeMs <= ELIM_MAX_STAGE_MS);
+  return shuffle(pool).slice(0, 3).map((s) => ({ stageId: s.id, weather: s.defaultWeather }));
 }
 
 const GATE_HALF_WIDTH = 13;
@@ -62,6 +83,10 @@ export class RaceController {
   state: RaceState;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private trackers = new Map<string, Tracker>();
+  private cutoffTimer: ReturnType<typeof setTimeout> | null = null;
+  private nextTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Drivers that ran out of time (not finished inside the bracket) this round. */
+  private cutoffOut = new Set<string>();
 
   constructor(config: Partial<RallyConfig>, private readonly events: RaceEvents) {
     const cfg = { ...DEFAULT_CONFIG, ...config };
@@ -69,6 +94,15 @@ export class RaceController {
     if (!stage) throw new Error(`Unknown stage ${cfg.stageId}`);
     this.stage = stage;
     this.state = { ...cfg, phase: 'lobby', runId: 0, startAt: null, finishedAt: null, drivers: [], aiHost: null };
+    if (cfg.elimination) this.resetElimination();
+  }
+
+  /** A fresh elimination: new random stages, the first one is loaded. */
+  private resetElimination() {
+    const rounds = pickElimRounds();
+    const first = rounds[0];
+    this.stage = getStage(first.stageId)!;
+    this.state = { ...this.state, stageId: first.stageId, weather: first.weather, aiCount: 0, elim: { round: 0, rounds, out: [], cutoffAt: null, nextAt: null, winner: null } };
   }
 
   driver(playerId: string): DriverRace | null {
@@ -79,6 +113,7 @@ export class RaceController {
   start(drivers: Array<{ playerId: string; name: string }>, now = Date.now()): RaceState {
     this.clearTimer();
     this.trackers.clear();
+    this.cutoffOut.clear();
     const list: DriverRace[] = drivers.map((d, slot) => ({ playerId: d.playerId, name: d.name, slot, checkpointsPassed: 0, splits: [], result: null, retired: false }));
     for (const d of list) this.trackers.set(d.playerId, new Tracker(gridSpot(this.stage, d.slot, list.length).distance));
     // The countdown doesn't run yet: every driver has to start their car first
@@ -132,7 +167,7 @@ export class RaceController {
 
   /** Changes stage / weather / AI. Only allowed in the lobby. */
   configure(cfg: Partial<RallyConfig>): RaceState {
-    if (this.state.phase !== 'lobby') return this.state;
+    if (this.state.phase !== 'lobby' || this.state.elim) return this.state;
     if (cfg.stageId && cfg.stageId !== this.state.stageId) {
       const stage = getStage(cfg.stageId);
       if (!stage) return this.state;
@@ -146,7 +181,10 @@ export class RaceController {
   toLobby(): RaceState {
     this.clearTimer();
     this.trackers.clear();
+    const out = this.state.elim?.out.map((o) => o.playerId);
     this.state = { ...this.state, phase: 'lobby', startAt: null, finishedAt: null, drivers: [], aiHost: null };
+    if (this.state.elim) this.resetElimination(); // a new lobby: the stages are mixed again
+    if (out) this.events.onEventOver?.(out);
     this.events.onState(this.state);
     return this.state;
   }
@@ -260,6 +298,7 @@ export class RaceController {
     };
     this.patchDriver(playerId, { result });
     this.events.onFinished(result);
+    this.armCutoff(now - startAt, now);
     if (!this.checkAllDone(now)) this.events.onState(this.state);
   }
 
@@ -269,8 +308,78 @@ export class RaceController {
     if (!all || this.state.phase === 'finished') return false;
     this.clearTimer();
     this.state = { ...this.state, phase: 'finished', finishedAt: now };
+    if (this.state.elim) this.resolveElimination(now);
     this.events.onState(this.state);
     return true;
+  }
+
+  // ------------------------------------------------------------ elimination
+  /** The first driver home starts the clock: the others have a bracket after them to finish. */
+  private armCutoff(firstTimeMs: number, now: number) {
+    const elim = this.state.elim;
+    if (!elim || elim.cutoffAt !== null || this.state.phase !== 'racing') return;
+    const bracket = Math.max(ELIM_BRACKET_MIN_MS, Math.round(firstTimeMs * ELIM_BRACKET_RATIO));
+    this.state = { ...this.state, elim: { ...elim, cutoffAt: now + bracket } };
+    this.cutoffTimer = setTimeout(() => {
+      this.cutoffTimer = null;
+      this.cutoff(Date.now());
+    }, bracket);
+  }
+
+  /** Time is up: whoever has not finished is out. */
+  private cutoff(now: number) {
+    if (this.state.phase !== 'racing') return;
+    for (const d of this.state.drivers) {
+      if (d.result || d.retired) continue;
+      this.cutoffOut.add(d.playerId);
+      this.patchDriver(d.playerId, { retired: true });
+    }
+    if (!this.checkAllDone(now)) this.events.onState(this.state);
+  }
+
+  /** The stage is over: whoever did not finish is out – or, if everybody did, the last one home. */
+  private resolveElimination(now: number) {
+    const elim = this.state.elim!;
+    const finishers = this.state.drivers.filter((d) => d.result).sort((a, b) => a.result!.timeMs - b.result!.timeMs);
+    const dnf = this.state.drivers.filter((d) => !d.result);
+    const mk = (d: DriverRace, reason: ElimOut['reason']): ElimOut => ({ playerId: d.playerId, name: d.name, round: elim.round, reason });
+    let outs: ElimOut[] = [];
+    if (dnf.length) outs = dnf.map((d) => mk(d, this.cutoffOut.has(d.playerId) ? 'cutoff' : 'retired'));
+    else if (finishers.length >= 2) outs = [mk(finishers[finishers.length - 1], 'last')];
+    const outIds = new Set(outs.map((o) => o.playerId));
+    const survivors = finishers.filter((d) => !outIds.has(d.playerId));
+    this.state = { ...this.state, elim: { ...elim, out: [...elim.out, ...outs], cutoffAt: null } };
+    this.nextTimer = null;
+    const present = survivors.filter((d) => this.events.isPresent?.(d.playerId) ?? true);
+    if (survivors.length <= 1 || present.length <= 1 || elim.round + 1 >= elim.rounds.length) {
+      // one driver left (or nobody): the event is over
+      const w = present.length === 1 ? present[0] : survivors.length === 1 ? survivors[0] : null;
+      this.state = { ...this.state, elim: { ...this.state.elim!, nextAt: now + ELIM_END_MS, winner: w ? { playerId: w.playerId, name: w.name } : null } };
+      this.nextTimer = setTimeout(() => {
+        this.nextTimer = null;
+        this.toLobby();
+      }, ELIM_END_MS);
+    } else {
+      this.state = { ...this.state, elim: { ...this.state.elim!, nextAt: now + ELIM_BREAK_MS } };
+      this.nextTimer = setTimeout(() => {
+        this.nextTimer = null;
+        this.startNextRound(survivors);
+      }, ELIM_BREAK_MS);
+    }
+    if (outs.length) this.events.onEliminated?.(outs.map((o) => o.playerId));
+  }
+
+  /** The next round starts by itself: a different stage, everyone still in on the grid. */
+  private startNextRound(survivors: DriverRace[]) {
+    const elim = this.state.elim;
+    if (!elim) return;
+    const grid = survivors.filter((d) => this.events.isPresent?.(d.playerId) ?? true).map((d) => ({ playerId: d.playerId, name: d.name }));
+    if (grid.length < 2) return this.toLobby();
+    const round = elim.round + 1;
+    const next = elim.rounds[round];
+    this.stage = getStage(next.stageId)!;
+    this.state = { ...this.state, stageId: next.stageId, weather: next.weather, elim: { ...elim, round, nextAt: null, cutoffAt: null } };
+    this.start(grid);
   }
 
   private patchDriver(playerId: string, patch: Partial<DriverRace>) {
@@ -280,6 +389,10 @@ export class RaceController {
   private clearTimer() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    if (this.cutoffTimer) clearTimeout(this.cutoffTimer);
+    this.cutoffTimer = null;
+    if (this.nextTimer) clearTimeout(this.nextTimer);
+    this.nextTimer = null;
   }
 
   dispose() {

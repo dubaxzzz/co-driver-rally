@@ -155,6 +155,17 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
   and everyone is paid for their own finish.
 - Restart and back-to-lobby are the host's call.
 
+## Elimination (multiplayer, drivers only)
+
+**Play → Elimination** makes a lobby for 2–4 **drivers** (no navigators). Everybody races the same stage at once:
+
+- The **last driver to finish is out** – and so is anyone who has not finished inside the **time bracket**: once the first driver is home the others get 25% of that time (at least 20 s) to finish. Retiring also puts you out.
+- The **next round starts by itself** a few seconds later, on a **different stage**. The three stages are picked at random and mixed every time a lobby is made, and you only see which one when the round begins.
+- Knocked-out drivers keep **watching** from the cameras. The **last driver left wins**, then the room returns to the lobby with freshly mixed stages.
+- No restarts. Elimination needs the online server (it is not available in browser-to-browser mode).
+
+The tuning numbers are the `ELIM_*` constants in `shared/src/constants/index.ts`; the rules are in `shared/src/race/RaceController.ts` and are covered by `npm run test:elimination`.
+
 ## Championship career
 
 - Six-round seasons (each season visits the next six stages on the calendar, in their
