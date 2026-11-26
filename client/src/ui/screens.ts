@@ -140,7 +140,7 @@ export function lobbyScreen(nav: Nav, mode: 'crew' | 'solo' | 'elimination' | 't
   const elimPanel = h('div', { class: 'panel setup', 'data-testid': 'elim-panel' },
     h('div', { class: 'panel-title' }, 'Elimination'),
     h('p', { class: 'setup-desc' }, 'Drivers only, up to 4 – no navigators. Everybody races the same stage at once. The last driver to finish is out, and so is anyone who has not finished inside the time bracket after the first driver home.'),
-    h('p', { class: 'setup-desc' }, 'The next round starts by itself on a different stage. The stages are mixed every time a lobby is made, and you only find out which one when the round begins. Knocked out? You keep watching from the cameras. The last driver left wins.'),
+    h('p', { class: 'setup-desc' }, 'When everyone is done, the survivors tick Ready and the host starts the next round, on a different stage. The stages are mixed every time a lobby is made, and you only find out which one when the round begins. Knocked out? You keep watching from the cameras. The last driver left wins.'),
   );
   elimPanel.style.display = mode === 'elimination' ? '' : 'none';
   setupPanel.style.display = mode === 'elimination' ? 'none' : '';

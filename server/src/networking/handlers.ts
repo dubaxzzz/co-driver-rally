@@ -86,6 +86,16 @@ export function registerHandlers(io: IO) {
       rooms.eliminate(room, ids);
       broadcastRoom(room);
     },
+    onRoundEnd: (survivorIds) => {
+      const room = rooms.get(code);
+      if (!room) return;
+      // everyone still in has to tick ready again for the next round (the host starts it)
+      for (const id of survivorIds) {
+        const seat = rooms.seat(room, id);
+        if (seat && seat.playerId !== room.hostId) seat.ready = false;
+      }
+      broadcastRoom(room);
+    },
     onEventOver: (outIds) => {
       const room = rooms.get(code);
       if (!room) return;
@@ -260,6 +270,26 @@ export function registerHandlers(io: IO) {
       if (typeof cfg === 'string') return ack(err('BAD_PAYLOAD', cfg));
       onlyChampionshipAi(cfg, !!ctx.room.race.state.soloEvent);
       ack({ ok: true, data: ctx.room.race.configure(cfg) });
+    });
+    // elimination: the host starts the next round once the survivors have ticked ready
+    socket.on('race:next', (ackFn) => {
+      const ack = safeAck<RaceState>(ackFn);
+      const ctx = currentRoom();
+      if (!ctx) return ack(err('NOT_IN_ROOM', 'You are not in a rally.'));
+      const { b, room } = ctx;
+      if (room.hostId !== b.playerId) return ack(err('NOT_ALLOWED', 'Only the host can start the next round.'));
+      const el = room.race.state.elim;
+      if (!el?.waiting || room.race.state.phase !== 'finished') return ack(err('WRONG_PHASE', 'The round is not over yet.'));
+      const out = new Set(el.out.map((o) => o.playerId));
+      const waiting = room.race.state.drivers
+        .filter((d) => !out.has(d.playerId) && d.playerId !== room.hostId)
+        .map((d) => rooms.seat(room, d.playerId))
+        .filter((s) => s && s.connected && !s.ready);
+      if (waiting.length) return ack(err('NOT_ALLOWED', `Waiting for ${waiting.map((s) => s!.name).join(', ')} to ready up.`));
+      room.lastTelemetry.clear();
+      if (!room.race.nextRound()) return ack(err('WRONG_PHASE', 'The round is not over yet.'));
+      broadcastRoom(room);
+      ack({ ok: true, data: room.race.state });
     });
     socket.on('race:start', (ack) => raceAction('start', ack));
     socket.on('race:restart', (ack) => raceAction('restart', ack));

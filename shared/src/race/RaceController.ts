@@ -1,5 +1,5 @@
 import { decodeSwitches } from '../switches';
-import { ENGINE_WAIT_MS, COUNTDOWN_MS, GRID_ROW_GAP_M, GRID_SIDE_OFFSET_M, MAX_PLAUSIBLE_SPEED_MS, MAX_TELEPORT_SLACK_M, ELIM_BRACKET_MIN_MS, ELIM_BRACKET_RATIO, ELIM_BREAK_MS, ELIM_END_MS, ELIM_MAX_STAGE_MS } from '../constants';
+import { ENGINE_WAIT_MS, COUNTDOWN_MS, GRID_ROW_GAP_M, GRID_SIDE_OFFSET_M, MAX_PLAUSIBLE_SPEED_MS, MAX_TELEPORT_SLACK_M, ELIM_BRACKET_MIN_MS, ELIM_BRACKET_RATIO, ELIM_END_MS, ELIM_MAX_STAGE_MS } from '../constants';
 import { getStage, projectOnStage, STAGE_DEFS, type BuiltStage } from '../tracks';
 import type { CheckpointEvent, DriverRace, ElimOut, ElimState, RaceResult, RaceState, RaceWarning, RallyConfig, TelemetryPacket } from '../types';
 import { DEFAULT_STAGE_ID } from '../tracks';
@@ -12,6 +12,8 @@ export interface RaceEvents {
   onCheckpoint: (evt: CheckpointEvent) => void;
   onWarning: (playerId: string, w: RaceWarning) => void;
   onFinished: (r: RaceResult) => void;
+  /** Elimination: the round is over and these drivers are still in – they get ready for the next one. */
+  onRoundEnd?: (survivorIds: string[]) => void;
   /** Elimination: these drivers are out (the server turns them into spectators). */
   onEliminated?: (playerIds: string[]) => void;
   /** Elimination: the event is over and the room goes back to the lobby; `outIds` were knocked out along the way. */
@@ -102,7 +104,7 @@ export class RaceController {
     const rounds = pickElimRounds();
     const first = rounds[0];
     this.stage = getStage(first.stageId)!;
-    this.state = { ...this.state, stageId: first.stageId, weather: first.weather, aiCount: 0, elim: { round: 0, rounds, out: [], cutoffAt: null, nextAt: null, winner: null } };
+    this.state = { ...this.state, stageId: first.stageId, weather: first.weather, aiCount: 0, elim: { round: 0, rounds, out: [], cutoffAt: null, nextAt: null, waiting: false, winner: null } };
   }
 
   driver(playerId: string): DriverRace | null {
@@ -360,13 +362,20 @@ export class RaceController {
         this.toLobby();
       }, ELIM_END_MS);
     } else {
-      this.state = { ...this.state, elim: { ...this.state.elim!, nextAt: now + ELIM_BREAK_MS } };
-      this.nextTimer = setTimeout(() => {
-        this.nextTimer = null;
-        this.startNextRound(survivors);
-      }, ELIM_BREAK_MS);
+      // the survivors get ready and the host starts the next round (nextRound)
+      this.state = { ...this.state, elim: { ...this.state.elim!, waiting: true } };
     }
     if (outs.length) this.events.onEliminated?.(outs.map((o) => o.playerId));
+    if (this.state.elim?.waiting) this.events.onRoundEnd?.(survivors.map((d) => d.playerId));
+  }
+
+  /** Elimination: the host starts the next round for everyone still in. */
+  nextRound(): boolean {
+    const elim = this.state.elim;
+    if (!elim || !elim.waiting || this.state.phase !== 'finished' || elim.winner) return false;
+    const out = new Set(elim.out.map((o) => o.playerId));
+    this.startNextRound(this.state.drivers.filter((d) => !out.has(d.playerId)));
+    return true;
   }
 
   /** The next round starts by itself: a different stage, everyone still in on the grid. */
@@ -378,7 +387,7 @@ export class RaceController {
     const round = elim.round + 1;
     const next = elim.rounds[round];
     this.stage = getStage(next.stageId)!;
-    this.state = { ...this.state, stageId: next.stageId, weather: next.weather, elim: { ...elim, round, nextAt: null, cutoffAt: null } };
+    this.state = { ...this.state, stageId: next.stageId, weather: next.weather, elim: { ...elim, round, nextAt: null, cutoffAt: null, waiting: false } };
     this.start(grid);
   }
 

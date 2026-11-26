@@ -179,7 +179,7 @@ export class Game {
       // Physics + world
       this.physics = new PhysicsWorld(R);
       await new Promise((r) => setTimeout(r, 0)); // let the loading screen paint
-      this.world = buildStageWorld(this.scene, stage, { quality, physics: this.physics, fogMultiplier: fogMultiplier(), weather: this.weather.id });
+      this.world = buildStageWorld(this.scene, stage, { quality, physics: this.physics, fogMultiplier: fogMultiplier(), weather: this.weather.id, noTrees: this.ctx.kind === 'timeattack' });
       this.roadWear = new RoadWear(stage);
       this.scene.add(this.roadWear.mesh);
       this.scene.add(this.smoke.points);
@@ -287,6 +287,7 @@ export class Game {
   private bindNet() {
     this.unsubs.push(
       net.on('race', (s) => this.applyRaceState(s)),
+      net.on('room', () => { if (this.raceState?.elim && this.raceState.phase === 'finished') this.showElimOverlay(); }),
       net.on('telemetry', (p) => this.onRemoteTelemetry(p)),
       net.on('sys', (e) => {
         const s = this.sys;
@@ -381,6 +382,8 @@ export class Game {
     this.dirt = 0;
     this.sys = defaultSystems();
     this.cond = stageConditions(this.stage, this.raceState?.runId ?? 1, this.weather.id);
+    // time attack: no trees and no animals – a fallen tree or a herd would make runs hard to compare with the ghost
+    if (this.ctx.kind === 'timeattack') this.cond = { ...this.cond, obstacles: this.cond.obstacles.filter((o) => o.kind === 'rocks') };
     this.warnedObstacles.clear();
     this.world.scenery.setObstacles(this.cond.obstacles);
     for (const a of this.ai) a.obstacles = this.cond.obstacles;
@@ -1314,10 +1317,16 @@ export class Game {
   }
 
   /** Elimination: how the round went, who is out, and when the next stage starts. Refreshes every second. */
+  private elimUi: { root: HTMLElement; title: HTMLElement; sub: HTMLElement; rows: HTMLElement; status: HTMLElement; actions: HTMLElement; sig: string } | null = null;
+
+  /**
+   * Elimination: how the round went and who is out. The survivors tick ready and the host starts the next round.
+   * Built once and updated in place (every second and on every change), so it never flashes or eats a click.
+   */
   private showElimOverlay() {
     const st = this.raceState;
     const el = st?.elim;
-    if (!st || !el || this.disposed) return;
+    if (!st || !el || this.disposed || this.paused) return;
     if (this.elimTicker === undefined) this.elimTicker = window.setInterval(() => this.showElimOverlay(), 1000);
     const mine = this.myRace(st);
     const done = st.phase === 'finished';
@@ -1327,27 +1336,52 @@ export class Game {
     const reason = { last: 'last to finish', cutoff: 'not finished inside the time bracket', retired: 'retired' };
     const rows = [...st.drivers].sort((a, b) => (a.result?.timeMs ?? Infinity) - (b.result?.timeMs ?? Infinity));
     const outNow = new Map(el.out.filter((o) => o.round === el.round).map((o) => [o.playerId, o]));
+    const hostId = net.room?.hostId;
+    const hostName = net.member(hostId)?.name ?? 'The host';
+    const survivors = st.drivers.filter((d) => !el.out.some((o) => o.playerId === d.playerId));
+    const notReady = survivors.filter((d) => d.playerId !== hostId && net.member(d.playerId)?.connected && !net.member(d.playerId)?.ready).map((d) => d.name);
+    const imReady = !!net.me()?.ready;
+    const through = done && !me && !el.winner;
+
     const title = !done ? (mine?.retired ? 'RETIRED' : 'FINISHED') : won ? 'YOU WIN THE ELIMINATION!' : me ? 'ELIMINATED' : 'SAFE';
     let status: string;
     if (!done) status = mine?.retired ? 'Waiting for the round to end…' : el.cutoffAt ? `Time bracket: the others must finish in ${secs(el.cutoffAt)} s or they are out.` : 'Waiting for the others…';
     else if (el.winner) status = `${el.winner.name} wins! Back to the lobby in ${secs(el.nextAt)} s.`;
-    else if (me) status = `You are out (${reason[me.reason]}). The next round starts in ${secs(el.nextAt)} s.`;
-    else status = `You are through. Next round starts in ${secs(el.nextAt)} s – a different stage.`;
-    const watch = done && me && !won ? h('button', { class: 'btn primary', onclick: () => { this.stopElimTicker(); this.onExit('navigator'); } }, 'Watch the rest') : null;
-    const leave = h('button', { class: 'btn danger', onclick: () => { this.stopElimTicker(); void this.leave(); } }, 'Leave');
-    this.showOverlay(
-      h('div', { class: 'overlay results', 'data-testid': 'elim-results' },
-        h('div', { class: 'card', style: 'max-height:92vh;overflow-y:auto' },
-          h('h2', {}, title),
-          h('div', { class: 'sub' }, `Round ${el.round + 1} · ${this.stage.def.name} · ${this.stage.def.location}`),
-          h('div', { class: 'rewards' },
-            ...rows.map((d, i) => h('div', { class: `prize-line ${outNow.has(d.playerId) ? 'neg' : ''}` }, h('span', {}, `${i + 1}. ${d.name}${d.playerId === this.myId ? ' (you)' : ''}${outNow.has(d.playerId) ? ` – out (${reason[outNow.get(d.playerId)!.reason]})` : ''}`), h('span', {}, d.result ? formatMs(d.result.timeMs) : d.retired ? 'DNF' : '…'))),
-          ),
-          h('div', { class: 'sub', style: 'margin-top:12px' }, status),
-          h('div', { class: 'actions' }, watch, leave),
-        ),
-      ),
+    else if (me && net.isHost) status = `You are out (${reason[me.reason]}). You are still the host: start the next round when the others are ready.`;
+    else if (me) status = `You are out (${reason[me.reason]}). The next round starts when ${hostName} starts it.`;
+    else if (net.isHost) status = notReady.length ? `Waiting for ${notReady.join(', ')} to ready up.` : 'Everyone is ready – start the next round (a different stage).';
+    else status = imReady ? `Ready ✓ – waiting for ${hostName} to start the next round.` : 'You are through! Tap Ready for the next round – a different stage.';
+
+    // which buttons: rebuilt only when this changes, so a click is never lost
+    const startNext = (through || (done && me && net.isHost && !el.winner)) && net.isHost;
+    const kind = [done && me && !won && !net.isHost ? 'watch' : '', startNext ? `start${notReady.length ? '-off' : ''}` : '', through && !net.isHost ? `ready${imReady ? '-on' : ''}` : ''].join('|');
+
+    if (!this.elimUi || this.overlay !== this.elimUi.root) {
+      const ui = { root: h('div', { class: 'overlay results', 'data-testid': 'elim-results' }), title: h('h2', {}), sub: h('div', { class: 'sub' }), rows: h('div', { class: 'rewards' }), status: h('div', { class: 'sub', style: 'margin-top:12px' }), actions: h('div', { class: 'actions' }), sig: '' };
+      ui.root.append(h('div', { class: 'card', style: 'max-height:92vh;overflow-y:auto' }, ui.title, ui.sub, ui.rows, ui.status, ui.actions));
+      this.elimUi = ui;
+      this.showOverlay(ui.root);
+    }
+    const ui = this.elimUi;
+    ui.title.textContent = title;
+    ui.sub.textContent = `Round ${el.round + 1} · ${this.stage.def.name} · ${this.stage.def.location}`;
+    ui.status.textContent = status;
+    ui.rows.replaceChildren(
+      ...rows.map((d, i) => h('div', { class: `prize-line ${outNow.has(d.playerId) ? 'neg' : ''}` }, h('span', {}, `${i + 1}. ${d.name}${d.playerId === this.myId ? ' (you)' : ''}${outNow.has(d.playerId) ? ` – out (${reason[outNow.get(d.playerId)!.reason]})` : ''}`), h('span', {}, d.result ? formatMs(d.result.timeMs) : d.retired ? 'DNF' : '…'))),
     );
+    if (ui.sig !== kind) {
+      ui.sig = kind;
+      const leave = h('button', { class: 'btn danger', onclick: () => { this.stopElimTicker(); void this.leave(); } }, 'Leave');
+      const btns: HTMLElement[] = [];
+      if (kind.includes('watch')) btns.push(h('button', { class: 'btn primary', onclick: () => { this.stopElimTicker(); this.onExit('navigator'); } }, 'Watch the rest'));
+      if (startNext) {
+        const go = h('button', { class: 'btn primary', 'data-testid': 'elim-next', onclick: () => void net.nextRound().catch((e) => toast(e.message, 'bad')) }, 'Start next round') as HTMLButtonElement;
+        go.disabled = notReady.length > 0;
+        btns.push(go);
+      }
+      if (through && !net.isHost) btns.push(h('button', { class: `btn ${imReady ? '' : 'primary'}`, 'data-testid': 'elim-ready', onclick: () => void net.setReady(!net.me()?.ready).catch((e) => toast(e.message, 'bad')) }, imReady ? 'Ready ✓ (tap to undo)' : 'Ready'));
+      ui.actions.replaceChildren(...btns, leave);
+    }
   }
 
   private onFinished(r: RaceResult) {

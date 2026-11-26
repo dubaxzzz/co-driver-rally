@@ -105,6 +105,10 @@ export abstract class NetBase {
   abstract startRace(): Promise<RaceState>;
   abstract restartRace(): Promise<RaceState>;
   abstract toLobby(): Promise<RaceState>;
+  /** Elimination: the host starts the next round (online server only). */
+  nextRound(): Promise<RaceState> {
+    return Promise.reject(new NetError('NOT_ALLOWED', 'Elimination needs the online rally server.'));
+  }
   abstract sendCall(req: NavCallRequest): Promise<NavCall>;
   abstract sendTelemetry(p: TelemetryPacket): void;
   /** Navigator: flip a shared switch in my driver's car. */

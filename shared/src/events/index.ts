@@ -35,6 +35,8 @@ export interface ClientToServerEvents {
   'race:start': (ack?: (res: Ack<RaceState>) => void) => void;
   'race:restart': (ack?: (res: Ack<RaceState>) => void) => void;
   'race:lobby': (ack?: (res: Ack<RaceState>) => void) => void;
+  /** Elimination: the host starts the next round once the survivors are ready. */
+  'race:next': (ack?: (res: Ack<RaceState>) => void) => void;
   telemetry: (packet: TelemetryPacket) => void;
   'nav:call': (payload: NavCallRequest, ack?: (res: Ack<NavCall>) => void) => void;
   /** Navigator flips a shared switch in their driver's car. */

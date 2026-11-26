@@ -28,7 +28,7 @@ export interface StageWorld {
 export function buildStageWorld(
   scene: THREE.Scene,
   stage: BuiltStage,
-  opts: { quality: 'high' | 'low'; physics: PhysicsWorld | null; fogMultiplier: number; weather: WeatherId },
+  opts: { quality: 'high' | 'low'; physics: PhysicsWorld | null; fogMultiplier: number; weather: WeatherId; noTrees?: boolean },
 ): StageWorld {
   const weather = WEATHER[opts.weather] ?? WEATHER.storm;
   const track = buildTrack(stage);
@@ -48,7 +48,7 @@ export function buildStageWorld(
   const viewGround = long ? 620 : 820;
   const sceneryView = long ? 520 : 650;
   const atmosphere = new Atmosphere(scene, weather, stage.def.scenery, opts.quality === 'high', opts.fogMultiplier, !!stage.def.flatBase);
-  const scenery = new Scenery(stage, track.data, opts.physics, opts.quality);
+  const scenery = new Scenery(stage, track.data, opts.physics, opts.quality, opts.noTrees);
   scene.add(scenery.group);
   const q = opts.quality === 'high' ? 1 : 0.5;
   // rain is always ready: showers can drift over a dry stage (see stageConditions)

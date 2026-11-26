@@ -86,8 +86,10 @@ export interface ElimState {
   out: ElimOut[];
   /** Server time the cut-off falls (first finish + bracket); null until someone finishes. */
   cutoffAt: number | null;
-  /** Server time the next round starts (while the results are showing). */
+  /** Server time the room goes back to the lobby (after the winner). */
   nextAt: number | null;
+  /** The round is over and the survivors are getting ready – the host starts the next one. */
+  waiting: boolean;
   /** Set when one driver is left. */
   winner: { playerId: string; name: string } | null;
 }

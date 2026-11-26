@@ -1,5 +1,5 @@
 /** Elimination rules: last home is out, so is anyone outside the time bracket; the stages change every round. */
-import { RaceController, STAGE_DEFS, ELIM_BRACKET_MIN_MS, ELIM_BREAK_MS, type RaceState, type TelemetryPacket } from '../shared/src/index';
+import { RaceController, STAGE_DEFS, ELIM_BRACKET_MIN_MS, type RaceState, type TelemetryPacket } from '../shared/src/index';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -75,12 +75,14 @@ drive({ A: 40, B: 36, C: 30 }, len / 25 + 60);
 check(ctl.state.phase === 'finished', 'round 1 is over once all three finished');
 check(ctl.state.elim!.out.length === 1 && ctl.state.elim!.out[0].playerId === 'C' && ctl.state.elim!.out[0].reason === 'last', 'the last driver to finish (C) is out');
 check(eliminated.join() === 'C', 'the server is told C is out');
-check(ctl.state.elim!.nextAt !== null, 'the next round is scheduled');
+check(ctl.state.elim!.waiting && ctl.state.phase === 'finished', 'the round waits for the host to start the next one');
+check(timers.size === 0, 'no timer starts the next round by itself');
 
 // ---- the next round begins by itself on a different stage with only A and B
 const stage1 = ctl.state.stageId;
-check(fireTimer(ELIM_BREAK_MS), 'the break timer fires');
-check(ctl.state.phase === 'countdown' && ctl.state.runId === 2, 'round 2 starts on its own');
+check(ctl.nextRound(), 'the host starts the next round');
+check(!ctl.nextRound(), 'it cannot be started twice');
+check(ctl.state.phase === 'countdown' && ctl.state.runId === 2, 'round 2 starts');
 check(ctl.state.stageId !== stage1 && ctl.state.stageId === first.rounds[1].stageId, 'round 2 is a different stage');
 check(ctl.state.drivers.map((d) => d.playerId).join() === 'A,B', 'only A and B are on the grid');
 
@@ -90,7 +92,7 @@ fireTimer(5000);
 drive({ A: 45, B: 0 }, ctl.stage.finishDistance / 20 + 30);
 check(ctl.state.phase === 'racing' && ctl.state.elim!.cutoffAt !== null, 'A finished: the time bracket is running for B');
 check(fireTimer(Math.max(ELIM_BRACKET_MIN_MS, 0)) || timers.size > 0, 'the bracket timer exists');
-for (const [id, t] of [...timers]) if (t.ms >= ELIM_BRACKET_MIN_MS && t.ms < ELIM_BREAK_MS * 100 && ctl.state.phase === 'racing') { timers.delete(id); t.fn(); }
+for (const [id, t] of [...timers]) if (t.ms >= ELIM_BRACKET_MIN_MS && t.ms < 1e9 && ctl.state.phase === 'racing') { timers.delete(id); t.fn(); }
 check(ctl.state.phase === 'finished', 'the bracket ran out and the round is over');
 const outB = ctl.state.elim!.out.find((o) => o.playerId === 'B');
 check(outB?.reason === 'cutoff', 'B is out for not finishing in time');

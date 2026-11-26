@@ -162,6 +162,7 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 - **Backspace restarts at once** (or Esc → Restart stage). Every restart is free.
 - Your **best run on each stage and weather is saved as a ghost** – a see-through copy of your car that drives your best line next to you. A new best replaces it (the last 8 ghosts are kept in this browser).
 - A live **+/− seconds** next to the timer shows how far ahead or behind your best you are at that point of the stage.
+- **No trees and no animals** (no fallen trees or herds on the road), so every run is the same and comparable with your ghost.
 
 ## Paint, wheels and codes
 
@@ -174,7 +175,7 @@ There are no keyboard shortcuts for the car's switches – you reach out and cli
 **Play → Elimination** makes a lobby for 2–4 **drivers** (no navigators). Everybody races the same stage at once:
 
 - The **last driver to finish is out** – and so is anyone who has not finished inside the **time bracket**: once the first driver is home the others get 25% of that time (at least 20 s) to finish. Retiring also puts you out.
-- The **next round starts by itself** a few seconds later, on a **different stage**. The three stages are picked at random and mixed every time a lobby is made, and you only see which one when the round begins.
+- When everyone is done, the survivors tap **Ready** and the **host starts the next round**, on a **different stage**. The three stages are picked at random and mixed every time a lobby is made, and you only see which one when the round begins.
 - Knocked-out drivers keep **watching** from the cameras. The **last driver left wins**, then the room returns to the lobby with freshly mixed stages.
 - No restarts. Elimination needs the online server (it is not available in browser-to-browser mode).
 

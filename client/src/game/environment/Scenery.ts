@@ -67,13 +67,15 @@ export class Scenery {
     /** null on the navigator's device: scenery is visual only there. */
     private physics: PhysicsWorld | null,
     quality: 'high' | 'low',
+    /** Time attack: no trees beside the road. */
+    noTrees = false,
   ) {
     const rand = mulberry32(stage.def.seed + 7);
     const density = stage.def.scenery.treeDensity;
     // long stages get more of everything (the same count would be spread thin)
     const lengthK = Math.max(1, stage.length / 6000);
     this.lengthK = lengthK;
-    this.buildTrees(rand, Math.round((quality === 'high' ? 4200 : 1500) * density * lengthK));
+    if (!noTrees) this.buildTrees(rand, Math.round((quality === 'high' ? 4200 : 1500) * density * lengthK));
     this.buildRocks(rand, Math.round((quality === 'high' ? 500 : 220) * lengthK));
     if (quality === 'high') this.buildGrass(rand, Math.round(5000 * lengthK));
     this.buildBarriersAndSigns();

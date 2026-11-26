@@ -215,6 +215,10 @@ export class SocketNetClient extends NetBase {
   restartRace() {
     return this.request<RaceState>((ack) => this.socket.emit('race:restart', ack));
   }
+  nextRound() {
+    return this.request<RaceState>((ack) => this.socket.emit('race:next', ack));
+  }
+
   toLobby() {
     return this.request<RaceState>((ack) => this.socket.emit('race:lobby', ack));
   }

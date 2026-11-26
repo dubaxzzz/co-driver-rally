@@ -22,8 +22,7 @@ export const ENGINE_WAIT_MS = 120000;
 /** Elimination: once the first driver finishes the others get this share of that time (at least the minimum) to finish. */
 export const ELIM_BRACKET_RATIO = 0.25;
 export const ELIM_BRACKET_MIN_MS = 20_000;
-/** Elimination: how long the round results show before the next stage starts, and before the lobby comes back after the winner. */
-export const ELIM_BREAK_MS = 15_000;
+/** Elimination: how long the winner is shown before the lobby comes back. (Between rounds the host starts the next one.) */
 export const ELIM_END_MS = 25_000;
 /** Elimination: stages for the rounds are picked from those no longer than this (reference time). */
 export const ELIM_MAX_STAGE_MS = 8 * 60_000;
