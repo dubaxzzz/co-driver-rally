@@ -292,7 +292,7 @@ export function dailyScreen(nav: Nav): Screen {
   const el = h('div', { class: 'screen' }, header(nav, 'Daily challenge'), body);
   let disposed = false;
 
-  const show = (ch: DailyChallenge, board: BoardRow[] | null) => {
+  const show = (ch: DailyChallenge, board: BoardRow[] | null, prev?: { date: string; board: BoardRow[] }) => {
     if (disposed) return;
     const stage = getStage(ch.stageId)!;
     const car = vehicleById(ch.carId);
@@ -326,7 +326,7 @@ export function dailyScreen(nav: Nav): Screen {
             start,
           ),
         ),
-        h('div', { class: 'champ-col' }, h('div', { class: 'panel' }, boardEl)),
+        h('div', { class: 'champ-col' }, h('div', { class: 'panel' }, boardEl), prev ? previousBoard(`Yesterday · ${prev.date}`, prev.board, 'daily-previous') : null),
       ),
     );
   };
@@ -335,13 +335,24 @@ export function dailyScreen(nav: Nav): Screen {
     try {
       const base = import.meta.env.VITE_SERVER_URL || '';
       const res = await fetch(`${base}/api/daily`);
-      const data = (await res.json()) as { challenge: DailyChallenge; board: BoardRow[] };
-      show(data.challenge, data.board);
+      const data = (await res.json()) as { challenge: DailyChallenge; board: BoardRow[]; previous?: { date: string; board: BoardRow[] } };
+      show(data.challenge, data.board, data.previous);
     } catch {
       show(dailyChallenge(date), null);
     }
   })();
   return { el, dispose: () => (disposed = true) };
+}
+
+/** The last day's or event's final times – they stay on the board after it is over. */
+function previousBoard(title: string, rows: BoardRow[], testId: string): HTMLElement {
+  const myName = settings.get().playerName.trim() || 'Driver';
+  const el = h('div', { class: 'panel leaderboard', 'data-testid': testId, style: 'margin-top:14px' }, h('div', { class: 'panel-title' }, title));
+  if (!rows.length) el.append(h('div', { class: 'setup-desc' }, 'Nobody set a time.'));
+  rows.slice(0, 10).forEach((r, i) =>
+    el.append(h('div', { class: `lb-row ${r.name === myName ? 'you' : ''}` }, h('span', { class: 'pos' }, String(i + 1)), h('span', { class: 'who' }, r.name), h('span', { class: 't' }, formatTime(r.timeMs)))),
+  );
+  return el;
 }
 
 /** The limited event: a new one every 2 days, the same for everyone, with its own leaderboard. */
@@ -350,7 +361,7 @@ export function limitedScreen(nav: Nav): Screen {
   const el = h('div', { class: 'screen' }, header(nav, 'Limited event'), body);
   let disposed = false;
 
-  const show = (ev: LimitedEvent, endsAt: number, board: BoardRow[] | null) => {
+  const show = (ev: LimitedEvent, endsAt: number, board: BoardRow[] | null, prev?: { event: LimitedEvent; board: BoardRow[] }) => {
     if (disposed) return;
     const stage = getStage(ev.stageId)!;
     const car = vehicleById(ev.carId);
@@ -387,7 +398,7 @@ export function limitedScreen(nav: Nav): Screen {
             start,
           ),
         ),
-        h('div', { class: 'champ-col' }, h('div', { class: 'panel' }, boardEl)),
+        h('div', { class: 'champ-col' }, h('div', { class: 'panel' }, boardEl), prev ? previousBoard(`Previous event · ${prev.event.name}`, prev.board, 'limited-previous') : null),
       ),
     );
   };
@@ -397,8 +408,8 @@ export function limitedScreen(nav: Nav): Screen {
     try {
       const base = import.meta.env.VITE_SERVER_URL || '';
       const res = await fetch(`${base}/api/limited`);
-      const data = (await res.json()) as { event: LimitedEvent; endsAt: number; board: BoardRow[] };
-      show(data.event, data.endsAt, data.board);
+      const data = (await res.json()) as { event: LimitedEvent; endsAt: number; board: BoardRow[]; previous?: { event: LimitedEvent; board: BoardRow[] } };
+      show(data.event, data.endsAt, data.board, data.previous);
     } catch {
       show(limitedEvent(key), limitedEndsAt(key), null);
     }

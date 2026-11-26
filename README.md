@@ -216,7 +216,7 @@ under Play; the card shows how long is left.
 - Gold / silver / bronze target times pay $4,000 / $2,000 / $1,000 (a better medal later
   pays the difference) plus $200 for the first finish of the day. Retry as often as you like.
 - The server forces today's stage and keeps a leaderboard from its own timing
-  (in memory, so it clears when Render restarts the server).
+  (saved to `data/leaderboards.json` – set `DATA_DIR` to a folder that survives restarts – and kept for 60 days; the previous day / event shows under the current board).
 
 ## Rivers, bridges and roadside detail
 

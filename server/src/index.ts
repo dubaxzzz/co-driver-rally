@@ -25,12 +25,14 @@ const rooms = registerHandlers(io);
 
 app.get('/api/daily', (_req, res) => {
   const date = dailyKey();
-  res.json({ challenge: dailyChallenge(date), board: dailyBoard.top(date) });
+  const yesterday = dailyKey(new Date(Date.now() - 86_400_000));
+  res.json({ challenge: dailyChallenge(date), board: dailyBoard.top(date), previous: { date: yesterday, board: dailyBoard.top(yesterday) } });
 });
 
 app.get('/api/limited', (_req, res) => {
   const key = limitedKey();
-  res.json({ event: limitedEvent(key), endsAt: limitedEndsAt(key), board: dailyBoard.top(key) });
+  const prevKey = `L${Number(key.slice(1)) - 1}`;
+  res.json({ event: limitedEvent(key), endsAt: limitedEndsAt(key), board: dailyBoard.top(key), previous: { event: limitedEvent(prevKey), board: dailyBoard.top(prevKey) } });
 });
 
 app.get('/api/health', (_req, res) => {
