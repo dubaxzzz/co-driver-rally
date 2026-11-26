@@ -35,7 +35,7 @@ export const CODES: CodeDef[] = [
   { code: 'FASTMONEY', description: '1.5× prize money for 3 hours', validUntil: '2027-01-10', reward: { kind: 'boost', mult: 1.5, hours: 3 } },
   { code: 'NIGHTSHIFT', description: 'Double prize money for 90 minutes', validUntil: '2026-12-28', reward: { kind: 'boost', mult: 2, hours: 1.5 } },
   { code: 'PAYDAY', description: '1.5× prize money for 6 hours', validUntil: '2027-01-31', reward: { kind: 'boost', mult: 1.5, hours: 6 } },
-  { code: 'WEEKENDRUSH', description: 'Double prize money for 2 hours', validUntil: '2027-02-28', reward: { kind: 'boost', mult: 2, hours: 2 } },
+  { code: 'HOTSTREAK', description: 'Double prize money for 2 hours', validUntil: '2027-02-28', reward: { kind: 'boost', mult: 2, hours: 2 } },
   // ---- loan cars (they go back)
   { code: 'LOANAPEX', description: 'Borrow the Apex Rally1 for 48 hours', validUntil: '2026-12-24', reward: { kind: 'loan', carId: 'apex-rally1', hours: 48 } },
   { code: 'LOANHARRIER', description: 'Borrow the Harrier WRC for 24 hours', validUntil: '2026-12-22', reward: { kind: 'loan', carId: 'harrier-wrc', hours: 24 } },
