@@ -4,6 +4,7 @@
  */
 import './progressReset';
 import {
+  CODES_RESET,
   MAX_UPGRADE_LEVEL,
   PAINTS,
   STARTER_CAR_ID,
@@ -128,6 +129,29 @@ const usedCodes = (): string[] => {
 };
 
 type Listener = (s: CareerSave) => void;
+/**
+ * When CODES_RESET changes (shared/src/codes.ts) every player's used-code lists are cleared once,
+ * so all codes can be redeemed again. Rewards that are still running keep going.
+ */
+function applyCodeReset() {
+  try {
+    const EPOCH_KEY = 'cdr.codesEpoch';
+    if (localStorage.getItem(EPOCH_KEY) === String(CODES_RESET)) return;
+    localStorage.removeItem(USED_KEY);
+    const perks = storedPerks();
+    if (perks) localStorage.setItem(PERKS_KEY, JSON.stringify({ ...perks, redeemed: [] }));
+    const raw = localStorage.getItem(KEY);
+    if (raw) {
+      const s = JSON.parse(raw);
+      if (s?.perks) localStorage.setItem(KEY, JSON.stringify({ ...s, perks: { ...s.perks, redeemed: [] } }));
+    }
+    localStorage.setItem(EPOCH_KEY, String(CODES_RESET));
+  } catch {
+    /* storage unavailable */
+  }
+}
+applyCodeReset();
+
 let save = load();
 const listeners = new Set<Listener>();
 

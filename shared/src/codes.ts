@@ -21,6 +21,12 @@ export interface CodeDef {
   reward: CodeReward;
 }
 
+/**
+ * Bump this number to let EVERYONE redeem every code again: on their next visit the game
+ * clears each player's list of used codes (rewards that are still running keep their time).
+ */
+export const CODES_RESET = 1;
+
 export const CODES: CodeDef[] = [
   // ---- cash (kept)
   { code: 'FRESHTYRES', description: '$5,000 cash (keep it)', validUntil: '2026-12-10', reward: { kind: 'cash', amount: 5000 } },
